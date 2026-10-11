@@ -458,6 +458,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fabric" },
+    { name = "paramiko" },
     { name = "pytest" },
 ]
 
@@ -469,6 +470,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fabric", specifier = ">=3.2.3" },
+    { name = "paramiko", specifier = ">=3.2" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
 
