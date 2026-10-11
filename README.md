@@ -7,30 +7,96 @@ it knows nothing about the application the board runs. Design decisions are in
 
 ## Two commands
 
-`bench run` and `bench test <ref>` are a later ticket; this scope ships the pytest plugin underneath
-them and nothing that invokes it.
+```sh
+bench run                      # on a timer: if the merge queue has an entry, build it, OTA it to the
+                               # board, run the suites, roll back, report pass or fail to GitHub;
+                               # if the bench itself broke, post nothing and stop the timer
+bench test <ref> [--set <name>] [-- <pytest args>]
+                               # by hand, for investigations: the same path, results on the terminal;
+                               # --set names a replay set for tests that use one
+```
+
+`bench test` resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what
+it built, and the first target-suite test asserts the booted board's `/etc/buildinfo` names that commit.
+There is no way to skip the build or supply an artefact: a run cannot test what it did not build from a
+ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran,
+whatever a layer's own tests recorded against them, and the exact command line.
 
 ## The job
 
-The build, install, boot, test and rollback sequence ADR 0001 describes is a later ticket; this scope
-ships only the plugin's own record.
+1. `precondition` hook — the bench is in a known state. If a marker from a run that died mid-OTA is
+   present, the runner asks RAUC which slot booted, marks the candidate bad and reboots if it is not the
+   recorded good slot, verifies, clears the marker and continues.
+2. `build` and `bundle` hooks — the layer's own commands, run in the checkout of the ref under test.
+3. `host_suite` — pytest on the pipeline host against the built artefacts, before anything is installed.
+4. Install and boot — `ota.install(driver, bundle, destination)`: labgrid's `put`, `rauc install`,
+   reboot, wait for ssh to answer again, and return the booted slot from
+   `rauc status --output-format=json`.
+5. `target_suite` — pytest against the booted board, with labgrid's own env file and
+   `--report-log`.
+6. Roll back — `ota.rollback(driver, slot)`, called whether the tests passed or not:
+   `rauc status mark-bad <slot>`, reboot, wait, and return the booted slot.
+7. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
+   the terminal (`bench test`).
+
+`install` and `rollback` are plain functions the `bench test` script calls directly; neither is a
+pytest fixture. A failing hook or test is the candidate's failure and is posted. An error in a bench
+step — the precondition, an install or a rollback — is the bench's failure: a `DISABLED` marker is
+written, the timer is stopped, nothing is posted.
 
 ## What a layer provides
 
-The runner adds no fixture, no class, no guard, no marker, no credit rule, no event stream, no config
-file and no board facts. The board is labgrid's own pytest plugin, pointed at an env file in the
-layer with the address templated from the environment — see "Running it" below. Everything about
-the board under test is attached by the layer's own `conftest.py` and tests, through pytest's
-`record_property`, which pytest-reportlog writes.
+The runner is pointed at a checkout and reads `bench.toml` from it. Board identity is never in it —
+see "Running it":
+
+```toml
+schema = 1
+
+[bundle]
+path = "build/.../update-bundle-<machine>.raucb"
+
+[hooks]
+precondition = "just bench-precondition"
+build        = "just build"
+bundle       = "just bundle"
+
+[tests]
+host_suite   = "tests/host_suite"
+target_suite = "tests/target_suite"
+
+[github]
+check_name = "bench"
+```
+
+A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
+`BENCH_RESULT_DIR` and `BENCH_SET` in its environment; its exit status is pass or fail and its output
+is the log. The suites are ordinary pytest directories.
+
+The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
+`NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
+at with `--lg-env`; the runner adds no fixture of its own for it. The one fixture the runner does
+add:
+
+| Fixture | Gives |
+|---|---|
+| `proxy(har)` | mitmproxy serving that HAR file on a forwarded loopback port; a miss kills the connection; the file's hash goes into the record |
+
+Everything that names the application under test — its units, its paths on the board, its page state, its
+replay sets — lives in the layer's own `conftest.py` and tests, built on labgrid's fixtures and the
+runner's `proxy`. The runner never learns it; a test attaches its own facts, including any
+requirement item it discharges, through pytest's `record_property`, which pytest-reportlog writes.
+There is no marker and no credit rule of the runner's own.
 
 ## The record
 
 pytest-reportlog's JSON-lines report (`--report-log`, set to `$BENCH_RESULT_DIR/<UTC start
 time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: every test report,
 with whatever a layer attaches through `record_property`. Beside it the runner writes one file per
-run, `run.json`: its own version (`importlib.metadata.version("wisebench")`), the pytest command
-line, the start and end times, and the exit status. Nothing else; a verdict and a per-item credit
-map are a later ticket.
+run, `run.json`, written at session end so a run that fails halfway still leaves everything up to
+that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
+line, the start and end times, and the exit status. OTA adds the bundle's hash and the booted slot
+before and after; `bench test` adds the ref, its commit and the replay set name; `bench run` adds the
+verdict. A per-item credit map is not built.
 
 ## Running it
 
@@ -65,3 +131,12 @@ Three facts from labgrid 26.0 are the contract between this runner and the layer
   (`labgrid/pytestplugin/fixtures.py`); a config without one raises `UserError`.
 
 That env file, and everything else naming this board, lives in the layer, not here.
+
+The runner is cloned on the pipeline host and run from its checkout at a tag; the record names the
+tag. `bench run` is started by a systemd user timer under `flock`, so a second start while a job is
+running exits without touching the board; it asks a queue adapter for the head entry (the GitHub
+merge queue, via `gh api graphql`) and posts a commit status and PR comment with the verdict.
+`bench status --watch`, on `rich`, reads `run.json`, `report.jsonl` and the hook logs: the queue
+head, the timer and lock state, the current phase and its elapsed time, the build's progress tail,
+the test running now, and recent verdicts. Replay recordings are made by hand with
+`bench record <har-path>`, the only time the proxy reaches a real upstream.
