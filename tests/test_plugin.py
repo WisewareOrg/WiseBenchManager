@@ -335,10 +335,7 @@ def test_fixture_error_in_teardown_is_an_error_outcome(layer: pytest.Pytester) -
     assert entry_of(layer, "test_a")["outcome"] == "error"
 
 
-def test_when_ota_ran_the_board_state_is_not_read_at_session_end(layer: pytest.Pytester) -> None:
-    layer.makeconftest(
-        layer.path.joinpath("conftest.py").read_text()
-        + """
+STUB_OTA = """
 
 from wisebench.plugin import Bench
 
@@ -347,7 +344,15 @@ from wisebench.plugin import Bench
 def ota(request, board):
     Bench.of(request.config).record.set("bench.ota_ran", True)
 """
-    )
+
+
+def with_stub_ota(layer: pytest.Pytester) -> None:
+    """Add an `ota` fixture that only records that an OTA ran."""
+    layer.makeconftest(layer.path.joinpath("conftest.py").read_text() + STUB_OTA)
+
+
+def test_when_ota_ran_the_board_state_is_not_read_at_session_end(layer: pytest.Pytester) -> None:
+    with_stub_ota(layer)
     transport = FakeTransport(BOARD)
     layer.makepyfile("def test_a(ota):\n    pass")
     run(layer, transport).assert_outcomes(passed=1)
@@ -439,3 +444,31 @@ def test_without_bench_tree_a_start_directory_without_bench_toml_is_an_error(
     result = run(layer)
     result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(["*bench.toml not found*"])
+
+
+def test_with_ota_and_provenance_passed_items_are_credited(layer: pytest.Pytester) -> None:
+    with_stub_ota(layer)
+    layer.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.provenance
+        def test_provenance(ota):
+            pass
+
+        @pytest.mark.tst("TST011")
+        def test_passes(ota):
+            pass
+
+        @pytest.mark.tst("TST014", recorded=True)
+        def test_records(ota):
+            pass
+        """
+    )
+    run(layer).assert_outcomes(passed=3)
+    statuses = {
+        test["item"]: (test["status"], test["reason"])
+        for test in record(layer)["tests"]
+        if test["item"]
+    }
+    assert statuses == {"TST011": ("passed", None), "TST014": ("recorded", None)}
