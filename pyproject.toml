@@ -7,9 +7,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "fabric>=3.2.3",
-    "invoke>=2.0",
-    "paramiko>=3.2",
+    "labgrid>=26.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.15",
     "pytest>=9.1.1",
@@ -37,7 +35,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-addopts = "-p no:wisebench -p pytester"
+addopts = "-p no:wisebench -p no:labgrid -p pytester"
 
 [tool.ruff]
 line-length = 100

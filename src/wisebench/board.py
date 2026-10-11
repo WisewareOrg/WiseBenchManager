@@ -1,8 +1,7 @@
-"""The board under test, reached over a transport that runs commands and moves files.
+"""The board under test: labgrid's SSHDriver behind a hostname guard and a reboot wait.
 
-No maintained tool fits because labgrid, which covers ssh run, put, get and forwarding, is
-rejected for one board over ssh in ADR 0001 rev 1, and SFTP returns no digest for the
-hash check after a transfer.
+No maintained tool fits because labgrid's driver neither checks which board answered nor waits out a
+reboot by boot id, and its scp transfer returns no digest for the hash check after `put`.
 """
 
 from __future__ import annotations
@@ -11,13 +10,16 @@ import contextlib
 import hashlib
 import json
 import shlex
+import subprocess
 import time
 from collections.abc import Callable
-from contextlib import AbstractContextManager
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
+from urllib.parse import urlsplit
 
+from labgrid import Target
+from labgrid.driver import ExecutionError, SSHDriver
+from labgrid.resource import NetworkService
 from tenacity import RetryError, Retrying, retry_if_exception, retry_if_result, wait_fixed
 
 from wisebench.config import Config
@@ -26,56 +28,50 @@ from wisebench.errors import BenchFailure
 BOOT_ID = "cat /proc/sys/kernel/random/boot_id"
 RAUC_STATUS = "rauc status --output-format=json"
 BUILDINFO = "cat /etc/buildinfo"
+COMMAND_TIMEOUT = 120.0
 
-
-@dataclass(frozen=True)
-class Result:
-    stdout: str
-    stderr: str
-    exit: int
+Output = tuple[list[str], list[str], int]
 
 
 class WrongBoard(BenchFailure):
     """The address answered with a hostname other than the configured one."""
 
 
-class Transport(Protocol):
-    """How the board is reached; a connection failure raises `BenchFailure`.
-
-    `reconnect` is the only way a connection opens; any other call on a closed one raises.
-    """
-
-    def run(self, cmd: str, timeout: float | None = None) -> Result: ...
-
-    def put(self, local: Path, remote: str) -> None: ...
-
-    def get(self, remote: str, local: Path) -> None: ...
-
-    def forward(self, port: int) -> AbstractContextManager[int]: ...
-
-    def reconnect(self, timeout: float | None = None) -> None: ...
-
-    def close(self) -> None: ...
+def driver_for(address: str) -> tuple[Target, SSHDriver]:
+    """A labgrid target with one SSHDriver for `[user@]host[:port]`; the user defaults to root."""
+    parts = urlsplit(f"ssh://{address}")
+    target = Target("board")
+    NetworkService(
+        target,
+        None,
+        address=parts.hostname,
+        username=parts.username or "root",
+        port=parts.port or 22,
+    )
+    return target, SSHDriver(target, None)
 
 
 class Board:
-    """The configured board, its hostname checked on every connection before any other command.
+    """The configured board; every connection labgrid opens is checked against the hostname first.
 
-    `record` receives each fact the board learns: `bench.board` and `bench.boot_ids`, the boot id
-    read on connecting and every one seen since.
+    `ssh` is labgrid's SSHDriver, for `get` and `forward_local_port`. `record` receives each fact
+    the board learns: `bench.board` and `bench.boot_ids`, the boot id read on connecting and every
+    one seen since.
     """
 
     POLL_INTERVAL = 5.0
 
     def __init__(
         self,
-        transport: Transport,
+        target: Target,
+        ssh: SSHDriver,
         config: Config,
         record: Callable[[str, Any], None],
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        self._transport = transport
+        self.ssh = ssh
+        self._target = target
         self._config = config
         self._record = record
         self._clock = clock
@@ -86,8 +82,13 @@ class Board:
         self._boot_id()
 
     def _connect(self, timeout: float | None = None) -> None:
-        """Open a fresh connection and refuse it unless the board answers with its hostname."""
-        self._transport.reconnect(timeout)
+        """Activate the driver and refuse the connection unless the board answers as itself."""
+        if timeout is not None:
+            self.ssh.connection_timeout = float(max(1, round(timeout)))
+        try:
+            self._target.activate(self.ssh)
+        except Exception as error:  # labgrid raises a bare Exception when the connect times out
+            raise BenchFailure(f"ssh to the board failed: {error}") from error
         live = self._checked("hostname").strip()
         if live != self._config.identity.hostname:
             raise WrongBoard(
@@ -95,39 +96,37 @@ class Board:
                 f"not the configured {self._config.identity.hostname!r}; nothing else was sent"
             )
 
-    def _checked(self, cmd: str) -> str:
-        result = self._transport.run(cmd)
-        if result.exit != 0:
-            raise BenchFailure(
-                f"{cmd!r} on the board exited {result.exit}: {result.stderr.strip()}"
-            )
-        return result.stdout
+    def run(self, cmd: str, timeout: float = COMMAND_TIMEOUT) -> Output:
+        """labgrid's `run` with a default timeout: (stdout lines, stderr lines, exit).
 
-    def run(self, cmd: str, timeout: float | None = None) -> Result:
-        """Run `cmd` on the board; a non-zero exit is returned, not raised.
-
-        `timeout` overrides the transport's default for a long command; expiry raises.
+        A non-zero exit is returned; a timeout or a lost connection raises.
         """
-        return self._transport.run(cmd, timeout)
+        try:
+            return self.ssh.run(cmd, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise BenchFailure(f"{cmd!r} on the board timed out after {timeout:g} s") from None
+        except ExecutionError as error:
+            raise BenchFailure(f"{cmd!r} on the board failed: {error}") from error
+
+    def _checked(self, cmd: str) -> str:
+        stdout, stderr, exit_status = self.run(cmd)
+        if exit_status != 0:
+            raise BenchFailure(f"{cmd!r} on the board exited {exit_status}: {' '.join(stderr)}")
+        return "\n".join(stdout)
 
     def put(self, local: Path, remote: str) -> None:
         """Copy `local` to `remote`, then compare the board's sha256 of it with the local one."""
         local = Path(local)
-        self._transport.put(local, remote)
+        try:
+            self.ssh.put(str(local), remote)
+        except ExecutionError as error:
+            raise BenchFailure(f"put {local} to the board failed: {error}") from error
         with local.open("rb") as handle:
             expected = hashlib.file_digest(handle, "sha256").hexdigest()
         fields = self._checked(f"sha256sum {shlex.quote(remote)}").split()
         actual = fields[0] if fields else ""
         if actual != expected:
             raise BenchFailure(f"{remote} on the board hashes {actual}, {local} hashes {expected}")
-
-    def get(self, remote: str, local: Path) -> None:
-        """Copy `remote` on the board to `local`."""
-        self._transport.get(remote, Path(local))
-
-    def forward(self, port: int) -> AbstractContextManager[int]:
-        """Forward the board's loopback `port`; the context gives the bound local port."""
-        return self._transport.forward(port)
 
     def reboot(self) -> None:
         """Reboot and return once the board answers, as itself, with a new boot id in time.
@@ -136,7 +135,7 @@ class Board:
         """
         before = self._boot_id()
         with contextlib.suppress(BenchFailure):  # the connection may drop as the board goes down
-            self._transport.run("reboot")
+            self.run("reboot")
         start = self._clock()
         timeout = self._config.toml.board.reboot_timeout
         polling = Retrying(
@@ -154,6 +153,7 @@ class Board:
             ) from None
 
     def _reconnected_boot_id(self, time_left: Callable[[], float]) -> str:
+        self._target.deactivate(self.ssh)
         self._connect(time_left())
         return self._boot_id()
 
@@ -171,6 +171,9 @@ class Board:
     def buildinfo(self) -> str:
         """The raw text of the board's /etc/buildinfo."""
         return self._checked(BUILDINFO)
+
+    def close(self) -> None:
+        self._target.deactivate(self.ssh)
 
     def _boot_id(self) -> str:
         boot_id = self._checked(BOOT_ID).strip()

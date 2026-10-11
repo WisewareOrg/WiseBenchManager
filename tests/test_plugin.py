@@ -4,26 +4,18 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import VERSION, results
-from fake_board import FakeBoardPlugin, FakeTransport, ok
+from conftest import VERSION, ScriptedSsh, ok, results
 
 import wisebench.plugin
 from wisebench.board import BOOT_ID, BUILDINFO, RAUC_STATUS
 from wisebench.plugin import Bench, marks_of
 from wisebench.record import Marks
 
-BOARD = {
-    "hostname": ok("bench-board\n"),
-    BOOT_ID: ok("one\n"),
-    RAUC_STATUS: ok('{"compatible": "test", "booted": "A"}'),
-    BUILDINFO: ok("DISTRO = test\n"),
-}
-
 UTC_ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z")
 
 
-def run(layer: pytest.Pytester, transport: FakeTransport | None = None) -> pytest.RunResult:
-    return layer.runpytest(plugins=[FakeBoardPlugin(transport or FakeTransport(BOARD))])
+def run(layer: pytest.Pytester) -> pytest.RunResult:
+    return layer.runpytest()
 
 
 def record(layer: pytest.Pytester) -> dict[str, Any]:
@@ -40,26 +32,28 @@ def lines(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_board_fixture_runs_after_the_hostname_check(layer: pytest.Pytester) -> None:
-    transport = FakeTransport({**BOARD, "uname": ok("Linux\n")})
-    layer.makepyfile("def test_uname(board):\n    assert board.run('uname').stdout == 'Linux\\n'")
-    run(layer, transport).assert_outcomes(passed=1)
-    assert transport.commands() == ["hostname", BOOT_ID, "uname", RAUC_STATUS, BUILDINFO]
+def test_board_fixture_runs_after_the_hostname_check(
+    layer: pytest.Pytester, ssh: ScriptedSsh
+) -> None:
+    ssh.script["uname"] = ok("Linux")
+    layer.makepyfile("def test_uname(board):\n    assert board.run('uname')[0] == ['Linux']")
+    run(layer).assert_outcomes(passed=1)
+    assert ssh.commands() == ["hostname", BOOT_ID, "uname", RAUC_STATUS, BUILDINFO]
+    assert ssh.calls[-1] == ("deactivate",)
 
 
 def test_wrong_hostname_is_an_error_and_nothing_else_is_sent(
-    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, ssh: ScriptedSsh
 ) -> None:
     monkeypatch.setenv("BENCH_HOSTNAME", "another-board")
-    transport = FakeTransport(BOARD)
     layer.makepyfile(
         "def test_one(board):\n    board.run('uname')\n\n"
         "def test_two(board):\n    board.run('uname')\n"
     )
-    result = run(layer, transport)
+    result = run(layer)
     result.assert_outcomes(errors=2)
     result.stdout.fnmatch_lines(["*answers as hostname 'bench-board'*nothing else was sent*"])
-    assert transport.calls == [("reconnect", "default"), ("run", "hostname")]
+    assert ssh.commands() == ["hostname"]
     written = record(layer)
     assert written["bench.board"] == "bench"
     assert written["bench.booted_slot"] is None
@@ -86,30 +80,31 @@ def test_a_missing_variable_is_an_error_naming_it(
 
 def test_record_carries_session_facts_and_board_state(layer: pytest.Pytester) -> None:
     layer.makepyfile("def test_uses_board(board):\n    pass")
-    result = layer.runpytest("-k", "uses_board", plugins=[FakeBoardPlugin(FakeTransport(BOARD))])
+    result = layer.runpytest("-k", "uses_board")
     result.assert_outcomes(passed=1)
     written = record(layer)
     assert written["bench.runner_version"] == VERSION
     assert written["bench.board"] == "bench"
     assert written["bench.ota_ran"] is False
     assert written["bench.booted_slot"] == "A"
-    assert written["bench.board_buildinfo"] == "DISTRO = test\n"
+    assert written["bench.board_buildinfo"] == "DISTRO = test"
     assert written["verdict"] is None
     assert written["exit_status"] == 0
     assert UTC_ISO.fullmatch(written["started"]) and UTC_ISO.fullmatch(written["finished"])
     assert written["bench.pytest_args"][:2] == ["-k", "uses_board"]
 
 
-def test_record_without_a_board_has_no_board_state(layer: pytest.Pytester) -> None:
+def test_record_without_a_board_has_no_board_state(
+    layer: pytest.Pytester, ssh: ScriptedSsh
+) -> None:
     layer.makepyfile("def test_host_only():\n    pass")
-    transport = FakeTransport({})
-    run(layer, transport).assert_outcomes(passed=1)
+    run(layer).assert_outcomes(passed=1)
     written = record(layer)
     assert written["bench.ota_ran"] is False
     assert written["bench.booted_slot"] is None
     assert written["bench.board_buildinfo"] is None
     assert "bench.board" not in written
-    assert transport.calls == []
+    assert ssh.calls == []
 
 
 def test_every_test_entry_has_its_outcome_properties_and_item(layer: pytest.Pytester) -> None:
@@ -359,12 +354,13 @@ def with_stub_ota(layer: pytest.Pytester) -> None:
     layer.makeconftest(layer.path.joinpath("conftest.py").read_text() + STUB_OTA)
 
 
-def test_when_ota_ran_the_board_state_is_not_read_at_session_end(layer: pytest.Pytester) -> None:
+def test_when_ota_ran_the_board_state_is_not_read_at_session_end(
+    layer: pytest.Pytester, ssh: ScriptedSsh
+) -> None:
     with_stub_ota(layer)
-    transport = FakeTransport(BOARD)
     layer.makepyfile("def test_a(ota):\n    pass")
-    run(layer, transport).assert_outcomes(passed=1)
-    assert transport.commands() == ["hostname", BOOT_ID]
+    run(layer).assert_outcomes(passed=1)
+    assert ssh.commands() == ["hostname", BOOT_ID]
     written = record(layer)
     assert written["bench.ota_ran"] is True
     assert written["bench.booted_slot"] is None
@@ -404,7 +400,7 @@ def test_session_tracks_which_tests_had_a_fixture_raise(layer: pytest.Pytester) 
             assert False
         """
     )
-    recorder = layer.inline_run(plugins=[FakeBoardPlugin(FakeTransport(BOARD))])
+    recorder = layer.inline_run()
     config = recorder.getcall("pytest_sessionfinish").session.config
     raised = {
         nodeid.split("::")[-1]: test.bench_failed

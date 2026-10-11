@@ -12,12 +12,11 @@ from typing import Any
 
 import pytest
 
-from wisebench.board import Board, Transport
+from wisebench.board import Board, driver_for
 from wisebench.config import Config
 from wisebench.errors import BenchFailure
 from wisebench.events import EventLog
 from wisebench.record import Marks, SessionRecord
-from wisebench.ssh import FabricTransport
 
 CLONE = Path(__file__).resolve().parent
 
@@ -148,24 +147,18 @@ def bench_config(request: pytest.FixtureRequest) -> Config:
 
 
 @pytest.fixture(scope="session")
-def bench_transport(bench_config: Config) -> Iterator[Transport]:
-    """The ssh transport to the configured board."""
-    transport = FabricTransport(bench_config)
-    yield transport
-    transport.close()
-
-
-@pytest.fixture(scope="session")
-def board(
-    request: pytest.FixtureRequest, bench_config: Config, bench_transport: Transport
-) -> Iterator[Board]:
+def board(request: pytest.FixtureRequest, bench_config: Config) -> Iterator[Board]:
     """The configured board, its hostname checked before any other command.
 
     At session end, when no OTA ran, the booted slot and `/etc/buildinfo` go to the record.
     """
     record = Bench.of(request.config).record
-    connected = Board(bench_transport, bench_config, record.set)
-    yield connected
-    if record.properties.get("bench.ota_ran") is not True:
-        record.set("bench.booted_slot", connected.booted_slot())
-        record.set("bench.board_buildinfo", connected.buildinfo())
+    target, ssh = driver_for(bench_config.identity.address)
+    connected = Board(target, ssh, bench_config, record.set)
+    try:
+        yield connected
+        if record.properties.get("bench.ota_ran") is not True:
+            record.set("bench.booted_slot", connected.booted_slot())
+            record.set("bench.board_buildinfo", connected.buildinfo())
+    finally:
+        connected.close()

@@ -42,15 +42,15 @@ records `bench.ota_ran = false`, credits no requirement item and carries no verd
 | `BENCH_RESULT_DIR` | the plugin | Where records and the event stream are written; default `records/` under the start directory |
 
 The board's address and hostname are read from these variables only: a `bench.toml` naming either one
-is refused, and either one unset is the bench's failure. ssh authentication is the host
-user's own: the keys `ssh` would offer, from `~/.ssh/config`, the agent and `~/.ssh/id_*`.
-Authentication follows OpenSSH's order: key, then none. The board's identity is the hostname check;
-host keys are not pinned, because a reflash changes them, and `known_hosts` is neither read nor written.
-Every connection the runner opens, including each one while it waits out a reboot, is checked against
-`BENCH_HOSTNAME` before any other command, and a connection the board closed is never reopened behind
-that check. A command on the board times out after 120 s unless the test passes `timeout=`, and the
-connection sends an ssh keepalive every 15 s; a timeout, like a dropped connection, is the bench's
-failure.
+is refused, and either one unset is the bench's failure.
+
+The board is reached through labgrid's `SSHDriver`, which runs the host's own OpenSSH client over one
+ControlMaster connection: authentication is ssh's, with the host user's keys, agent and `~/.ssh/config`,
+and the `none` method where the board accepts it. labgrid does not check or save host keys, so the
+board's identity is the hostname check: every connection the runner activates, including each one while
+it waits out a reboot, answers `hostname` before any other command, and a wrong answer is the bench's
+failure. labgrid's master sends an ssh keepalive every 15 s. `board.run` times out after 120 s unless the
+test passes `timeout=`; a timeout or a lost connection is the bench's failure.
 
 ## What a run writes
 

@@ -85,7 +85,7 @@ is the log. The suites are ordinary pytest directories. Tests ask for the runner
 
 | Fixture | Gives |
 |---|---|
-| `board` | ssh `run`, `put`, `get`, `forward(port)`, `reboot()` |
+| `board` | the board behind a hostname check: `run(cmd, timeout=)`, `put` with a hash check, `reboot()`, and labgrid's `SSHDriver` as `board.ssh` for `get` and `forward_local_port` |
 | `ota` | session-scoped; the installed, booted candidate; its finalizer is the rollback |
 | `proxy(har)` | mitmproxy serving that HAR file on a forwarded loopback port; a miss kills the connection; the file's hash goes into the record |
 
