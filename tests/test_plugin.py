@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import VERSION, described, results
+from conftest import VERSION, results
 from fake_board import FakeBoardPlugin, FakeTransport, ok
 
 import wisebench.version
 from wisebench.board import BUILDINFO, RAUC_STATUS
+from wisebench.errors import BenchFailure
 from wisebench.plugin import Bench, marks_of
 from wisebench.record import Marks
 
@@ -309,7 +310,10 @@ def test_markers_are_registered(layer: pytest.Pytester) -> None:
 def test_dirty_runner_clone_is_refused_before_any_test(
     layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(wisebench.version, "run", described(VERSION + "-dirty\n"))
+    def dirty(clone: Path) -> str:
+        raise BenchFailure("the runner's clone has uncommitted changes (v1-dirty); refusing to run")
+
+    monkeypatch.setattr(wisebench.version, "describe", dirty)
     layer.makepyfile("def test_a():\n    pass")
     result = run(layer)
     assert result.ret == pytest.ExitCode.INTERNAL_ERROR

@@ -1,6 +1,4 @@
 from pathlib import Path
-from subprocess import CompletedProcess
-from typing import Any
 
 import pytest
 from fake_board import LAYER_CONFTEST
@@ -31,13 +29,6 @@ target_suite = "tests/target_suite"
 """
 
 
-def described(stdout: str, returncode: int = 0, stderr: str = "") -> Any:
-    def run(args: list[str], **kwargs: Any) -> CompletedProcess[str]:
-        return CompletedProcess(args, returncode, stdout, stderr)
-
-    return run
-
-
 @pytest.fixture(autouse=True)
 def isolated_home(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
@@ -49,7 +40,7 @@ def isolated_home(
 @pytest.fixture(autouse=True)
 def clean_clone(monkeypatch: pytest.MonkeyPatch) -> None:
     """The runner's clone reads as clean at a known version."""
-    monkeypatch.setattr(wisebench.version, "run", described(VERSION + "\n"))
+    monkeypatch.setattr(wisebench.version, "describe", lambda clone: VERSION)
 
 
 @pytest.fixture

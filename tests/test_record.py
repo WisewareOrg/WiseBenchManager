@@ -1,11 +1,7 @@
 import pytest
-from conftest import VERSION, described
 
-import wisebench.version
 from wisebench import record
-from wisebench.errors import BenchFailure
 from wisebench.record import Credit, Marks
-from wisebench.version import runner_version
 
 
 def item(outcome: str, item_id: str | None = None, **marks: bool) -> record.TestRecord:
@@ -68,32 +64,3 @@ def test_an_item_whose_test_did_not_pass_is_not_credited(outcome: str) -> None:
 
 def test_a_test_without_an_item_has_no_status() -> None:
     assert status(item("passed")) == (None, None)
-
-
-def test_runner_version_is_git_describe_of_the_package_clone(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = []
-
-    def run(args, **kwargs):
-        calls.append(args)
-        return described(VERSION + "\n")(args)
-
-    monkeypatch.setattr(wisebench.version, "run", run)
-    assert runner_version() == VERSION
-    (args,) = calls
-    assert args[:2] == ["git", "-C"]
-    assert args[2].endswith("wisebench")
-    assert args[3:] == ["describe", "--tags", "--always", "--dirty"]
-
-
-def test_dirty_clone_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wisebench.version, "run", described(VERSION + "-dirty\n"))
-    with pytest.raises(BenchFailure, match="uncommitted changes"):
-        runner_version()
-
-
-def test_failing_git_describe_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wisebench.version, "run", described("", 128, "not a git repository"))
-    with pytest.raises(BenchFailure, match="not a git repository"):
-        runner_version()

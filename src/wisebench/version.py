@@ -1,26 +1,40 @@
-"""The runner's own version, read from its clone."""
+"""The runner's own version, read from its clone with dunamai."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from subprocess import run
+
+from dunamai import Version
 
 from wisebench.errors import BenchFailure
 
-DESCRIBE = ("describe", "--tags", "--always", "--dirty")
+ANY_TAG = r"^(?P<base>.+)$"
+
+
+def describe(clone: Path) -> str:
+    """The clone's version in `git describe --tags --always` form; uncommitted changes raise.
+
+    A tagged commit is the tag, a later commit `<tag>-<distance>-g<hash>`, a clone with no tag the
+    bare hash.
+    """
+    try:
+        version = Version.from_git(path=clone, pattern=ANY_TAG, strict=True, ignore_untracked=True)
+        described = version.base
+        if version.distance:
+            described = f"{version.base}-{version.distance}-g{version.commit}"
+    except RuntimeError:
+        try:
+            version = Version.from_git(path=clone, pattern=ANY_TAG, ignore_untracked=True)
+        except RuntimeError as error:
+            raise BenchFailure(f"runner version unknown: {error}") from None
+        described = version.commit
+    if version.dirty:
+        raise BenchFailure(
+            f"the runner's clone has uncommitted changes ({described}); refusing to run"
+        )
+    return described
 
 
 def runner_version() -> str:
-    """`git describe` of the clone this package runs from; a dirty clone is refused."""
-    clone = Path(__file__).resolve().parent
-    described = run(["git", "-C", str(clone), *DESCRIBE], capture_output=True, text=True)
-    if described.returncode != 0:
-        raise BenchFailure(
-            f"runner version unknown, git describe failed: {described.stderr.strip()}"
-        )
-    version = described.stdout.strip()
-    if version.endswith("-dirty"):
-        raise BenchFailure(
-            f"the runner's clone has uncommitted changes ({version}); refusing to run"
-        )
-    return version
+    """The version of the clone this package runs from."""
+    return describe(Path(__file__).resolve().parent)
