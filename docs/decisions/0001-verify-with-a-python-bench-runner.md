@@ -28,6 +28,8 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 5. pytest-reportlog's JSON-lines report is the record: every test report, with whatever a layer's fixtures and tests attach through `record_property`. The runner adds one file beside it per run — its own version, the pytest command line, start and end times, the exit status — and nothing else; a verdict posted as a GitHub check run so a merge queue (Mergify) can require it is a later ticket.
 6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing. The rollback runs in both cases. A run that dies between install and rollback leaves a marker; the next run's precondition reads it, asks RAUC which slot booted, marks the candidate bad and reboots if it is not the recorded good slot, verifies, clears the marker and continues. Only a failed recovery is the bench's failure.
 7. Scheduling stays with well-supported tools: a systemd user timer and `flock`. Queue-head selection is a small adapter, swapped when the organisation moves the merge queue to Mergify.
+8. The operator's view is `bench status --watch`, about 150 lines on a maintained terminal library reading the runner's own event stream, keeping the functionality of the existing TUI and no more.
+9. Provenance is structural, not recorded on trust: `bench test <ref>` has no way to skip the build or supply an artefact. It resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what it built, and the first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. A run therefore cannot test something it did not build from a ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
 
 ## Alternatives considered
 
@@ -41,9 +43,6 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 - **Our own TLS replay proxy.** Rejected: 367 lines plus tests plus yearly leaf minting to do what mitmproxy does with four options and a HAR file; the "stdlib only" preference it was built on contradicts the preference for well-supported tools.
 - **An oeqa custom test target.** Rejected: the most Yocto-native route, but it fuses runner and layer at the seam this decision separates, and poky marks the loader for refactoring. No QEMU tier will exist, so oeqa's QEMU integration carries no weight.
 - **`uv tool install` / pipx.** Not needed: the host clones the repository and runs it at a tag; the record names the tag.
-
-8. The operator's view is `bench status --watch`, about 150 lines on a maintained terminal library reading the runner's own event stream, keeping the functionality of the existing TUI and no more.
-9. Provenance is structural, not recorded on trust: `bench test <ref>` has no way to skip the build or supply an artefact. It resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what it built, and the first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. A run therefore cannot test something it did not build from a ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
 
 ## Consequences
 
