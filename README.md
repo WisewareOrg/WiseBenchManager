@@ -100,9 +100,10 @@ test's outcome as `error`.
 One flat JSON file per run, plus one line appended to a JSON-lines index for bulk processing: the ref
 and its commit, the runner's version (the tag the clone is at), the bundle hash, the booted slot before
 and after, the hash of any replay recording used, every test's outcome, the items discharged and the
-exact command line. Each fact is recorded by the fixture or test that learns it, through pytest's
-`record_property`, and the file is written at session end, so a run that fails halfway still leaves
-everything up to that point. The runner records under `bench.*` and a layer under `layer.*`. A run that
+exact command line. Each per-test fact is recorded by the test that learns it, through pytest's
+`record_property`; each session fact is recorded by the runner directly to the session record. The file
+is written at session end, so a run that fails halfway still leaves everything up to that point. The
+runner records under `bench.*` and a layer under `layer.*`. A run that
 never requests `ota` records `bench.ota_ran = false` with the board's booted slot and `/etc/buildinfo`,
 and carries no verdict.
 
