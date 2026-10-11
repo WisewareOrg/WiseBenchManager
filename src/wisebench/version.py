@@ -1,8 +1,4 @@
-"""The runner's own version, read from its clone with dunamai.
-
-No maintained tool fits the `git describe` form because dunamai's serialisation styles
-(pep440, semver, pvp) do not produce it; the version itself is dunamai's.
-"""
+"""The runner's own version, read from its clone and serialised by dunamai."""
 
 from __future__ import annotations
 
@@ -13,6 +9,9 @@ from dunamai import Version
 from wisebench.errors import BenchFailure
 
 ANY_TAG = r"^(?P<base>.+)$"
+AT_TAG = "{base}"
+PAST_TAG = "{base}-{distance}-g{commit}"
+NO_TAG = "{commit}"
 
 
 def describe(clone: Path) -> str:
@@ -23,15 +22,14 @@ def describe(clone: Path) -> str:
     """
     try:
         version = Version.from_git(path=clone, pattern=ANY_TAG, strict=True, ignore_untracked=True)
-        described = version.base
-        if version.distance:
-            described = f"{version.base}-{version.distance}-g{version.commit}"
+        form = PAST_TAG if version.distance else AT_TAG
     except RuntimeError:
         try:
             version = Version.from_git(path=clone, pattern=ANY_TAG, ignore_untracked=True)
         except RuntimeError as error:
             raise BenchFailure(f"runner version unknown: {error}") from None
-        described = version.commit
+        form = NO_TAG
+    described = version.serialize(format=form)
     if version.dirty:
         raise BenchFailure(
             f"the runner's clone has uncommitted changes ({described}); refusing to run"
