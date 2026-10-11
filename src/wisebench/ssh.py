@@ -22,6 +22,8 @@ class FabricTransport:
 
     def __init__(self, config: BoardConfig) -> None:
         self._connection = Connection(host=config.address, user=config.user)
+        # Host keys are accepted in memory and never pinned; the hostname check is the guard.
+        self._connection.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     def run(self, cmd: str) -> Result:
         try:

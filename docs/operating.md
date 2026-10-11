@@ -26,8 +26,9 @@ From the layer's checkout, the directory holding its `bench.toml`:
 uv run --project /path/to/WiseBenchManager pytest tests/target_suite
 ```
 
-The runner's pytest plugin loads by itself. It reads `bench.toml` from the directory pytest is started
-in, the first time a test asks for `board`. A run like this never requests the `ota` fixture, so it
+The runner's pytest plugin loads by itself. The first time a test asks for `board`, it reads
+`bench.toml` from the checkout `BENCH_TREE` names, or from the directory pytest is started in when
+`BENCH_TREE` is not set. A run like this never requests the `ota` fixture, so it
 records `bench.ota_ran = false`, credits no requirement item and carries no verdict.
 
 ## Environment
@@ -36,11 +37,13 @@ records `bench.ota_ran = false`, credits no requirement item and carries no verd
 |---|---|---|
 | `BENCH_ADDRESS` | `bench.toml` | The board's ssh address, as `host` or `host:port` |
 | `BENCH_HOSTNAME` | `bench.toml` | The hostname the board must answer with before any other command |
+| `BENCH_TREE` | the plugin | The checkout holding `bench.toml`; default the directory pytest is started in |
 | `BENCH_RESULT_DIR` | the plugin | Where records and the event stream are written; default `records/` under the start directory |
 
 The first two are names the README's `bench.toml` uses; a layer may name others the same way. A
 variable `bench.toml` names that is not set is the bench's failure. ssh authentication is the host
-user's own: the key and `~/.ssh/config` that `ssh` uses.
+user's own: the key and `~/.ssh/config` that `ssh` uses. The board's identity is the hostname check;
+host keys are not pinned, because a reflash changes them, and `known_hosts` is neither read nor written.
 
 ## What a run writes
 
