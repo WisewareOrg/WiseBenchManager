@@ -1,4 +1,10 @@
-"""A loopback ssh server answering exec requests from a script and logging every command."""
+"""A loopback ssh server answering exec requests from a script and logging every command.
+
+No maintained tool fits because the in-process ssh servers on PyPI are years unreleased,
+asyncssh would add a second ssh stack, and a real OpenSSH under testcontainers needs Docker
+in CI; this follows paramiko's own in-process testing pattern, and the bench proof covers a
+real sshd.
+"""
 
 from __future__ import annotations
 

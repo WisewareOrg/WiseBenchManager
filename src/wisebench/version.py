@@ -1,4 +1,8 @@
-"""The runner's own version, read from its clone with dunamai."""
+"""The runner's own version, read from its clone with dunamai.
+
+No maintained tool fits the `git describe` form because dunamai's serialisation styles
+(pep440, semver, pvp) do not produce it; the version itself is dunamai's.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,10 @@
-"""The board reached over ssh with fabric."""
+"""The board reached over ssh with fabric.
+
+No maintained tool fits beyond fabric and paramiko because the wrapping maps their errors
+to the runner's one outcome type, `KeyThenNone` is fabric's OpenSSHAuthStrategy extension
+point with paramiko's NoneAuth, and `free_port` exists since `forward_local` needs an
+explicit local port and reports none it bound.
+"""
 
 from __future__ import annotations
 

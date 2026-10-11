@@ -1,4 +1,9 @@
-"""The board under test, reached over a transport that runs commands and moves files."""
+"""The board under test, reached over a transport that runs commands and moves files.
+
+No maintained tool fits because labgrid, which covers ssh run, put, get and forwarding, is
+rejected for one board over ssh in ADR 0001 rev 1, and SFTP returns no digest for the
+hash check after a transfer.
+"""
 
 from __future__ import annotations
 

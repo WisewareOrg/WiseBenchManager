@@ -1,4 +1,8 @@
-"""The event stream the status view and the terminal read."""
+"""The event stream the status view and the terminal read.
+
+No maintained tool fits because one stream must also carry the build and install phases
+that run outside pytest, which pytest-reportlog cannot write.
+"""
 
 from __future__ import annotations
 

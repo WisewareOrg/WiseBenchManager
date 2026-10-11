@@ -1,4 +1,8 @@
-"""A scripted board: answers keyed by command, every call logged, an unexpected call raised."""
+"""A scripted board: answers keyed by command, every call logged, an unexpected call raised.
+
+No maintained tool fits because unittest.mock would hold the same scripted answers, file
+store, connection state and call log in side_effect functions of the same size.
+"""
 
 from __future__ import annotations
 

@@ -65,7 +65,11 @@ class Bench:
 
 
 def marks_of(item: pytest.Item) -> Marks:
-    """Read and check an item's `tst` and `provenance` markers; a malformed `tst` raises."""
+    """Read and check an item's `tst` and `provenance` markers; a malformed `tst` raises.
+
+    No maintained tool fits because pytest-requirements neither validates an item id nor
+    carries `recorded=` nor computes credit, and `--strict-markers` checks names only.
+    """
     tst = list(item.iter_markers("tst"))
     provenance = item.get_closest_marker("provenance") is not None
     if not tst:

@@ -1,4 +1,9 @@
-"""The run record: session facts, every test's outcome, and each requirement item's credit."""
+"""The run record: session facts, every test's outcome, and each requirement item's credit.
+
+No maintained tool fits because ADR 0001 rev 1 decision 5 fixes one flat JSON file per run
+plus an index line, the only JSON-per-run plugin (pytest-json-report) has had no release
+since 2022, junitxml writes XML, and the credit rule is this project's own.
+"""
 
 from __future__ import annotations
 
