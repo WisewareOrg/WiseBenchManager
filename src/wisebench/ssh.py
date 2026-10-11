@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import socket
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import paramiko
@@ -60,7 +60,15 @@ class FabricTransport:
     def forward(self, port: int) -> Iterator[int]:
         """Listen on a free local port and tunnel it to `port` on the board's loopback."""
         local = free_port()
-        with self._connection.forward_local(local_port=local, remote_port=port):
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(
+                    self._connection.forward_local(local_port=local, remote_port=port)
+                )
+            except CONNECTION_ERRORS as error:
+                raise BenchFailure(
+                    f"forward to port {port} on the board failed: {error}"
+                ) from error
             yield local
 
     def reconnect(self, timeout: float) -> None:

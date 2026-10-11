@@ -49,6 +49,22 @@ def test_get_from_an_unreachable_board_is_a_bench_failure(
         refused.get("/tmp/file", tmp_path / "file")
 
 
+def test_forward_to_an_unreachable_board_is_a_bench_failure(refused: FabricTransport) -> None:
+    with (
+        pytest.raises(BenchFailure, match="forward to port 8080 on the board failed"),
+        refused.forward(8080),
+    ):
+        pass
+
+
+def test_an_error_inside_a_forward_is_not_converted(server: ScriptedSshServer) -> None:
+    transport = FabricTransport(
+        BoardConfig(f"127.0.0.1:{server.port}", "unused", "bench", "root", 1)
+    )
+    with pytest.raises(ZeroDivisionError), transport.forward(8080):
+        raise ZeroDivisionError
+
+
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A HOME holding only a client key, with no ssh agent."""
