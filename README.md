@@ -86,8 +86,13 @@ Everything that names the application under test — its units, its paths on the
 replay sets — lives in the layer's own `conftest.py` and tests, built on those fixtures. The runner never
 learns it.
 
-A test carries the requirement item it discharges as a marker: `@pytest.mark.tst("TST011")`. Passing
-tests record their items; the record lists them.
+A test carries the requirement item it discharges as a marker: `@pytest.mark.tst("TST011")`, or
+`@pytest.mark.tst("TST014", recorded=True)` for an item whose status is `recorded` rather than `passed`.
+The id is three capitals and three digits; a malformed marker, an unknown keyword or a second `tst` on
+one test is a collection error. The layer marks its provenance test, the one asserting that
+`/etc/buildinfo` names the commit, with `@pytest.mark.provenance`. Each item's status in the record is
+`passed`, `recorded` or `not credited` with the reason: an item is credited only when the `ota` fixture
+ran, no fixture raised, and at least one provenance test ran and every one passed.
 
 ## The record
 
@@ -96,7 +101,9 @@ and its commit, the runner's version (the tag the clone is at), the bundle hash,
 and after, the hash of any replay recording used, every test's outcome, the items discharged and the
 exact command line. Each fact is recorded by the fixture or test that learns it, through pytest's
 `record_property`, and the file is written at session end, so a run that fails halfway still leaves
-everything up to that point.
+everything up to that point. The runner records under `bench.*` and a layer under `layer.*`. A run that
+never requests `ota` records `bench.ota_ran = false` with the board's booted slot and `/etc/buildinfo`,
+and carries no verdict.
 
 ## Operating it
 
@@ -105,9 +112,11 @@ The runner is cloned on the pipeline host and run from its checkout at a tag; th
 exits without touching the board. `bench status --watch` shows the queue head, the phase strip with
 elapsed times, build progress, the test running now, the replay window's state and recent verdicts, read
 from the runner's own event stream. Replay recordings are made by hand with `bench record <set>`, the only
-time the proxy reaches a real upstream.
+time the proxy reaches a real upstream. Installing, the environment and tagging are in
+[`docs/operating.md`](docs/operating.md).
 
 ## Status
 
-Decided, not yet implemented. ADR 0001 is the design; implementation follows it in small PRs, each
-proven on a real board before the next.
+ADR 0001 rev 1 is the design. Implemented: `bench.toml`, the `board` fixture, the `tst` and `provenance`
+markers, the record and the event stream. The `ota` and `proxy` fixtures and the `bench` commands are not
+part of this version; each lands in its own small PR, proven on a real board before the next.
