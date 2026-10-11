@@ -22,21 +22,22 @@ holding pytest-reportlog's `report.jsonl` and the runner's own `run.json`.
 
 ## The board
 
-The board is reached through labgrid's own pytest plugin, pointed at an env file with `--lg-env
-<path>` or the `LG_ENV` variable; no `-p` flag of ours is needed alongside it. labgrid's YAML loader
-resolves an `!template` scalar against the OS environment, but only for variable names starting with
-`LG_` (`labgrid.util.yaml.resolve_templates`, called from `labgrid.Config`), so an env file names the
-board's address as:
+Three facts from labgrid 26.0 are the contract between this runner and the layer's env file:
 
-```yaml
-targets:
-  main:
-    resources:
-      RawNetworkPort: {}
-    drivers:
-      SSHDriver:
-        address: !template $LG_ADDRESS
-```
+- The file's path comes from `--lg-env <path>` or the `LG_ENV` variable
+  (`labgrid/pytestplugin/hooks.py`); no `-p` flag of ours is needed alongside it.
+- `!template` substitutes only `LG_`-prefixed environment variables (`labgrid/config.py`), so the
+  board's address is named `LG_BENCH_ADDRESS`:
 
-with `LG_ADDRESS` set in the environment that invokes pytest. That env file, and everything else
-naming this board, lives in the layer, not here.
+  ```yaml
+  targets:
+    main:
+      drivers:
+        SSHDriver:
+          address: !template $LG_BENCH_ADDRESS
+  ```
+
+- The `target` fixture requires a target named `main` in that file
+  (`labgrid/pytestplugin/fixtures.py`); a config without one raises `UserError`.
+
+That env file, and everything else naming this board, lives in the layer, not here.
