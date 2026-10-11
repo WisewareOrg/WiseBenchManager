@@ -72,7 +72,6 @@ class BoardConfig:
     address: str
     hostname: str
     name: str
-    user: str
     reboot_timeout: float
 
 
@@ -124,7 +123,6 @@ class Config:
                 address=board.string("address"),
                 hostname=board.string("hostname"),
                 name=board.string("name", "board"),
-                user=board.string("user", "root"),
                 reboot_timeout=board.number("reboot_timeout", 180),
             ),
             bundle_path=Table(data, "bundle").string("path"),

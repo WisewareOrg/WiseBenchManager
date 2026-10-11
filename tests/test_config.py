@@ -49,15 +49,13 @@ def test_reads_every_table_and_expands_variables(tmp_path: Path) -> None:
 
 def test_board_optional_keys_default(tmp_path: Path) -> None:
     board = Config.load(write(tmp_path, FULL), ENVIRON).board
-    assert (board.name, board.user, board.reboot_timeout) == ("board", "root", 180)
+    assert (board.name, board.reboot_timeout) == ("board", 180)
 
 
 def test_board_optional_keys_are_read(tmp_path: Path) -> None:
-    text = FULL.replace(
-        "[bundle]", 'name = "bench"\nuser = "admin"\nreboot_timeout = 30\n\n[bundle]'
-    )
+    text = FULL.replace("[bundle]", 'name = "bench"\nreboot_timeout = 30\n\n[bundle]')
     board = Config.load(write(tmp_path, text), ENVIRON).board
-    assert (board.name, board.user, board.reboot_timeout) == ("bench", "admin", 30)
+    assert (board.name, board.reboot_timeout) == ("bench", 30)
 
 
 def test_expansion_reaches_nested_tables_and_arrays(tmp_path: Path) -> None:

@@ -16,10 +16,10 @@ class _Session(paramiko.ServerInterface):
         return "publickey"
 
     def check_auth_none(self, username: str) -> int:
-        return self._server.attempt("none")
+        return self._server.attempt("none", username)
 
     def check_auth_publickey(self, username: str, key: paramiko.PKey) -> int:
-        return self._server.attempt("publickey")
+        return self._server.attempt("publickey", username)
 
     def check_channel_request(self, kind: str, chanid: int) -> int:
         return paramiko.OPEN_SUCCEEDED
@@ -33,7 +33,7 @@ class ScriptedSshServer:
     """Answers each command from `script` (stdout, exit) and logs it.
 
     `accepts` names the auth methods that succeed: `publickey` (any key) and `none`. Every
-    attempt is logged in `attempts` as `(method, succeeded)`.
+    attempt is logged in `attempts` as `(method, succeeded)`, and every user name in `usernames`.
     """
 
     def __init__(
@@ -43,6 +43,7 @@ class ScriptedSshServer:
         self.accepts = accepts
         self.commands: list[str] = []
         self.attempts: list[tuple[str, bool]] = []
+        self.usernames: set[str] = set()
         self.host_key = paramiko.RSAKey.generate(2048)
         self._listener = socket.create_server(("127.0.0.1", 0))
         self.port = self._listener.getsockname()[1]
@@ -58,7 +59,8 @@ class ScriptedSshServer:
             transport.add_server_key(self.host_key)
             transport.start_server(server=_Session(self))
 
-    def attempt(self, method: str) -> int:
+    def attempt(self, method: str, username: str) -> int:
+        self.usernames.add(username)
         succeeded = method in self.accepts
         self.attempts.append((method, succeeded))
         return paramiko.AUTH_SUCCESSFUL if succeeded else paramiko.AUTH_FAILED

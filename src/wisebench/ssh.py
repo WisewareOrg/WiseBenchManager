@@ -33,7 +33,7 @@ class FabricTransport:
     def __init__(self, config: BoardConfig) -> None:
         # Authentication follows OpenSSH's order: each public key, then the `none` login.
         settings = Config(overrides={"authentication": {"strategy_class": KeyThenNone}})
-        self._connection = Connection(host=config.address, user=config.user, config=settings)
+        self._connection = Connection(host=config.address, config=settings)
         # Host keys are accepted in memory and never pinned; the hostname check is the guard.
         self._connection.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 

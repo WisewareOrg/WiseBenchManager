@@ -35,7 +35,7 @@ records `bench.ota_ran = false`, credits no requirement item and carries no verd
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `BENCH_ADDRESS` | `bench.toml` | The board's ssh address, as `host` or `host:port` |
+| `BENCH_ADDRESS` | `bench.toml` | The board's ssh address, as `[user@]host[:port]`; a root login is written `root@host`, and with no user ssh's own default applies |
 | `BENCH_HOSTNAME` | `bench.toml` | The hostname the board must answer with before any other command |
 | `BENCH_TREE` | the plugin | The checkout holding `bench.toml`; default the directory pytest is started in |
 | `BENCH_RESULT_DIR` | the plugin | Where records and the event stream are written; default `records/` under the start directory |

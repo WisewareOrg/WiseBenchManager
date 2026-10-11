@@ -8,9 +8,7 @@ from wisebench.board import BOOT_ID, BUILDINFO, RAUC_STATUS, Board, Result
 from wisebench.config import BoardConfig
 from wisebench.errors import BenchFailure
 
-CONFIG = BoardConfig(
-    address="board.test", hostname="bench-board", name="bench", user="root", reboot_timeout=60
-)
+CONFIG = BoardConfig(address="board.test", hostname="bench-board", name="bench", reboot_timeout=60)
 
 
 class Recorded(dict[str, Any]):

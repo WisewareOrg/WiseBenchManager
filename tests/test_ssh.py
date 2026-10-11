@@ -16,7 +16,7 @@ from wisebench.ssh import FabricTransport, free_port
 def refused() -> FabricTransport:
     """A transport aimed at a loopback port nothing listens on."""
     address = f"127.0.0.1:{free_port()}"
-    return FabricTransport(BoardConfig(address, "unused", "bench", "root", 1))
+    return FabricTransport(BoardConfig(address, "unused", "bench", 1))
 
 
 def test_free_port_can_be_bound() -> None:
@@ -58,9 +58,7 @@ def test_forward_to_an_unreachable_board_is_a_bench_failure(refused: FabricTrans
 
 
 def test_an_error_inside_a_forward_is_not_converted(server: ScriptedSshServer) -> None:
-    transport = FabricTransport(
-        BoardConfig(f"127.0.0.1:{server.port}", "unused", "bench", "root", 1)
-    )
+    transport = FabricTransport(BoardConfig(f"127.0.0.1:{server.port}", "unused", "bench", 1))
     with pytest.raises(ZeroDivisionError), transport.forward(8080):
         raise ZeroDivisionError
 
@@ -98,7 +96,7 @@ def none_only(home: Path) -> Iterator[ScriptedSshServer]:
 
 
 def board_at(server: ScriptedSshServer, hostname: str) -> Board:
-    config = BoardConfig(f"127.0.0.1:{server.port}", hostname, "bench", "root", 1)
+    config = BoardConfig(f"127.0.0.1:{server.port}", hostname, "bench", 1)
     return Board(FabricTransport(config), config, lambda name, value: None)
 
 
@@ -139,3 +137,9 @@ def test_a_board_refusing_every_method_is_a_bench_failure(home: Path) -> None:
         assert closed.commands == []
     finally:
         closed.close()
+
+
+def test_the_user_in_the_address_is_the_login(server: ScriptedSshServer) -> None:
+    config = BoardConfig(f"root@127.0.0.1:{server.port}", "bench-board", "bench", 1)
+    Board(FabricTransport(config), config, lambda name, value: None)
+    assert server.usernames == {"root"}

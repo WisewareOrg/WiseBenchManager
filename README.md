@@ -47,10 +47,9 @@ The runner is pointed at a checkout and reads `bench.toml` from it:
 schema = 1
 
 [board]
-address  = "${BENCH_ADDRESS}"     # from the environment, never committed
+address  = "${BENCH_ADDRESS}"     # from the environment, never committed: [user@]host[:port]
 hostname = "${BENCH_HOSTNAME}"    # the board's live hostname must equal this before any command
 name     = "bench"                # optional, default "board": the non-identifying label the record carries
-user     = "root"                 # optional, default "root": the ssh user
 reboot_timeout = 180              # optional, default 180: seconds a reboot has to show a new boot id
 
 [bundle]
