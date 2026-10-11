@@ -8,7 +8,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import paramiko
-from fabric import Connection
+from fabric import Config, Connection
+from fabric.auth import OpenSSHAuthStrategy
+from paramiko.auth_strategy import AuthSource, NoneAuth
 
 from wisebench.board import Result
 from wisebench.config import BoardConfig
@@ -17,11 +19,21 @@ from wisebench.errors import BenchFailure
 CONNECTION_ERRORS = (OSError, EOFError, paramiko.SSHException)
 
 
+class KeyThenNone(OpenSSHAuthStrategy):
+    """Fabric's OpenSSH key discovery, ending in the `none` login where OpenSSH would prompt."""
+
+    def get_sources(self) -> Iterator[AuthSource]:
+        yield from self.get_pubkeys()
+        yield NoneAuth(username=self.username)
+
+
 class FabricTransport:
     """Runs commands and moves files over one fabric `Connection` to the board's address."""
 
     def __init__(self, config: BoardConfig) -> None:
-        self._connection = Connection(host=config.address, user=config.user)
+        # Authentication follows OpenSSH's order: each public key, then the `none` login.
+        settings = Config(overrides={"authentication": {"strategy_class": KeyThenNone}})
+        self._connection = Connection(host=config.address, user=config.user, config=settings)
         # Host keys are accepted in memory and never pinned; the hostname check is the guard.
         self._connection.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 

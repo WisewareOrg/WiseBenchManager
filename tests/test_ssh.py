@@ -63,9 +63,20 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def server(home: Path) -> Iterator[ScriptedSshServer]:
     """A scripted ssh server whose key differs from the one known_hosts holds for it."""
-    scripted = ScriptedSshServer({"hostname": ("bench-board\n", 0), "uname -s": ("Linux\n", 0)})
+    scripted = ScriptedSshServer(SCRIPT)
     stale = paramiko.RSAKey.generate(2048).get_base64()
     (home / "known_hosts").write_text(f"[127.0.0.1]:{scripted.port} ssh-rsa {stale}\n")
+    yield scripted
+    scripted.close()
+
+
+SCRIPT = {"hostname": ("bench-board\n", 0), "uname -s": ("Linux\n", 0)}
+
+
+@pytest.fixture
+def none_only(home: Path) -> Iterator[ScriptedSshServer]:
+    """A scripted ssh server that refuses every key and admits the `none` login."""
+    scripted = ScriptedSshServer(SCRIPT, accepts=frozenset({"none"}))
     yield scripted
     scripted.close()
 
@@ -91,3 +102,24 @@ def test_over_ssh_a_wrong_hostname_is_refused_before_any_other_command(
     with pytest.raises(BenchFailure, match="answers as hostname 'bench-board'"):
         board_at(server, "another-board")
     assert server.commands == ["hostname"]
+
+
+def test_a_board_accepting_the_key_is_reached_by_key_alone(server: ScriptedSshServer) -> None:
+    board_at(server, "bench-board")
+    assert server.attempts == [("publickey", True)]
+
+
+def test_a_board_refusing_keys_is_reached_by_the_none_login(none_only: ScriptedSshServer) -> None:
+    board = board_at(none_only, "bench-board")
+    assert board.run("uname -s") == Result("Linux\n", "", 0)
+    assert none_only.attempts == [("publickey", False), ("none", True)]
+
+
+def test_a_board_refusing_every_method_is_a_bench_failure(home: Path) -> None:
+    closed = ScriptedSshServer(SCRIPT, accepts=frozenset())
+    try:
+        with pytest.raises(BenchFailure, match="ssh to the board failed"):
+            board_at(closed, "bench-board")
+        assert closed.commands == []
+    finally:
+        closed.close()

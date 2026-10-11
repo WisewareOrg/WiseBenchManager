@@ -42,7 +42,8 @@ records `bench.ota_ran = false`, credits no requirement item and carries no verd
 
 The first two are names the README's `bench.toml` uses; a layer may name others the same way. A
 variable `bench.toml` names that is not set is the bench's failure. ssh authentication is the host
-user's own: the key and `~/.ssh/config` that `ssh` uses. The board's identity is the hostname check;
+user's own: the keys `ssh` would offer, from `~/.ssh/config`, the agent and `~/.ssh/id_*`.
+Authentication follows OpenSSH's order: key, then none. The board's identity is the hostname check;
 host keys are not pinned, because a reflash changes them, and `known_hosts` is neither read nor written.
 
 ## What a run writes
