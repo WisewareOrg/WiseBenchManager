@@ -36,10 +36,10 @@ def test_without_ota_nothing_is_credited() -> None:
 
 def test_a_fixture_error_anywhere_credits_nothing() -> None:
     broken = item("error")
-    broken.fixture_raised = True
+    broken.bench_failed = True
     assert status(item("passed", "TST011"), True, provenance(), broken) == (
         "not credited",
-        "a fixture raised",
+        "the bench failed",
     )
 
 

@@ -13,6 +13,7 @@ import pytest
 from wisebench import version
 from wisebench.board import Board, Transport
 from wisebench.config import Config
+from wisebench.errors import BenchFailure
 from wisebench.events import EventLog
 from wisebench.record import Marks, SessionRecord
 from wisebench.ssh import FabricTransport
@@ -46,9 +47,12 @@ class Bench:
         self.events.emit("test_start", nodeid=nodeid)
 
     @pytest.hookimpl(wrapper=True)
-    def pytest_runtest_makereport(self, item: pytest.Item) -> Generator[None, Any, Any]:
+    def pytest_runtest_makereport(
+        self, item: pytest.Item, call: pytest.CallInfo[None]
+    ) -> Generator[None, Any, Any]:
         report = yield
-        self.record.add(item.nodeid, marks_of(item), report)
+        bench_failure = call.excinfo is not None and call.excinfo.errisinstance(BenchFailure)
+        self.record.add(item.nodeid, marks_of(item), report, bench_failure)
         return report
 
     def pytest_runtest_logfinish(self, nodeid: str) -> None:

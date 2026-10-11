@@ -91,7 +91,9 @@ The id is three capitals and three digits; a malformed marker, an unknown keywor
 one test is a collection error. The layer marks its provenance test, the one asserting that
 `/etc/buildinfo` names the commit, with `@pytest.mark.provenance`. Each item's status in the record is
 `passed`, `recorded` or `not credited` with the reason: an item is credited only when the `ota` fixture
-ran, no fixture raised, and at least one provenance test ran and every one passed.
+ran, the bench did not fail, and at least one provenance test ran and every one passed. The bench fails
+when a fixture raises, or when a test body raises the runner's `BenchFailure`; the record shows that
+test's outcome as `error`.
 
 ## The record
 

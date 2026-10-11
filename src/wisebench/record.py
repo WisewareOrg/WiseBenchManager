@@ -25,18 +25,22 @@ class Marks:
 
 @dataclass
 class TestRecord:
-    """One test's outcome, folded from its setup, call and teardown reports."""
+    """One test's outcome, folded from its setup, call and teardown reports.
+
+    A fixture failing, or a `BenchFailure` raised from the test body, is the bench's failure:
+    the outcome is `error` and `bench_failed` is set.
+    """
 
     nodeid: str
     marks: Marks
     outcome: str | None = None
     properties: dict[str, Any] = field(default_factory=dict)
-    fixture_raised: bool = False
+    bench_failed: bool = False
 
-    def add(self, report: pytest.TestReport) -> None:
+    def add(self, report: pytest.TestReport, bench_failure: bool = False) -> None:
         self.properties = dict(report.user_properties)
-        if report.when != "call" and report.failed:
-            self.fixture_raised = True
+        if bench_failure or (report.when != "call" and report.failed):
+            self.bench_failed = True
             self.outcome = "error"
         elif report.when == "setup" and report.skipped:
             self.outcome = "skipped"
@@ -53,8 +57,8 @@ class TestRecord:
 class Credit:
     """Decides each item's status: `passed`, `recorded` or `not credited` with the reason.
 
-    An item is credited only when the session as a whole can be: the ota fixture ran, no
-    fixture raised, and at least one provenance test ran and every one of them passed.
+    An item is credited only when the session as a whole can be: the ota fixture ran, the
+    bench did not fail, and at least one provenance test ran and every one of them passed.
     """
 
     def __init__(self, ota_ran: bool, tests: list[TestRecord]) -> None:
@@ -65,8 +69,8 @@ class Credit:
         provenance = [test.outcome for test in tests if test.marks.provenance]
         if not ota_ran:
             return "ota did not run"
-        if any(test.fixture_raised for test in tests):
-            return "a fixture raised"
+        if any(test.bench_failed for test in tests):
+            return "the bench failed"
         if not provenance:
             return "no provenance test ran"
         if any(outcome != "passed" for outcome in provenance):
@@ -98,9 +102,11 @@ class SessionRecord:
         """Record a session fact under its namespaced name."""
         self.properties[name] = value
 
-    def add(self, nodeid: str, marks: Marks, report: pytest.TestReport) -> TestRecord:
+    def add(
+        self, nodeid: str, marks: Marks, report: pytest.TestReport, bench_failure: bool = False
+    ) -> TestRecord:
         test = self.tests.setdefault(nodeid, TestRecord(nodeid, marks))
-        test.add(report)
+        test.add(report, bench_failure)
         return test
 
     def write(self, exit_status: int) -> Path:

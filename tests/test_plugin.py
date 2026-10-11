@@ -398,7 +398,7 @@ def test_session_tracks_which_tests_had_a_fixture_raise(layer: pytest.Pytester) 
     recorder = layer.inline_run(plugins=[FakeBoardPlugin(FakeTransport(BOARD))])
     config = recorder.getcall("pytest_sessionfinish").session.config
     raised = {
-        nodeid.split("::")[-1]: test.fixture_raised
+        nodeid.split("::")[-1]: test.bench_failed
         for nodeid, test in Bench.of(config).record.tests.items()
     }
     assert raised == {"test_setup": True, "test_teardown": True, "test_fails": False}
@@ -471,3 +471,53 @@ def test_with_ota_and_provenance_passed_items_are_credited(layer: pytest.Pyteste
         if test["item"]
     }
     assert statuses == {"TST011": ("passed", None), "TST014": ("recorded", None)}
+
+
+def test_a_bench_failure_in_a_test_body_is_the_bench_s_and_credits_nothing(
+    layer: pytest.Pytester,
+) -> None:
+    with_stub_ota(layer)
+    layer.makepyfile(
+        """
+        import pytest
+        from wisebench.errors import BenchFailure
+
+        @pytest.mark.provenance
+        def test_provenance(ota):
+            pass
+
+        @pytest.mark.tst("TST011")
+        def test_passes(ota):
+            pass
+
+        def test_bench_breaks(ota):
+            raise BenchFailure("the board went away")
+        """
+    )
+    run(layer).assert_outcomes(passed=2, failed=1)
+    assert entry_of(layer, "test_bench_breaks")["outcome"] == "error"
+    passes = entry_of(layer, "test_passes")
+    assert (passes["status"], passes["reason"]) == ("not credited", "the bench failed")
+
+
+def test_an_ordinary_failure_in_a_test_body_stays_the_candidate_s(layer: pytest.Pytester) -> None:
+    with_stub_ota(layer)
+    layer.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.provenance
+        def test_provenance(ota):
+            pass
+
+        @pytest.mark.tst("TST011")
+        def test_passes(ota):
+            pass
+
+        def test_candidate_fails(ota):
+            raise OSError("the candidate broke")
+        """
+    )
+    run(layer).assert_outcomes(passed=2, failed=1)
+    assert entry_of(layer, "test_candidate_fails")["outcome"] == "failed"
+    assert entry_of(layer, "test_passes")["status"] == "passed"
