@@ -51,7 +51,7 @@ host keys are not pinned, because a reflash changes them, and `known_hosts` is n
 In `BENCH_RESULT_DIR`:
 
 - `<UTC start time>.json` — one flat record per session: the `bench.*` session facts, the exit status,
-  the verdict, and every test's node id, outcome, duration, recorded properties, item id and status.
+  the verdict, and every test's node id, outcome, recorded properties, item id and status.
 - `index.jsonl` — one line per session: start time, record file, runner version, verdict, outcome counts.
 - `events.jsonl` — one line per event (`session_start`, `test_start`, `test_end`, `record_written`), each
   with a UTC `ts`; the status view and the terminal read it.

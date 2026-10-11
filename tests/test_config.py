@@ -38,7 +38,6 @@ def write(root: Path, text: str) -> Path:
 
 def test_reads_every_table_and_expands_variables(tmp_path: Path) -> None:
     config = Config.load(write(tmp_path, FULL), ENVIRON)
-    assert config.root == tmp_path
     assert config.board.address == "board.test"
     assert config.board.hostname == "bench-board"
     assert config.bundle_path == "build/update.raucb"
@@ -58,9 +57,9 @@ def test_board_optional_keys_are_read(tmp_path: Path) -> None:
     assert (board.name, board.reboot_timeout) == ("bench", 30)
 
 
-def test_expansion_reaches_nested_tables_and_arrays(tmp_path: Path) -> None:
-    text = FULL.replace('check_name = "bench"', 'labels = ["${BENCH_HOSTNAME}"]')
-    assert Config.load(write(tmp_path, text), ENVIRON).github == {"labels": ["bench-board"]}
+def test_expansion_reaches_every_table(tmp_path: Path) -> None:
+    text = FULL.replace('check_name = "bench"', 'check_name = "${BENCH_HOSTNAME}"')
+    assert Config.load(write(tmp_path, text), ENVIRON).github == {"check_name": "bench-board"}
 
 
 def test_missing_variable_is_named(tmp_path: Path) -> None:

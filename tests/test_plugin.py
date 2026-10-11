@@ -133,7 +133,6 @@ def test_every_test_entry_has_its_outcome_properties_and_item(layer: pytest.Pyte
     assert item["outcome"] == "passed"
     assert item["properties"] == {"layer.page_state": {"cards": 3}, "bench.anything": 1}
     assert item["item"] == "TST011"
-    assert isinstance(item["duration"], float)
     plain = entry_of(layer, "test_plain")
     assert (plain["item"], plain["status"], plain["reason"]) == (None, None, None)
     assert entry_of(layer, "test_skipped")["outcome"] == "skipped"

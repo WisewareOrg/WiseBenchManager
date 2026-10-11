@@ -30,12 +30,10 @@ class TestRecord:
     nodeid: str
     marks: Marks
     outcome: str | None = None
-    duration: float = 0.0
     properties: dict[str, Any] = field(default_factory=dict)
     fixture_raised: bool = False
 
     def add(self, report: pytest.TestReport) -> None:
-        self.duration += report.duration
         self.properties = dict(report.user_properties)
         if report.when != "call" and report.failed:
             self.fixture_raised = True
@@ -139,7 +137,6 @@ class SessionRecord:
         return {
             "nodeid": test.nodeid,
             "outcome": test.outcome,
-            "duration": round(test.duration, 3),
             "properties": test.properties,
             "item": test.marks.item_id,
             "status": status,

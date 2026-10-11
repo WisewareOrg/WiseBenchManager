@@ -25,13 +25,11 @@ class Expander:
         self._environ = environ
 
     def expand(self, value: Any) -> Any:
-        """Expand strings, recursing into tables and arrays; other values pass through."""
+        """Expand strings, recursing into tables; other values pass through."""
         if isinstance(value, str):
             return self.PATTERN.sub(self._lookup, value)
         if isinstance(value, dict):
             return {key: self.expand(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self.expand(item) for item in value]
         return value
 
     def _lookup(self, match: re.Match[str]) -> str:
@@ -92,7 +90,6 @@ class SuitesConfig:
 class Config:
     """Every value the layer's `bench.toml` gives the runner."""
 
-    root: Path
     board: BoardConfig
     bundle_path: str
     hooks: HooksConfig
@@ -118,7 +115,6 @@ class Config:
         hooks = Table(data, "hooks")
         tests = Table(data, "tests")
         return cls(
-            root=root,
             board=BoardConfig(
                 address=board.string("address"),
                 hostname=board.string("hostname"),

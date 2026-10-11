@@ -53,8 +53,7 @@ class Bench:
 
     def pytest_runtest_logfinish(self, nodeid: str) -> None:
         test = self.record.tests.get(nodeid)
-        outcome, duration = (test.outcome, round(test.duration, 3)) if test else (None, 0.0)
-        self.events.emit("test_end", nodeid=nodeid, outcome=outcome, duration=duration)
+        self.events.emit("test_end", nodeid=nodeid, outcome=test.outcome if test else None)
 
     def pytest_sessionfinish(self, exitstatus: int) -> None:
         path = self.record.write(int(exitstatus))
