@@ -9,21 +9,28 @@ from wisebench import ota
 
 
 class FakeTarget:
-    def __init__(self):
+    """Each `activate` call pops the next scripted result; an Exception instance is raised."""
+
+    def __init__(self, activate_results=None):
         self.activate_calls = 0
+        self._activate_results = list(activate_results) if activate_results else None
 
     def deactivate(self, driver):
         pass
 
     def activate(self, driver):
         self.activate_calls += 1
+        if self._activate_results:
+            result = self._activate_results.pop(0)
+            if isinstance(result, Exception):
+                raise result
 
 
 class FakeDriver:
     """Each `run` call pops the next scripted result; an Exception instance is raised."""
 
-    def __init__(self, run_results):
-        self.target = FakeTarget()
+    def __init__(self, run_results, activate_results=None):
+        self.target = FakeTarget(activate_results)
         self._run_results = list(run_results)
         self.run_calls = []
         self.put_calls = []
@@ -100,6 +107,17 @@ def test_wait_for_ssh_reconnects_and_returns_once_run_succeeds():
     driver = FakeDriver([ExecutionError("down"), ExecutionError("down"), ([], [], 0)])
     ota._wait_for_ssh(driver, timeout=1, interval=0.01)
     assert driver.target.activate_calls == 3
+
+
+def test_wait_for_ssh_retries_past_a_bare_connect_timeout():
+    # labgrid's own SSHDriver raises a bare Exception, not ExecutionError, when its
+    # internal connect timeout expires (confirmed against labgrid 26.0 on the bench).
+    driver = FakeDriver(
+        [([], [], 0)],
+        activate_results=[Exception("Timeout while waiting for ssh connection"), None],
+    )
+    ota._wait_for_ssh(driver, timeout=1, interval=0.01)
+    assert driver.target.activate_calls == 2
 
 
 def test_wait_for_ssh_times_out_when_ssh_never_comes_back():

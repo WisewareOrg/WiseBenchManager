@@ -3,10 +3,9 @@
 import hashlib
 import json
 
-from labgrid.driver import ExecutionError
-from tenacity import Retrying, retry_if_exception_type, stop_after_delay, wait_fixed
+from tenacity import Retrying, stop_after_delay, wait_fixed
 
-_WAIT_TIMEOUT = 180
+_WAIT_TIMEOUT = 300
 _WAIT_INTERVAL = 5
 
 
@@ -15,6 +14,7 @@ class OtaError(Exception):
 
 
 def _run(driver, cmd):
+    """Run `cmd` over `driver`; raise `OtaError` on a nonzero exit, else return stdout."""
     stdout, stderr, returncode = driver.run(cmd)
     if returncode != 0:
         raise OtaError(f"{cmd!r} exited {returncode}: {stderr}")
@@ -22,6 +22,7 @@ def _run(driver, cmd):
 
 
 def _booted_slot(driver):
+    """Return the bootname of the currently booted slot, from `rauc status --output-format=json`."""
     (line,) = _run(driver, "rauc status --output-format=json")
     return json.loads(line)["booted"]
 
@@ -33,8 +34,8 @@ def _reconnect(driver):
 
 
 def _wait_for_ssh(driver, timeout=_WAIT_TIMEOUT, interval=_WAIT_INTERVAL):
+    """Retry reconnecting and running a trivial command until ssh answers or `timeout` elapses."""
     for attempt in Retrying(
-        retry=retry_if_exception_type(ExecutionError),
         stop=stop_after_delay(timeout),
         wait=wait_fixed(interval),
         reraise=True,
@@ -77,8 +78,10 @@ def recover(driver, marker):
 
 
 def write_marker(marker, slot):
+    """Write `slot` as the candidate named by the mid-OTA marker file `marker`."""
     marker.write_text(slot)
 
 
 def clear_marker(marker):
+    """Remove the mid-OTA marker file `marker`, if present."""
     marker.unlink(missing_ok=True)
