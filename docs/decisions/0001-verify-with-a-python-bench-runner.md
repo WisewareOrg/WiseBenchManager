@@ -17,7 +17,7 @@
 
 The appliance (the meta-wisekiosk image on the kiosk board) needs two verification commands. `bench run`, on a timer: if the merge queue has an entry, build it, OTA it to the bench board, run the tests on the booted board, roll back, report pass or fail to GitHub, and post nothing if the bench itself broke. `bench test <ref> [--set <name>]`: the same path by hand for investigations, with a replay set named when a run must see the same page every time. Per-PR gating on the real board and repeatable performance numbers are both required.
 
-The first implementation grew inside meta-wisekiosk without a design-space analysis: a 620-line shell driver that also held every test's setup (replay windows, a second boot, probe deployment, mode reads, void paths), a hand-written TLS replay proxy with its own recorder and certificate minting, a 500-line shell self-test of the driver's own text, a 1,000-line log viewer, and device tests under Yocto's oeqa runtime framework. oeqa can run a test but cannot set one up, so every state a test needed became driver code, and the driver changed with every test ticket. The owner reads Python and not shell, prefers well-supported tools over bespoke machinery, and wants the runner built once.
+The first implementation grew inside meta-wisekiosk without a design-space analysis: a 620-line shell driver that also held every test's setup (replay windows, a second boot, probe deployment, mode reads, void paths), a hand-written TLS replay proxy with its own recorder and certificate minting, a 500-line shell self-test of the driver's own text, a 1,000-line log viewer, and device tests under Yocto's oeqa runtime framework. oeqa can run a test but cannot set one up, so every state a test needed became driver code, and the driver changed with every test ticket. Python is read, not shell; well-supported tools are preferred over bespoke machinery, and the runner is built once, not rewritten piecemeal.
 
 ## Decision
 
@@ -31,7 +31,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 
 ## Alternatives considered
 
-- **Keep the shell driver and oeqa.** Rejected: the driver grows with every test's needs because oeqa has no fixtures; its self-test parses its own wording; cases do not assert and verdict objects sit between test and fact; poky marks oeqa's target loader for refactoring; the owner cannot review shell.
+- **Keep the shell driver and oeqa.** Rejected: the driver grows with every test's needs because oeqa has no fixtures; its self-test parses its own wording; cases do not assert and verdict objects sit between test and fact; poky marks oeqa's target loader for refactoring; shell is not reviewed here.
 - **Keep the shell driver, move the tests to pytest.** Rejected: two languages, and the five steps would be rewritten later anyway; the goal is to do it once.
 - **labgrid as the whole runner.** Rejected: its value is places, a coordinator, power and serial drivers and board strategies, none used for one board over ssh, and it has no RAUC strategy, so that code is ours either way; no new hardware is planned. Its own pytest plugin and env file are the board, with no fixture of the runner's own (rev 2).
 - **A bespoke ssh transport, a fake board, a bespoke record writer, a `tst` marker and a hostname guard.** Rejected in rev 2: each re-implements what labgrid's own plugin and pytest-reportlog already do, or encodes something the runner is not meant to know.
