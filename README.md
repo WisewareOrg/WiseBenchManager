@@ -41,16 +41,22 @@ is the bench's failure: a DISABLED marker is written, the timer is stopped, noth
 
 ## What a layer provides
 
-The runner is pointed at a checkout and reads `bench.toml` from it:
+The runner is pointed at a checkout. The board's identity comes from two environment variables, never
+from a committed file:
+
+| Variable | Meaning |
+|---|---|
+| `BENCH_ADDRESS` | The board's ssh address, `[user@]host[:port]`; a root login is `root@host` |
+| `BENCH_HOSTNAME` | The hostname the board must answer with before any other command |
+
+Everything else is in `bench.toml` at the checkout's root:
 
 ```toml
 schema = 1
 
-[board]
-address  = "${BENCH_ADDRESS}"     # from the environment, never committed: [user@]host[:port]
-hostname = "${BENCH_HOSTNAME}"    # the board's live hostname must equal this before any command
-name     = "bench"                # optional, default "board": the non-identifying label the record carries
-reboot_timeout = 180              # optional, default 180: seconds a reboot has to show a new boot id
+[board]                           # optional table
+name     = "bench"                # default "board": the non-identifying label the record carries
+reboot_timeout = 180              # default 180: seconds a reboot has to show a new boot id
 
 [bundle]
 path = "build/.../update-bundle-<machine>.raucb"
@@ -68,8 +74,8 @@ target_suite = "tests/target_suite"
 check_name = "bench"
 ```
 
-`schema` must be 1; any other value is refused. Every string has `${VAR}` replaced from the environment,
-and a variable that is not set is the bench's failure, never a default.
+`schema` must be 1; any other value is refused. A missing variable, table or key, or an empty string, is
+the bench's failure, named in the message; keys the runner does not know are ignored.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_TARGET` and `BENCH_RESULT_DIR` in its environment; its exit status is pass or fail and its output

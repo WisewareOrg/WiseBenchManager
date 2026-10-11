@@ -80,7 +80,7 @@ def test_a_missing_variable_is_an_error_naming_it(
     layer.makepyfile("def test_uses_board(board):\n    pass")
     result = run(layer)
     result.assert_outcomes(errors=1)
-    result.stdout.fnmatch_lines(["*BENCH_ADDRESS is not set*"])
+    result.stdout.fnmatch_lines(["*BENCH_ADDRESS: Field required*"])
 
 
 def test_record_carries_session_facts_and_board_state(layer: pytest.Pytester) -> None:
@@ -431,7 +431,7 @@ def test_bench_tree_names_the_checkout_holding_bench_toml(
     tree.mkdir()
     start = layer.path / "bench.toml"
     start.rename(tree / "bench.toml")
-    wrong = (tree / "bench.toml").read_text().replace("${BENCH_HOSTNAME}", "not-this-board")
+    wrong = (tree / "bench.toml").read_text().replace("schema = 1", "schema = 2")
     start.write_text(wrong)
     monkeypatch.setenv("BENCH_TREE", str(tree))
     layer.makepyfile("def test_uses_board(board):\n    pass")

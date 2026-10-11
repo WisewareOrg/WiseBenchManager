@@ -13,8 +13,6 @@ BENCH_TOML = """
 schema = 1
 
 [board]
-address = "${BENCH_ADDRESS}"
-hostname = "${BENCH_HOSTNAME}"
 name = "bench"
 
 [bundle]

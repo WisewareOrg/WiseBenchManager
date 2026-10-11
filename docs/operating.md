@@ -35,13 +35,13 @@ records `bench.ota_ran = false`, credits no requirement item and carries no verd
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `BENCH_ADDRESS` | `bench.toml` | The board's ssh address, as `[user@]host[:port]`; a root login is written `root@host`, and with no user ssh's own default applies |
-| `BENCH_HOSTNAME` | `bench.toml` | The hostname the board must answer with before any other command |
+| `BENCH_ADDRESS` | the plugin | The board's ssh address, as `[user@]host[:port]`; a root login is written `root@host`; with no user, the ssh config's `User` applies, else the local user name |
+| `BENCH_HOSTNAME` | the plugin | The hostname the board must answer with before any other command |
 | `BENCH_TREE` | the plugin | The checkout holding `bench.toml`; default the directory pytest is started in |
 | `BENCH_RESULT_DIR` | the plugin | Where records and the event stream are written; default `records/` under the start directory |
 
-The first two are names the README's `bench.toml` uses; a layer may name others the same way. A
-variable `bench.toml` names that is not set is the bench's failure. ssh authentication is the host
+The board's address and hostname are read from these variables only, never from `bench.toml`; either
+one unset is the bench's failure. ssh authentication is the host
 user's own: the keys `ssh` would offer, from `~/.ssh/config`, the agent and `~/.ssh/id_*`.
 Authentication follows OpenSSH's order: key, then none. The board's identity is the hostname check;
 host keys are not pinned, because a reflash changes them, and `known_hosts` is neither read nor written.

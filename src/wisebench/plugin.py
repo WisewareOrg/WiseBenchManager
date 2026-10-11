@@ -127,7 +127,7 @@ def bench_config(request: pytest.FixtureRequest) -> Config:
 @pytest.fixture(scope="session")
 def bench_transport(bench_config: Config) -> Iterator[Transport]:
     """The ssh transport to the configured board."""
-    transport = FabricTransport(bench_config.board)
+    transport = FabricTransport(bench_config.board_config())
     yield transport
     transport.close()
 
@@ -141,7 +141,7 @@ def board(
     At session end, when no OTA ran, the booted slot and `/etc/buildinfo` go to the record.
     """
     record = Bench.of(request.config).record
-    connected = Board(bench_transport, bench_config.board, record.set)
+    connected = Board(bench_transport, bench_config.board_config(), record.set)
     yield connected
     if record.properties.get("bench.ota_ran") is not True:
         record.set("bench.booted_slot", connected.booted_slot())
