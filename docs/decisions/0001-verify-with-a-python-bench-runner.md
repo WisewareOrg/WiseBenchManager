@@ -9,8 +9,8 @@
   the runner's own (decision 2); the record is pytest-reportlog's report, with one run-level file
   beside it (decision 5); the tst-marker and credit sentences are struck. A bespoke ssh transport, a
   fake board, a bespoke record writer, markers and a hostname guard are rejected alternatives: the
-  runner uses maintained tools and knows nothing of the appliance (WisewareOrg/WiseBenchManager#2
-  Core, minimal scope).
+  runner uses maintained tools and knows nothing of the appliance (owner, 2026-10-11;
+  WisewareOrg/WiseBenchManager#2 Core, minimal scope).
 - **rev 1** — 2026-10-11 — first written (meta-wisekiosk#223 generic Yocto test runner).
 
 ## Context
@@ -34,7 +34,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 - **Keep the shell driver and oeqa.** Rejected: the driver grows with every test's needs because oeqa has no fixtures; its self-test parses its own wording; cases do not assert and verdict objects sit between test and fact; poky marks oeqa's target loader for refactoring; the owner cannot review shell.
 - **Keep the shell driver, move the tests to pytest.** Rejected: two languages, and the five steps would be rewritten later anyway; the goal is to do it once (owner, 2026-10-11).
 - **labgrid as the whole runner.** Rejected: its value is places, a coordinator, power and serial drivers and board strategies, none used for one board over ssh, and it has no RAUC strategy, so that code is ours either way (owner, 2026-10-11: no new hardware). Its own pytest plugin and env file are the board, with no fixture of the runner's own (rev 2).
-- **A bespoke ssh transport, a fake board, a bespoke record writer, a `tst` marker and a hostname guard.** Rejected in rev 2: each re-implements what labgrid's own plugin and pytest-reportlog already do, or encodes something the runner is not meant to know.
+- **A bespoke ssh transport, a fake board, a bespoke record writer, a `tst` marker and a hostname guard.** Rejected in rev 2: each re-implements what labgrid's own plugin and pytest-reportlog already do, or encodes something the runner is not meant to know (owner, 2026-10-11).
 - **LAVA, KernelCI.** Rejected: a server footprint (database, scheduler, workers) for one board, no OTA deploy action, tests run on the device rather than host-side, verdicts are not GitHub statuses.
 - **Fuego, Avocado, pytest-embedded.** Rejected: Fuego is unmaintained since 2020; Avocado has no deploy/boot model; pytest-embedded is scoped to microcontrollers.
 - **A self-hosted Actions runner on `merge_group`.** Rejected: a long-lived registered runner on the build host, which organisation policy forbids; flock and the timer already provide the trigger.

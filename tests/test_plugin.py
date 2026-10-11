@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 
 def _run_one_passing_test(pytester, monkeypatch):
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
@@ -14,14 +16,26 @@ def _run_one_passing_test(pytester, monkeypatch):
     return run_dirs[0]
 
 
-def test_run_json_has_the_named_fields(pytester, monkeypatch):
-    run_dir = _run_one_passing_test(pytester, monkeypatch)
-    data = json.loads((run_dir / "run.json").read_text())
+@pytest.mark.parametrize(
+    ("body", "expected_exit_status"),
+    [
+        ("def test_pass():\n    assert True\n", 0),
+        ("def test_fail():\n    assert False\n", 1),
+    ],
+)
+def test_run_json_has_the_named_fields(pytester, monkeypatch, body, expected_exit_status):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile(body)
+    result = pytester.runpytest()
+    assert result.ret == expected_exit_status
+    run_dirs = list(Path("records").iterdir())
+    assert len(run_dirs) == 1
+    data = json.loads((run_dirs[0] / "run.json").read_text())
     assert set(data) == {"version", "command_line", "start", "end", "exit_status"}
     assert data["version"]
     assert data["command_line"]
     assert data["start"] < data["end"]
-    assert data["exit_status"] == 0
+    assert data["exit_status"] == expected_exit_status
 
 
 def test_reportlog_lands_under_the_results_dir(pytester, monkeypatch):

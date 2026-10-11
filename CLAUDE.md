@@ -18,7 +18,7 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
 
 - **Python, one language, written to be read.** Small classes with one job each; a `just` recipe or a
   shell line is glue only. The owner reads Python and does not read shell.
-- **Well-supported tools before code of ours.** Every piece names what covers it (fabric for ssh,
+- **Well-supported tools before code of ours.** Every piece names what covers it (labgrid for ssh,
   mitmproxy for replay, pytest for the suites and the record, systemd and `flock` for scheduling, `gh`
   for GitHub). A bespoke piece is written only with a sentence saying why no maintained tool fits, and
   that sentence is the owner's to accept.
