@@ -92,6 +92,7 @@ class Ota:
             the bundle file's sha256 hex digest.
 
         Raises:
+            OSError: `bundle` could not be opened to compute its sha256.
             OtaError: `rauc install` or the slot-status read exited nonzero.
             Exception: ssh did not answer again within the wait bound after rebooting.
         """
