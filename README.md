@@ -30,8 +30,8 @@ whatever a layer's own tests recorded against them, and the exact command line.
 2. `build` and `bundle` hooks — the layer's own commands, run in the checkout of the ref under test.
 3. `host_suite` — pytest on the pipeline host against the built artefacts, before anything is installed.
 4. Install and boot — `ota.install(driver, bundle, destination)`: labgrid's `put`, `rauc install`,
-   reboot, wait for ssh to answer again, and return the booted slot from
-   `rauc status --output-format=json`.
+   reboot, wait for ssh to answer again, and return the booted slot (from
+   `rauc status --output-format=json`) and the bundle's sha256.
 5. `target_suite` — pytest against the booted board, with labgrid's own env file and
    `--report-log`.
 6. Roll back — `ota.rollback(driver, slot)`, called whether the tests passed or not:
