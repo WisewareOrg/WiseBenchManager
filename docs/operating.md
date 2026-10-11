@@ -32,9 +32,12 @@ Three facts from labgrid 26.0 are the contract between this runner and the layer
   ```yaml
   targets:
     main:
-      drivers:
-        SSHDriver:
+      resources:
+        NetworkService:
           address: !template $LG_BENCH_ADDRESS
+          username: root
+      drivers:
+        SSHDriver: {}
   ```
 
 - The `target` fixture requires a target named `main` in that file
