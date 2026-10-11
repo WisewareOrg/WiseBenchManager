@@ -61,7 +61,7 @@ def test_wrong_hostname_is_an_error_and_nothing_else_is_sent(
     assert transport.calls == [("run", "hostname")]
     written = record(layer)
     assert written["bench.board"] == "bench"
-    assert written["bench.board_slot"] is None
+    assert written["bench.booted_slot"] is None
     assert written["bench.board_buildinfo"] is None
     assert "bench.boot_ids" not in written
     assert [test["outcome"] for test in written["tests"]] == ["error", "error"]
@@ -90,7 +90,7 @@ def test_record_carries_session_facts_and_board_state(layer: pytest.Pytester) ->
     assert written["bench.runner_version"] == VERSION
     assert written["bench.board"] == "bench"
     assert written["bench.ota_ran"] is False
-    assert written["bench.board_slot"] == "A"
+    assert written["bench.booted_slot"] == "A"
     assert written["bench.board_buildinfo"] == "DISTRO = test\n"
     assert written["verdict"] is None
     assert written["exit_status"] == 0
@@ -104,7 +104,7 @@ def test_record_without_a_board_has_no_board_state(layer: pytest.Pytester) -> No
     run(layer, transport).assert_outcomes(passed=1)
     written = record(layer)
     assert written["bench.ota_ran"] is False
-    assert written["bench.board_slot"] is None
+    assert written["bench.booted_slot"] is None
     assert written["bench.board_buildinfo"] is None
     assert "bench.board" not in written
     assert transport.calls == []
@@ -354,7 +354,7 @@ def ota(request, board):
     assert transport.commands() == ["hostname"]
     written = record(layer)
     assert written["bench.ota_ran"] is True
-    assert written["bench.board_slot"] is None
+    assert written["bench.booted_slot"] is None
 
 
 def test_marks_of_reads_item_and_roles(layer: pytest.Pytester) -> None:
@@ -417,3 +417,25 @@ def test_xfail_outcomes_are_named(layer: pytest.Pytester) -> None:
     run(layer).assert_outcomes(xfailed=1, xpassed=1)
     assert entry_of(layer, "test_expected")["outcome"] == "xfailed"
     assert entry_of(layer, "test_unexpected")["outcome"] == "xpassed"
+
+
+def test_bench_tree_names_the_checkout_holding_bench_toml(
+    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (layer.path / "bench.toml").rename(tree / "bench.toml")
+    monkeypatch.setenv("BENCH_TREE", str(tree))
+    layer.makepyfile("def test_uses_board(board):\n    pass")
+    run(layer).assert_outcomes(passed=1)
+
+
+def test_without_bench_tree_a_start_directory_without_bench_toml_is_an_error(
+    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BENCH_TREE", raising=False)
+    (layer.path / "bench.toml").unlink()
+    layer.makepyfile("def test_uses_board(board):\n    pass")
+    result = run(layer)
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*bench.toml not found*"])

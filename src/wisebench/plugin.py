@@ -116,8 +116,9 @@ def pytest_pycollect_makeitem(
 
 @pytest.fixture(scope="session")
 def bench_config(request: pytest.FixtureRequest) -> Config:
-    """The layer's `bench.toml`, read from the directory pytest was started in."""
-    return Config.load(request.config.invocation_params.dir)
+    """The layer's `bench.toml`, read from `BENCH_TREE`, else the directory pytest started in."""
+    tree = os.environ.get("BENCH_TREE")
+    return Config.load(Path(tree) if tree else request.config.invocation_params.dir)
 
 
 @pytest.fixture(scope="session")
@@ -140,5 +141,5 @@ def board(
     connected = Board(bench_transport, bench_config.board, record.set)
     yield connected
     if record.properties.get("bench.ota_ran") is not True:
-        record.set("bench.board_slot", connected.booted_slot())
+        record.set("bench.booted_slot", connected.booted_slot())
         record.set("bench.board_buildinfo", connected.buildinfo())

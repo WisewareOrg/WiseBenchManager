@@ -108,7 +108,7 @@ class SessionRecord:
     def write(self, exit_status: int) -> Path:
         """Write `<started>.json` and append its line to `index.jsonl`; return the file written."""
         self.properties.setdefault("bench.ota_ran", False)
-        self.properties.setdefault("bench.board_slot", None)
+        self.properties.setdefault("bench.booted_slot", None)
         self.properties.setdefault("bench.board_buildinfo", None)
         tests = list(self.tests.values())
         credit = Credit(self.properties["bench.ota_ran"] is True, tests)

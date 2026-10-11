@@ -49,6 +49,7 @@ def clean_clone(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def layer(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
     """A layer checkout: bench.toml in the directory pytest starts in, the board in the env."""
+    monkeypatch.delenv("BENCH_TREE", raising=False)
     monkeypatch.setenv("BENCH_ADDRESS", "board.test")
     monkeypatch.setenv("BENCH_HOSTNAME", "bench-board")
     monkeypatch.setenv("BENCH_RESULT_DIR", str(pytester.path / "results"))
