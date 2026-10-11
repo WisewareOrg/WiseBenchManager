@@ -34,8 +34,6 @@ target_suite = "tests/target_suite"
 [github]
 """
 
-Answer = tuple[list[str], list[str], int] | BaseException
-
 
 def ok(text: str = "") -> tuple[list[str], list[str], int]:
     return text.splitlines(), [], 0
@@ -44,15 +42,15 @@ def ok(text: str = "") -> tuple[list[str], list[str], int]:
 class ScriptedSsh:
     """labgrid's SSHDriver with ssh replaced: commands answered from `script`, every call logged.
 
-    An answer list is consumed in order and an exception is raised; `activations` scripts the
-    failure, if any, of each activation in turn. `sha256sum` answers from the files put.
+    An answer list is consumed in order and an exception is raised; `activations` scripts each
+    activation's failure in turn. `sha256sum` answers from the files put.
 
     No maintained tool fits because labgrid ships no scripted driver; this replaces only the
     SSHDriver methods that start ssh, so labgrid's own Target and activation still run.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self.script: dict[str, Answer | list[Answer]] = {
+        self.script: dict[str, Any] = {
             "hostname": ok("bench-board"),
             BOOT_ID: ok("one"),
             RAUC_STATUS: ok('{"booted": "A"}'),
@@ -62,22 +60,17 @@ class ScriptedSsh:
         self.calls: list[tuple[Any, ...]] = []
         self.files: dict[str, bytes] = {}
         self.drivers: list[SSHDriver] = []
-        monkeypatch.setattr(SSHDriver, "on_activate", lambda drv: self._activate(drv))
-        monkeypatch.setattr(
-            SSHDriver, "on_deactivate", lambda drv: self.calls.append(("deactivate",))
-        )
-        monkeypatch.setattr(
-            SSHDriver, "run", lambda drv, cmd, timeout=None: self._run(cmd, timeout)
-        )
-        monkeypatch.setattr(
-            SSHDriver, "put", lambda drv, filename, remotepath: self._put(filename, remotepath)
-        )
+        patch = monkeypatch.setattr
+        patch(SSHDriver, "on_activate", lambda drv: self._activate(drv))
+        patch(SSHDriver, "on_deactivate", lambda drv: self.calls.append(("deactivate",)))
+        patch(SSHDriver, "run", lambda drv, cmd, timeout=None: self._run(cmd, timeout))
+        patch(SSHDriver, "put", lambda drv, local, remote: self._transfer("put", local, remote))
+        patch(SSHDriver, "get", lambda drv, remote, local: self._transfer("get", remote, local))
 
     def _activate(self, driver: SSHDriver) -> None:
         self.calls.append(("activate", driver.connection_timeout))
         self.drivers.append(driver)
-        failure = self.activations.pop(0) if self.activations else None
-        if failure is not None:
+        if self.activations and (failure := self.activations.pop(0)):
             raise failure
 
     def _run(self, cmd: str, timeout: float | None) -> tuple[list[str], list[str], int]:
@@ -86,15 +79,15 @@ class ScriptedSsh:
             remote = cmd.removeprefix("sha256sum ").strip("'")
             return ok(f"{hashlib.sha256(self.files[remote]).hexdigest()}  {remote}")
         answer = self.script[cmd]
-        if isinstance(answer, list):
-            answer = answer.pop(0)
+        answer = answer.pop(0) if isinstance(answer, list) else answer
         if isinstance(answer, BaseException):
             raise answer
         return answer
 
-    def _put(self, filename: str, remotepath: str) -> None:
-        self.calls.append(("put", filename, remotepath))
-        self.files[remotepath] = Path(filename).read_bytes()
+    def _transfer(self, kind: str, source: str, target: str) -> None:
+        self.calls.append((kind, source, target))
+        if kind == "put":
+            self.files[target] = Path(source).read_bytes()
 
     def commands(self) -> list[str]:
         return [call[1] for call in self.calls if call[0] == "run"]
@@ -119,8 +112,9 @@ def isolated_home(
 
 @pytest.fixture(autouse=True)
 def clean_clone(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The runner's clone reads as clean."""
+    """The runner's clone reads as clean, at the installed version."""
     monkeypatch.setattr(wisebench.plugin, "clone_changes", lambda clone: "")
+    monkeypatch.setattr(wisebench.plugin, "checkout_version", lambda: VERSION)
 
 
 @pytest.fixture
@@ -137,11 +131,7 @@ def layer(
     return pytester
 
 
-def results(pytester: pytest.Pytester) -> Path:
-    return pytester.path / "results"
-
-
-def make_config(address: str, hostname: str, name: str = "bench", timeout: float = 60) -> Config:
+def make_config(address: str, hostname: str, timeout: float = 60) -> Config:
     """A Config built without reading any file or environment."""
-    toml = BenchToml.model_construct(board=BoardTable(name=name, reboot_timeout=timeout))
+    toml = BenchToml.model_construct(board=BoardTable(name="bench", reboot_timeout=timeout))
     return Config(identity=Identity.model_construct(address=address, hostname=hostname), toml=toml)

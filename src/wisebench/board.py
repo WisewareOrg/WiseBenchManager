@@ -52,11 +52,13 @@ def driver_for(address: str) -> tuple[Target, SSHDriver]:
 
 
 class Board:
-    """The configured board; every connection labgrid opens is checked against the hostname first.
+    """The configured board, its hostname checked before any other command of ours.
 
-    `ssh` is labgrid's SSHDriver, for `get` and `forward_local_port`. `record` receives each fact
-    the board learns: `bench.board` and `bench.boot_ids`, the boot id read on connecting and every
-    one seen since.
+    The check runs after every activation (labgrid's own activation runs only `cat`, its keepalive,
+    over the new master) and again before every transfer, because scp may open a direct connection
+    once the master is lost. `ssh` is labgrid's SSHDriver, for `forward_local_port`. `record`
+    receives each fact the board learns: `bench.board` and `bench.boot_ids`, the boot id read on
+    connecting and every one seen since.
     """
 
     POLL_INTERVAL = 5.0
@@ -89,6 +91,10 @@ class Board:
             self._target.activate(self.ssh)
         except Exception as error:  # labgrid raises a bare Exception when the connect times out
             raise BenchFailure(f"ssh to the board failed: {error}") from error
+        self._guard()
+
+    def _guard(self) -> None:
+        """Refuse the board unless it answers `hostname` with the configured name."""
         live = self._checked("hostname").strip()
         if live != self._config.identity.hostname:
             raise WrongBoard(
@@ -99,7 +105,8 @@ class Board:
     def run(self, cmd: str, timeout: float = COMMAND_TIMEOUT) -> Output:
         """labgrid's `run` with a default timeout: (stdout lines, stderr lines, exit).
 
-        A non-zero exit is returned; a timeout or a lost connection raises.
+        A non-zero exit is returned; a timeout or a lost connection raises. On a timeout the ssh
+        child process is left as labgrid leaves it, running.
         """
         try:
             return self.ssh.run(cmd, timeout=timeout)
@@ -117,6 +124,7 @@ class Board:
     def put(self, local: Path, remote: str) -> None:
         """Copy `local` to `remote`, then compare the board's sha256 of it with the local one."""
         local = Path(local)
+        self._guard()
         try:
             self.ssh.put(str(local), remote)
         except ExecutionError as error:
@@ -127,6 +135,14 @@ class Board:
         actual = fields[0] if fields else ""
         if actual != expected:
             raise BenchFailure(f"{remote} on the board hashes {actual}, {local} hashes {expected}")
+
+    def get(self, remote: str, local: Path) -> None:
+        """Copy `remote` on the board to `local`."""
+        self._guard()
+        try:
+            self.ssh.get(remote, str(local))
+        except ExecutionError as error:
+            raise BenchFailure(f"get {remote} from the board failed: {error}") from error
 
     def reboot(self) -> None:
         """Reboot and return once the board answers, as itself, with a new boot id in time.

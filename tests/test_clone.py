@@ -2,9 +2,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import setuptools_scm
 
 from wisebench.errors import BenchFailure
-from wisebench.plugin import CLONE, clone_changes
+from wisebench.plugin import CLONE, checkout_version, clone_changes
 
 
 def git(repo: Path, *args: str) -> str:
@@ -42,3 +43,12 @@ def test_a_directory_outside_git_is_refused(tmp_path: Path) -> None:
 
 def test_the_clone_checked_is_the_package_s_own() -> None:
     assert Path(__file__).resolve().parents[1] / "src" / "wisebench" == CLONE
+
+
+def test_the_checkout_version_is_read_from_the_repository_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roots = []
+    monkeypatch.setattr(setuptools_scm, "get_version", lambda root: roots.append(root) or "1.0")
+    assert checkout_version() == "1.0"
+    assert roots == [str(Path(__file__).resolve().parents[1])]

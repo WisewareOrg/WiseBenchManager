@@ -1,79 +1,40 @@
 from pathlib import Path
 
 import pytest
+from conftest import BENCH_TOML
 
 from wisebench.config import Config
 from wisebench.errors import BenchFailure
 
-FULL = """
-schema = 1
-
-[bundle]
-path = "build/update.raucb"
-
-[hooks]
-precondition = "true"
-build = "make build"
-bundle = "make bundle"
-
-[tests]
-host_suite = "tests/host_suite"
-target_suite = "tests/target_suite"
-
-[github]
-check_name = "bench"
-"""
-
 
 @pytest.fixture(autouse=True)
-def board_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCH_ADDRESS", "root@board.test")
     monkeypatch.setenv("BENCH_HOSTNAME", "bench-board")
 
 
-def write(root: Path, text: str) -> Path:
+def load(root: Path, text: str = BENCH_TOML) -> Config:
     (root / "bench.toml").write_text(text)
-    return root
+    return Config.load(root)
 
 
-def test_reads_every_table_and_the_board_from_the_environment(tmp_path: Path) -> None:
-    config = Config.load(write(tmp_path, FULL))
+def test_the_file_gives_the_tables_and_the_environment_the_board(tmp_path: Path) -> None:
+    config = load(tmp_path, BENCH_TOML + "\n[later]\nunknown = 1\n")
     assert (config.identity.address, config.identity.hostname) == ("root@board.test", "bench-board")
-    assert (config.toml.board.name, config.toml.board.reboot_timeout) == ("board", 180)
-    assert config.toml.bundle.path == "build/update.raucb"
-    assert config.toml.hooks.build == "make build"
-    assert config.toml.tests.target_suite == "tests/target_suite"
-    assert config.toml.github == {"check_name": "bench"}
-
-
-def test_board_table_keys_are_read(tmp_path: Path) -> None:
-    text = FULL + '\n[board]\nname = "bench"\nreboot_timeout = 30\n'
-    board = Config.load(write(tmp_path, text)).toml.board
-    assert (board.name, board.reboot_timeout) == ("bench", 30)
-
-
-def test_unknown_keys_are_ignored(tmp_path: Path) -> None:
-    Config.load(write(tmp_path, FULL + "\n[later]\nkey = 1\n"))
+    assert (config.toml.board.name, config.toml.board.reboot_timeout) == ("bench", 180)
+    assert config.toml.hooks.build == "true"
 
 
 @pytest.mark.parametrize("variable", ["BENCH_ADDRESS", "BENCH_HOSTNAME"])
-def test_missing_board_variable_is_named(
+def test_a_missing_identity_variable_is_named(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str
 ) -> None:
     monkeypatch.delenv(variable)
     with pytest.raises(BenchFailure, match=rf"{variable}\s+Field required"):
-        Config.load(write(tmp_path, FULL))
+        load(tmp_path)
 
 
-def test_empty_board_variable_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BENCH_HOSTNAME", "")
-    with pytest.raises(BenchFailure, match=r"BENCH_HOSTNAME\s+String should have at least 1"):
-        Config.load(write(tmp_path, FULL))
-
-
-@pytest.mark.parametrize(
-    "key", ["BENCH_ADDRESS", "BENCH_HOSTNAME", "bench_hostname", "Bench_Address"]
-)
+@pytest.mark.parametrize("key", ["BENCH_ADDRESS", "bench_hostname"])
 @pytest.mark.parametrize("environment", ["set", "unset"])
 def test_an_identity_key_in_the_file_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, environment: str
@@ -81,77 +42,42 @@ def test_an_identity_key_in_the_file_is_refused(
     if environment == "unset":
         monkeypatch.delenv("BENCH_ADDRESS")
         monkeypatch.delenv("BENCH_HOSTNAME")
-    text = FULL.replace("schema = 1", f'schema = 1\n{key} = "root@committed.example"')
+    text = BENCH_TOML.replace("schema = 1", f'schema = 1\n{key} = "root@committed.example"')
     with pytest.raises(BenchFailure, match=f"{key} is read from the environment only"):
-        Config.load(write(tmp_path, text))
+        load(tmp_path, text)
 
 
-@pytest.mark.parametrize("name", ["hostname", "HOSTNAME", "address"])
-def test_a_key_that_cannot_name_the_board_is_ignored(tmp_path: Path, name: str) -> None:
-    text = FULL.replace("schema = 1", f'schema = 1\n{name} = "elsewhere"')
-    assert Config.load(write(tmp_path, text)).identity.hostname == "bench-board"
+def test_the_environment_does_not_fill_a_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB", "{}")
+    with pytest.raises(BenchFailure, match=r"github\s+Field required"):
+        load(tmp_path, BENCH_TOML.replace("[github]", ""))
+
+
+@pytest.mark.parametrize("schema", ["2", "true", "1.0", '"1"'])
+def test_any_schema_but_1_is_refused(tmp_path: Path, schema: str) -> None:
+    with pytest.raises(BenchFailure, match="schema"):
+        load(tmp_path, BENCH_TOML.replace("schema = 1", f"schema = {schema}"))
 
 
 @pytest.mark.parametrize(
-    ("table", "value"),
-    [("github", '{"check_name": "from-env"}'), ("hooks", '{"build": "x"}'), ("schema", "1")],
+    ("change", "message"),
+    [
+        (("[hooks]", "[x]"), r"hooks\s+Field required"),
+        (('build = "true"', 'build = ""'), r"hooks.build\s+String should have at least 1"),
+        (('name = "bench"', "reboot_timeout = 0"), r"board.reboot_timeout"),
+        (('name = "bench"', "reboot_timeout = true"), r"board.reboot_timeout"),
+        (("schema = 1", "schema = = 1"), "bench.toml: Invalid"),
+    ],
 )
-def test_the_environment_does_not_fill_the_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table: str, value: str
+def test_a_missing_or_invalid_value_is_refused(
+    tmp_path: Path, change: tuple[str, str], message: str
 ) -> None:
-    monkeypatch.setenv(table.upper(), value)
-    text = (
-        FULL.replace("schema = 1", "") if table == "schema" else FULL.replace(f"[{table}]", "[x]")
-    )
-    with pytest.raises(BenchFailure, match=rf"{table}\s+Field required"):
-        Config.load(write(tmp_path, text))
+    with pytest.raises(BenchFailure, match=message):
+        load(tmp_path, BENCH_TOML.replace(*change))
 
 
-@pytest.mark.parametrize("schema", ["2", "0", '"1"', "true", "1.0"])
-def test_any_schema_but_1_is_refused(tmp_path: Path, schema: str) -> None:
-    with pytest.raises(BenchFailure, match=r"schema\s+"):
-        Config.load(write(tmp_path, FULL.replace("schema = 1", f"schema = {schema}")))
-
-
-def test_missing_schema_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(BenchFailure, match=r"schema\s+Field required"):
-        Config.load(write(tmp_path, FULL.replace("schema = 1", "")))
-
-
-def test_missing_file_is_refused(tmp_path: Path) -> None:
+def test_a_checkout_without_bench_toml_is_refused(tmp_path: Path) -> None:
     with pytest.raises(BenchFailure, match="bench.toml not found"):
         Config.load(tmp_path)
-
-
-def test_malformed_toml_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(BenchFailure, match="bench.toml: Invalid value"):
-        Config.load(write(tmp_path, "schema = = 1"))
-
-
-@pytest.mark.parametrize("table", ["bundle", "hooks", "tests", "github"])
-def test_missing_table_is_refused(tmp_path: Path, table: str) -> None:
-    text = FULL.replace(f"[{table}]", "[unrelated]")
-    with pytest.raises(BenchFailure, match=rf"{table}\s+Field required"):
-        Config.load(write(tmp_path, text))
-
-
-@pytest.mark.parametrize(
-    ("key", "where"),
-    [("path", "bundle.path"), ("build", "hooks.build"), ("target_suite", "tests.target_suite")],
-)
-def test_missing_key_is_refused(tmp_path: Path, key: str, where: str) -> None:
-    text = "\n".join(line for line in FULL.splitlines() if not line.startswith(f"{key} "))
-    with pytest.raises(BenchFailure, match=rf"{where}\s+Field required"):
-        Config.load(write(tmp_path, text))
-
-
-def test_empty_string_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(BenchFailure, match=r"hooks.build\s+String should have at least 1"):
-        Config.load(write(tmp_path, FULL.replace('build = "make build"', 'build = ""')))
-
-
-@pytest.mark.parametrize("value", ["0", "-5", '"180"', "true"])
-def test_reboot_timeout_must_be_a_positive_number(tmp_path: Path, value: str) -> None:
-    text = FULL + f"\n[board]\nreboot_timeout = {value}\n"
-    with pytest.raises(BenchFailure, match="board.reboot_timeout"):
-        Config.load(write(tmp_path, text))

@@ -1,7 +1,7 @@
-"""The run's summary beside pytest's junit report: session facts and each requirement item's credit.
+"""The run's summary beside pytest-reportlog's record: session facts and each item's credit.
 
 No maintained tool fits because the credit rule, which folds every test carrying an item into one
-status, is this project's own; the raw record is pytest's junit report.
+status, is this project's own; the raw record is pytest-reportlog's.
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 from collections import Counter
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -114,9 +113,8 @@ class Credit:
 class SessionRecord:
     """One session's facts and test outcomes, summarised as `<started>.json` and an index line.
 
-    The raw record is pytest's junit report, `<started>.xml` unless `--junitxml` names another;
-    each fact set here is also passed to `report_property` (pytest's `record_testsuite_property`)
-    once the session hands it over.
+    The raw record is pytest-reportlog's, `<started>.reportlog.jsonl` unless `--report-log` names
+    another: every test report, with what each test recorded through `record_property`.
     """
 
     def __init__(self, result_dir: Path) -> None:
@@ -124,15 +122,12 @@ class SessionRecord:
         self.started = datetime.now(UTC)
         self.properties: dict[str, Any] = {}
         self.tests: dict[str, TestRecord] = {}
-        self.report_property: Callable[[str, Any], None] | None = None
         self.stem = self.started.strftime("%Y%m%dT%H%M%S.%fZ")
-        self.report = result_dir / f"{self.stem}.xml"
+        self.report = result_dir / f"{self.stem}.reportlog.jsonl"
 
     def set(self, name: str, value: Any) -> None:
-        """Record a session fact under its namespaced name, in the summary and the junit report."""
+        """Record a session fact under its namespaced name."""
         self.properties[name] = value
-        if self.report_property is not None:
-            self.report_property(name, value)
 
     def add(
         self, nodeid: str, marks: Marks, report: pytest.TestReport, bench_failure: bool = False

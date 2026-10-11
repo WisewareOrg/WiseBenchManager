@@ -11,6 +11,8 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.15",
     "pytest>=9.1.1",
+    "pytest-reportlog>=1.0",
+    "setuptools-scm>=8",
     "tenacity>=9.2",
 ]
 

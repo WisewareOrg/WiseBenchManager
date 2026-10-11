@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import setuptools_scm
 
 from wisebench.board import Board, driver_for
 from wisebench.config import Config
@@ -19,6 +20,7 @@ from wisebench.events import EventLog
 from wisebench.record import Marks, SessionRecord
 
 CLONE = Path(__file__).resolve().parent
+REPOSITORY = CLONE.parents[1]
 
 
 def clone_changes(clone: Path) -> str:
@@ -31,6 +33,11 @@ def clone_changes(clone: Path) -> str:
     if status.returncode:
         raise BenchFailure(f"the runner is not run from its git clone: {status.stderr.strip()}")
     return status.stdout
+
+
+def checkout_version() -> str:
+    """The version setuptools-scm, hatch-vcs's engine, derives from the clone's checkout now."""
+    return setuptools_scm.get_version(root=str(REPOSITORY))
 
 
 TST_ID = re.compile(r"[A-Z]{2,}[0-9]{3,}")
@@ -52,7 +59,6 @@ class Bench:
         return config.stash[cls.KEY]
 
     def pytest_sessionstart(self, session: pytest.Session) -> None:
-        self.record.result_dir.mkdir(parents=True, exist_ok=True)
         self.record.set("bench.pytest_args", list(session.config.invocation_params.args))
         self.events.emit(
             "session_start", runner_version=self.record.properties["bench.runner_version"]
@@ -124,12 +130,19 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     if clone_changes(CLONE):
         raise BenchFailure("the runner's clone has uncommitted changes; refusing to run")
-    bench = Bench(result_dir, importlib.metadata.version("wisebench"))
+    installed = importlib.metadata.version("wisebench")
+    if installed != checkout_version():
+        raise BenchFailure(
+            f"the installed runner is {installed}, not its checkout's {checkout_version()}; "
+            "run uv sync"
+        )
+    bench = Bench(result_dir, installed)
     config.stash[Bench.KEY] = bench
-    if config.option.xmlpath:
-        bench.record.report = Path(config.option.xmlpath)
+    result_dir.mkdir(parents=True, exist_ok=True)
+    if config.option.report_log:
+        bench.record.report = Path(config.option.report_log)
     else:
-        config.option.xmlpath = str(bench.record.report)
+        config.option.report_log = str(bench.record.report)
     config.pluginmanager.register(bench, "wisebench-session")
 
 
@@ -142,15 +155,6 @@ def pytest_pycollect_makeitem(
         if isinstance(item, pytest.Item):
             marks_of(item)
     return result
-
-
-@pytest.fixture(scope="session", autouse=True)
-def bench_report(request: pytest.FixtureRequest, record_testsuite_property: Any) -> None:
-    """Pass the session's facts, those set already and those to come, into the junit report."""
-    record = Bench.of(request.config).record
-    record.report_property = record_testsuite_property
-    for name, value in record.properties.items():
-        record_testsuite_property(name, value)
 
 
 @pytest.fixture(scope="session")

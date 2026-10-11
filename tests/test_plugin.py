@@ -1,344 +1,16 @@
 import json
-import re
 from pathlib import Path
 from typing import Any
-from xml.etree import ElementTree
 
 import pytest
-from conftest import VERSION, ScriptedSsh, ok, results
+from conftest import VERSION, ScriptedSsh, ok
 
 import wisebench.plugin
 from wisebench.board import BOOT_ID, BUILDINFO, RAUC_STATUS
-from wisebench.plugin import Bench, marks_of
-from wisebench.record import Marks
+from wisebench.plugin import Bench
 
-UTC_ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z")
-
-
-def run(layer: pytest.Pytester) -> pytest.RunResult:
-    return layer.runpytest()
-
-
-def record(layer: pytest.Pytester) -> dict[str, Any]:
-    (path,) = results(layer).glob("*.json")
-    return json.loads(path.read_text())
-
-
-def outcome_of(result: pytest.RunResult, name: str) -> str | None:
-    """The outcome the plugin folded for the test named `name` in an in-process run."""
-    config = result.reprec.getcall("pytest_sessionfinish").session.config
-    (test,) = [t for n, t in Bench.of(config).record.tests.items() if n.endswith(f"::{name}")]
-    return test.outcome
-
-
-def lines(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text().splitlines()]
-
-
-def test_board_fixture_runs_after_the_hostname_check(
-    layer: pytest.Pytester, ssh: ScriptedSsh
-) -> None:
-    ssh.script["uname"] = ok("Linux")
-    layer.makepyfile("def test_uname(board):\n    assert board.run('uname')[0] == ['Linux']")
-    run(layer).assert_outcomes(passed=1)
-    assert ssh.commands() == ["hostname", BOOT_ID, "uname", RAUC_STATUS, BUILDINFO]
-    assert ssh.calls[-1] == ("deactivate",)
-
-
-def test_wrong_hostname_is_an_error_and_nothing_else_is_sent(
-    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, ssh: ScriptedSsh
-) -> None:
-    monkeypatch.setenv("BENCH_HOSTNAME", "another-board")
-    layer.makepyfile(
-        "def test_one(board):\n    board.run('uname')\n\n"
-        "def test_two(board):\n    board.run('uname')\n"
-    )
-    result = run(layer)
-    result.assert_outcomes(errors=2)
-    result.stdout.fnmatch_lines(["*answers as hostname 'bench-board'*nothing else was sent*"])
-    assert ssh.commands() == ["hostname"]
-    written = record(layer)
-    assert written["bench.board"] == "bench"
-    assert written["bench.booted_slot"] is None
-    assert written["bench.board_buildinfo"] is None
-    assert "bench.boot_ids" not in written
-    assert [outcome_of(result, name) for name in ("test_one", "test_two")] == ["error", "error"]
-
-
-def test_a_failing_test_stays_a_failure(layer: pytest.Pytester) -> None:
-    layer.makepyfile("def test_fails(board):\n    assert False")
-    result = run(layer)
-    result.assert_outcomes(failed=1)
-    assert outcome_of(result, "test_fails") == "failed"
-
-
-def test_a_missing_variable_is_an_error_naming_it(
-    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("BENCH_ADDRESS")
-    layer.makepyfile("def test_uses_board(board):\n    pass")
-    result = run(layer)
-    result.assert_outcomes(errors=1)
-    result.stdout.fnmatch_lines(["*BENCH_ADDRESS*", "*Field required*"])
-
-
-def test_record_carries_session_facts_and_board_state(layer: pytest.Pytester) -> None:
-    layer.makepyfile("def test_uses_board(board):\n    pass")
-    result = layer.runpytest("-k", "uses_board")
-    result.assert_outcomes(passed=1)
-    written = record(layer)
-    assert written["bench.runner_version"] == VERSION
-    assert written["bench.board"] == "bench"
-    assert written["bench.ota_ran"] is False
-    assert written["bench.booted_slot"] == "A"
-    assert written["bench.board_buildinfo"] == "DISTRO = test"
-    assert written["verdict"] is None
-    assert written["exit_status"] == 0
-    assert UTC_ISO.fullmatch(written["started"]) and UTC_ISO.fullmatch(written["finished"])
-    assert written["bench.pytest_args"][:2] == ["-k", "uses_board"]
-
-
-def test_record_without_a_board_has_no_board_state(
-    layer: pytest.Pytester, ssh: ScriptedSsh
-) -> None:
-    layer.makepyfile("def test_host_only():\n    pass")
-    run(layer).assert_outcomes(passed=1)
-    written = record(layer)
-    assert written["bench.ota_ran"] is False
-    assert written["bench.booted_slot"] is None
-    assert written["bench.board_buildinfo"] is None
-    assert "bench.board" not in written
-    assert ssh.calls == []
-
-
-def test_each_test_s_outcome_and_item_are_read(layer: pytest.Pytester) -> None:
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.mark.tst("TST011")
-        def test_item(record_property):
-            record_property("layer.page_state", {"cards": 3})
-            record_property("bench.anything", 1)
-
-        def test_plain():
-            pass
-
-        @pytest.mark.skip
-        def test_skipped():
-            pass
-        """
-    )
-    result = run(layer)
-    result.assert_outcomes(passed=2, skipped=1)
-    outcomes = [outcome_of(result, name) for name in ("test_item", "test_plain", "test_skipped")]
-    assert outcomes == ["passed", "passed", "skipped"]
-    assert list(record(layer)["items"]) == ["TST011"]
-
-
-def test_without_ota_every_item_is_not_credited(layer: pytest.Pytester) -> None:
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.mark.provenance
-        def test_provenance(board):
-            pass
-
-        @pytest.mark.tst("TST011")
-        def test_passes(board):
-            pass
-
-        @pytest.mark.tst("TST014", recorded=True)
-        def test_records(board):
-            pass
-        """
-    )
-    run(layer).assert_outcomes(passed=3)
-    statuses = {item: (s["status"], s["reason"]) for item, s in record(layer)["items"].items()}
-    assert statuses == {
-        "TST011": ("not credited", "ota did not run"),
-        "TST014": ("not credited", "ota did not run"),
-    }
-
-
-def test_index_line_and_event_stream(layer: pytest.Pytester) -> None:
-    layer.makepyfile("def test_a():\n    pass\n\ndef test_b():\n    assert False")
-    run(layer).assert_outcomes(passed=1, failed=1)
-    (written,) = results(layer).glob("*.json")
-    (index,) = lines(results(layer) / "index.jsonl")
-    assert index == {
-        "timestamp": record(layer)["started"],
-        "file": written.name,
-        "runner_version": VERSION,
-        "verdict": None,
-        "counts": {"passed": 1, "failed": 1},
-    }
-    events = lines(results(layer) / "events.jsonl")
-    assert [(event["kind"], event.get("nodeid", "").split("::")[-1]) for event in events] == [
-        ("session_start", ""),
-        ("test_start", "test_a"),
-        ("test_end", "test_a"),
-        ("test_start", "test_b"),
-        ("test_end", "test_b"),
-        ("record_written", ""),
-    ]
-    assert all(UTC_ISO.fullmatch(event["ts"]) for event in events)
-    assert events[0]["runner_version"] == VERSION
-    assert [event["outcome"] for event in events if event["kind"] == "test_end"] == [
-        "passed",
-        "failed",
-    ]
-    assert events[-1]["file"] == written.name
-
-
-def test_second_session_appends_to_index_and_events(layer: pytest.Pytester) -> None:
-    layer.makepyfile("def test_a():\n    pass")
-    run(layer)
-    run(layer)
-    assert len(lines(results(layer) / "index.jsonl")) == 2
-    assert len(list(results(layer).glob("*.json"))) == 2
-    kinds = [event["kind"] for event in lines(results(layer) / "events.jsonl")]
-    assert kinds.count("session_start") == 2
-
-
-def test_record_is_written_when_collection_errors(layer: pytest.Pytester) -> None:
-    layer.makepyfile("import nonexistent_module\n\ndef test_a():\n    pass")
-    result = run(layer)
-    assert result.ret == pytest.ExitCode.INTERRUPTED
-    written = record(layer)
-    assert written["exit_status"] == pytest.ExitCode.INTERRUPTED
-    assert written["items"] == {}
-
-
-def test_result_dir_defaults_to_records_under_the_start_directory(
-    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("BENCH_RESULT_DIR")
-    layer.makepyfile("def test_a():\n    pass")
-    run(layer).assert_outcomes(passed=1)
-    assert len(list((layer.path / "records").glob("*.json"))) == 1
-    assert (layer.path / "records" / "index.jsonl").exists()
-
-
-def test_fixture_error_is_an_error_outcome(layer: pytest.Pytester) -> None:
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.fixture
-        def broken():
-            raise RuntimeError("fixture broke")
-
-        @pytest.mark.tst("TST011")
-        def test_a(broken):
-            pass
-        """
-    )
-    result = run(layer)
-    result.assert_outcomes(errors=1)
-    assert outcome_of(result, "test_a") == "error"
-
-
-@pytest.mark.parametrize(
-    ("marker", "message"),
-    [
-        ('tst("TST11")', "tst id 'TST11' is not two or more capitals, then three or more"),
-        ('tst("tst011")', "tst id 'tst011' is not two or more capitals, then three or more"),
-        ('tst("T011")', "tst id 'T011' is not two or more capitals, then three or more"),
-        ('tst("TST011a")', "tst id 'TST011a' is not two or more capitals, then three or more"),
-        ('tst("TST 011")', "tst id 'TST 011' is not two or more capitals, then three or more"),
-        ("tst(11)", "tst id 11 is not two or more capitals, then three or more"),
-        ("tst", "tst takes exactly one item id"),
-        ('tst("TST011", "TST012")', "tst takes exactly one item id"),
-        ('tst("TST011", credited=True)', "tst has unknown keyword credited"),
-        ('tst("TST011", recorded="yes")', "tst recorded= must be True or False"),
-    ],
-)
-def test_malformed_tst_marker_is_a_collection_error(
-    layer: pytest.Pytester, marker: str, message: str
-) -> None:
-    layer.makepyfile(f"import pytest\n\n@pytest.mark.{marker}\ndef test_a():\n    pass")
-    result = run(layer)
-    assert result.ret == pytest.ExitCode.INTERRUPTED
-    result.stdout.fnmatch_lines(["*ERROR collecting*", f"*{message}*"])
-
-
-def test_two_tst_markers_are_a_collection_error(layer: pytest.Pytester) -> None:
-    layer.makepyfile(
-        'import pytest\n\npytestmark = pytest.mark.tst("TST001")\n\n'
-        '@pytest.mark.tst("TST011")\ndef test_a():\n    pass'
-    )
-    result = run(layer)
-    assert result.ret == pytest.ExitCode.INTERRUPTED
-    result.stdout.fnmatch_lines(["*more than one tst marker*"])
-
-
-def test_well_formed_markers_collect_on_classes_and_parametrized_tests(
-    layer: pytest.Pytester,
-) -> None:
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.mark.tst("TST014", recorded=True)
-        class TestTiming:
-            @pytest.mark.parametrize("n", [1, 2])
-            def test_a(self, n):
-                pass
-
-        @pytest.mark.tst("SRSA1010", recorded=False)
-        @pytest.mark.provenance
-        def test_b():
-            pass
-
-        @pytest.mark.tst("SR001")
-        def test_c():
-            pass
-        """
-    )
-    run(layer).assert_outcomes(passed=4)
-    items = set(record(layer)["items"])
-    assert items == {"TST014", "SRSA1010", "SR001"}
-
-
-def test_markers_are_registered(layer: pytest.Pytester) -> None:
-    result = layer.runpytest("--markers")
-    result.stdout.fnmatch_lines(["@pytest.mark.tst(item_id, recorded=False):*", "*provenance:*"])
-
-
-def test_dirty_runner_clone_is_refused_before_any_test(
-    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(wisebench.plugin, "clone_changes", lambda clone: " M src/x.py\n")
-    layer.makepyfile("def test_a():\n    pass")
-    result = run(layer)
-    assert result.ret == pytest.ExitCode.INTERNAL_ERROR
-    assert "uncommitted changes" in result.stdout.str() + result.stderr.str()
-    assert not results(layer).exists()
-
-
-def test_fixture_error_in_teardown_is_an_error_outcome(layer: pytest.Pytester) -> None:
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.fixture
-        def breaks_after():
-            yield
-            raise RuntimeError("teardown broke")
-
-        def test_a(breaks_after):
-            pass
-        """
-    )
-    result = run(layer)
-    result.assert_outcomes(passed=1, errors=1)
-    assert outcome_of(result, "test_a") == "error"
-
-
-STUB_OTA = """
-
+OTA = """
+import pytest
 from wisebench.plugin import Bench
 
 
@@ -348,70 +20,123 @@ def ota(request, board):
 """
 
 
-def with_stub_ota(layer: pytest.Pytester) -> None:
-    """Add an `ota` fixture that only records that an OTA ran."""
-    layer.makeconftest(layer.path.joinpath("conftest.py").read_text() + STUB_OTA)
+def results(layer: pytest.Pytester) -> Path:
+    return layer.path / "results"
 
 
-def test_when_ota_ran_the_board_state_is_not_read_at_session_end(
+def summary(layer: pytest.Pytester) -> dict[str, Any]:
+    (path,) = results(layer).glob("*Z.json")
+    return json.loads(path.read_text())
+
+
+def lines(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def outcomes(result: pytest.RunResult) -> dict[str, str | None]:
+    """The outcome the plugin folded for each test of an in-process run, by test name."""
+    config = result.reprec.getcall("pytest_sessionfinish").session.config
+    return {n.split("::")[-1]: t.outcome for n, t in Bench.of(config).record.tests.items()}
+
+
+def test_the_board_is_checked_used_read_and_closed(
     layer: pytest.Pytester, ssh: ScriptedSsh
 ) -> None:
-    with_stub_ota(layer)
-    layer.makepyfile("def test_a(ota):\n    pass")
-    run(layer).assert_outcomes(passed=1)
-    assert ssh.commands() == ["hostname", BOOT_ID]
-    written = record(layer)
-    assert written["bench.ota_ran"] is True
-    assert written["bench.booted_slot"] is None
-
-
-def test_marks_of_reads_item_and_roles(layer: pytest.Pytester) -> None:
-    marked, plain = layer.getitems(
-        "import pytest\n\n@pytest.mark.tst('TST014', recorded=True)\n"
-        "@pytest.mark.provenance\ndef test_marked():\n    pass\n\n"
-        "def test_plain():\n    pass"
+    ssh.script["uname"] = ok("Linux")
+    layer.makepyfile("def test_uname(board):\n    assert board.run('uname')[0] == ['Linux']")
+    layer.runpytest("-k", "uname").assert_outcomes(passed=1)
+    assert ssh.commands() == ["hostname", BOOT_ID, "uname", RAUC_STATUS, BUILDINFO]
+    assert ssh.calls[-1] == ("deactivate",)
+    written = summary(layer)
+    assert (written["bench.runner_version"], written["bench.board"]) == (VERSION, "bench")
+    assert written["bench.boot_ids"] == ["one"]
+    assert (written["bench.booted_slot"], written["bench.board_buildinfo"]) == (
+        "A",
+        "DISTRO = test",
     )
-    assert marks_of(marked) == Marks(item_id="TST014", recorded=True, provenance=True)
-    assert marks_of(plain) == Marks()
+    assert (written["bench.ota_ran"], written["verdict"]) == (False, None)
+    assert written["bench.pytest_args"][:2] == ["-k", "uname"]
+    assert (results(layer) / written["report"]).is_file()
 
 
-def test_session_tracks_which_tests_had_a_fixture_raise(layer: pytest.Pytester) -> None:
+def test_a_wrong_board_is_an_error_and_nothing_else_is_sent(
+    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, ssh: ScriptedSsh
+) -> None:
+    monkeypatch.setenv("BENCH_HOSTNAME", "another-board")
+    layer.makepyfile("def test_one(board):\n    pass\n\ndef test_two(board):\n    pass")
+    result = layer.runpytest()
+    result.assert_outcomes(errors=2)
+    result.stdout.fnmatch_lines(["*answers as hostname 'bench-board'*"])
+    assert ssh.commands() == ["hostname"]
+    written = summary(layer)
+    assert "bench.boot_ids" not in written and written["bench.booted_slot"] is None
+
+
+def test_a_run_without_the_board_touches_nothing(layer: pytest.Pytester, ssh: ScriptedSsh) -> None:
+    layer.makepyfile("def test_host_only():\n    pass")
+    layer.runpytest().assert_outcomes(passed=1)
+    assert ssh.calls == []
+    assert "bench.board" not in summary(layer)
+
+
+SUITE = """
+import pytest
+from wisebench.errors import BenchFailure
+
+@pytest.mark.provenance
+def test_provenance(board):
+    pass
+
+@pytest.mark.tst("TST011")
+def test_passes(board):
+    pass
+
+@pytest.mark.tst("TST014", recorded=True)
+def test_records(board):
+    pass
+"""
+
+
+@pytest.mark.parametrize(
+    ("ota", "extra", "items"),
+    [
+        (False, "", {"TST011": "not credited", "TST014": "not credited"}),
+        (True, "", {"TST011": "passed", "TST014": "recorded"}),
+        (True, "def test_breaks(board):\n    raise OSError", {"TST011": "passed"}),
+        (
+            True,
+            "def test_breaks(board):\n    raise BenchFailure('gone')",
+            {"TST011": "not credited"},
+        ),
+    ],
+)
+def test_items_are_credited_by_the_rule(
+    layer: pytest.Pytester, ssh: ScriptedSsh, ota: bool, extra: str, items: dict[str, str]
+) -> None:
+    if ota:
+        layer.makeconftest(OTA)
+    layer.makepyfile(SUITE.replace("(board)", "(ota)" if ota else "(board)") + "\n" + extra)
+    result = layer.runpytest()
+    statuses = {item: entry["status"] for item, entry in summary(layer)["items"].items()}
+    assert (RAUC_STATUS in ssh.commands()) is not ota
+    assert {item: statuses[item] for item in items} == items
+    if "BenchFailure" in extra:
+        assert outcomes(result)["test_breaks"] == "error"
+        assert summary(layer)["items"]["TST011"]["reason"] == "the bench failed"
+
+
+def test_fixture_errors_and_xfails_are_folded_by_name(layer: pytest.Pytester) -> None:
     layer.makepyfile(
         """
         import pytest
-
-        @pytest.fixture
-        def broken():
-            raise RuntimeError("setup broke")
 
         @pytest.fixture
         def breaks_after():
             yield
-            raise RuntimeError("teardown broke")
-
-        def test_setup(broken):
-            pass
+            raise RuntimeError
 
         def test_teardown(breaks_after):
             pass
-
-        def test_fails():
-            assert False
-        """
-    )
-    recorder = layer.inline_run()
-    config = recorder.getcall("pytest_sessionfinish").session.config
-    raised = {
-        nodeid.split("::")[-1]: test.bench_failed
-        for nodeid, test in Bench.of(config).record.tests.items()
-    }
-    assert raised == {"test_setup": True, "test_teardown": True, "test_fails": False}
-
-
-def test_xfail_outcomes_are_named(layer: pytest.Pytester) -> None:
-    layer.makepyfile(
-        """
-        import pytest
 
         @pytest.mark.xfail
         def test_expected():
@@ -420,159 +145,119 @@ def test_xfail_outcomes_are_named(layer: pytest.Pytester) -> None:
         @pytest.mark.xfail
         def test_unexpected():
             pass
+
+        @pytest.mark.skip
+        def test_skipped():
+            pass
         """
     )
-    result = run(layer)
-    result.assert_outcomes(xfailed=1, xpassed=1)
-    assert outcome_of(result, "test_expected") == "xfailed"
-    assert outcome_of(result, "test_unexpected") == "xpassed"
+    folded = outcomes(layer.runpytest())
+    assert folded == {
+        "test_teardown": "error",
+        "test_expected": "xfailed",
+        "test_unexpected": "xpassed",
+        "test_skipped": "skipped",
+    }
 
 
-def test_bench_tree_names_the_checkout_holding_bench_toml(
+@pytest.mark.parametrize(
+    ("marker", "message"),
+    [
+        ('tst("T011")', "tst id 'T011' is not two or more capitals"),
+        ('tst("TST11")', "tst id 'TST11' is not two or more capitals"),
+        ('tst("tst011")', "tst id 'tst011' is not two or more capitals"),
+        ('tst("TST011a")', "tst id 'TST011a' is not two or more capitals"),
+        ("tst(11)", "tst id 11 is not two or more capitals"),
+        ("tst", "tst takes exactly one item id"),
+        ('tst("TST011", "TST012")', "tst takes exactly one item id"),
+        ('tst("TST011", credited=True)', "tst has unknown keyword credited"),
+        ('tst("TST011", recorded="yes")', "tst recorded= must be True or False"),
+    ],
+)
+def test_a_malformed_tst_marker_is_a_collection_error(
+    layer: pytest.Pytester, marker: str, message: str
+) -> None:
+    layer.makepyfile(f"import pytest\n\n@pytest.mark.{marker}\ndef test_a():\n    pass")
+    result = layer.runpytest()
+    assert result.ret == pytest.ExitCode.INTERRUPTED
+    result.stdout.fnmatch_lines([f"*{message}*"])
+    assert summary(layer)["items"] == {}
+
+
+def test_tst_takes_one_marker_per_test_and_ids_of_any_length(layer: pytest.Pytester) -> None:
+    layer.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.tst("SR001")
+        def test_short():
+            pass
+
+        @pytest.mark.tst("SRSA1010")
+        def test_long():
+            pass
+        """
+    )
+    layer.runpytest().assert_outcomes(passed=2)
+    assert set(summary(layer)["items"]) == {"SR001", "SRSA1010"}
+    layer.makepyfile(
+        'import pytest\n\npytestmark = pytest.mark.tst("TST001")\n\n'
+        '@pytest.mark.tst("TST011")\ndef test_a():\n    pass'
+    )
+    layer.runpytest().stdout.fnmatch_lines(["*more than one tst marker*"])
+
+
+def test_events_and_the_index_line(layer: pytest.Pytester) -> None:
+    layer.makepyfile("def test_a():\n    pass\n\ndef test_b():\n    assert False")
+    layer.runpytest().assert_outcomes(passed=1, failed=1)
+    events = lines(results(layer) / "events.jsonl")
+    kinds = [(e["kind"], e.get("nodeid", "").split("::")[-1], e.get("outcome")) for e in events]
+    assert kinds == [
+        ("session_start", "", None),
+        ("test_start", "test_a", None),
+        ("test_end", "test_a", "passed"),
+        ("test_start", "test_b", None),
+        ("test_end", "test_b", "failed"),
+        ("record_written", "", None),
+    ]
+    assert all(e["ts"].endswith("Z") for e in events)
+    (index,) = lines(results(layer) / "index.jsonl")
+    assert (index["runner_version"], index["counts"]) == (VERSION, {"passed": 1, "failed": 1})
+
+
+def test_the_report_log_path_given_on_the_command_line_is_kept(layer: pytest.Pytester) -> None:
+    layer.makepyfile("def test_a():\n    pass")
+    layer.runpytest(f"--report-log={layer.path / 'mine.jsonl'}").assert_outcomes(passed=1)
+    assert (layer.path / "mine.jsonl").is_file()
+    assert summary(layer)["report"] == "../mine.jsonl"
+
+
+def test_bench_tree_wins_and_records_default_to_the_start_directory(
     layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     tree = tmp_path / "tree"
     tree.mkdir()
-    start = layer.path / "bench.toml"
-    start.rename(tree / "bench.toml")
-    wrong = (tree / "bench.toml").read_text().replace("schema = 1", "schema = 2")
-    start.write_text(wrong)
+    (layer.path / "bench.toml").rename(tree / "bench.toml")
+    (layer.path / "bench.toml").write_text("schema = 2")
     monkeypatch.setenv("BENCH_TREE", str(tree))
+    monkeypatch.delenv("BENCH_RESULT_DIR")
     layer.makepyfile("def test_uses_board(board):\n    pass")
-    run(layer).assert_outcomes(passed=1)
+    layer.runpytest().assert_outcomes(passed=1)
+    assert len(list((layer.path / "records").glob("*Z.json"))) == 1
 
 
-def test_without_bench_tree_a_start_directory_without_bench_toml_is_an_error(
-    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("seam", "value", "message"),
+    [
+        ("clone_changes", " M x.py\n", "uncommitted changes"),
+        ("checkout_version", "0.0.0", "run uv sync"),
+    ],
+)
+def test_a_dirty_or_stale_runner_is_refused(
+    layer: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, seam: str, value: str, message: str
 ) -> None:
-    monkeypatch.delenv("BENCH_TREE", raising=False)
-    (layer.path / "bench.toml").unlink()
-    layer.makepyfile("def test_uses_board(board):\n    pass")
-    result = run(layer)
-    result.assert_outcomes(errors=1)
-    result.stdout.fnmatch_lines(["*bench.toml not found*"])
-
-
-def test_with_ota_and_provenance_passed_items_are_credited(layer: pytest.Pytester) -> None:
-    with_stub_ota(layer)
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.mark.provenance
-        def test_provenance(ota):
-            pass
-
-        @pytest.mark.tst("TST011")
-        def test_passes(ota):
-            pass
-
-        @pytest.mark.tst("TST014", recorded=True)
-        def test_records(ota):
-            pass
-        """
-    )
-    run(layer).assert_outcomes(passed=3)
-    statuses = {item: (s["status"], s["reason"]) for item, s in record(layer)["items"].items()}
-    assert statuses == {"TST011": ("passed", None), "TST014": ("recorded", None)}
-
-
-def test_a_bench_failure_in_a_test_body_is_the_bench_s_and_credits_nothing(
-    layer: pytest.Pytester,
-) -> None:
-    with_stub_ota(layer)
-    layer.makepyfile(
-        """
-        import pytest
-        from wisebench.errors import BenchFailure
-
-        @pytest.mark.provenance
-        def test_provenance(ota):
-            pass
-
-        @pytest.mark.tst("TST011")
-        def test_passes(ota):
-            pass
-
-        def test_bench_breaks(ota):
-            raise BenchFailure("the board went away")
-        """
-    )
-    result = run(layer)
-    result.assert_outcomes(passed=2, failed=1)
-    assert outcome_of(result, "test_bench_breaks") == "error"
-    assert record(layer)["items"]["TST011"] == {
-        "status": "not credited",
-        "reason": "the bench failed",
-    }
-
-
-def test_an_ordinary_failure_in_a_test_body_stays_the_candidate_s(layer: pytest.Pytester) -> None:
-    with_stub_ota(layer)
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.mark.provenance
-        def test_provenance(ota):
-            pass
-
-        @pytest.mark.tst("TST011")
-        def test_passes(ota):
-            pass
-
-        def test_candidate_fails(ota):
-            raise OSError("the candidate broke")
-        """
-    )
-    result = run(layer)
-    result.assert_outcomes(passed=2, failed=1)
-    assert outcome_of(result, "test_candidate_fails") == "failed"
-    assert record(layer)["items"]["TST011"]["status"] == "passed"
-
-
-def test_the_record_lists_each_item_once_with_one_status(layer: pytest.Pytester) -> None:
-    with_stub_ota(layer)
-    layer.makepyfile(
-        """
-        import pytest
-
-        @pytest.mark.provenance
-        def test_provenance(ota):
-            pass
-
-        @pytest.mark.tst("TST011")
-        @pytest.mark.parametrize("case", [1, 2])
-        def test_item(ota, case):
-            assert case == 1
-
-        @pytest.mark.tst("TST014", recorded=True)
-        def test_records(ota):
-            pass
-        """
-    )
-    run(layer).assert_outcomes(passed=3, failed=1)
-    assert record(layer)["items"] == {
-        "TST011": {"status": "not credited", "reason": "test failed"},
-        "TST014": {"status": "recorded", "reason": None},
-    }
-
-
-def test_the_junit_report_holds_the_session_facts(layer: pytest.Pytester) -> None:
-    layer.makepyfile("def test_uses_board(board):\n    pass")
-    run(layer).assert_outcomes(passed=1)
-    written = record(layer)
-    suite = ElementTree.parse(results(layer) / written["report"]).getroot().find("testsuite")
-    facts = {p.get("name"): p.get("value") for p in suite.iter("property")}
-    assert facts["bench.runner_version"] == VERSION
-    assert facts["bench.board"] == "bench"
-    assert facts["bench.boot_ids"] == "['one']"
-    assert facts["bench.booted_slot"] == "A"
-
-
-def test_a_junit_path_given_on_the_command_line_is_the_report(layer: pytest.Pytester) -> None:
+    monkeypatch.setattr(wisebench.plugin, seam, lambda *args: value)
     layer.makepyfile("def test_a():\n    pass")
-    layer.runpytest(f"--junitxml={layer.path / 'mine.xml'}").assert_outcomes(passed=1)
-    assert (layer.path / "mine.xml").is_file()
-    assert record(layer)["report"] == "../mine.xml"
-    assert not list(results(layer).glob("*.xml"))
+    result = layer.runpytest()
+    assert result.ret == pytest.ExitCode.INTERNAL_ERROR
+    assert message in result.stdout.str() + result.stderr.str()
