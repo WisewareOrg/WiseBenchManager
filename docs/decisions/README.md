@@ -31,12 +31,11 @@ one takes a rev whose *Revisions* line records `superseded by ADR NNNN rev M` �
 A number identifies a document rather than a moment: a squash commit on `main` naming one cannot be
 amended, so a number in git history need not mean what it means here.
 
-**An owner ruling carries its attribution.** Where this document, or a requirement's `rationale`,
-records a decision as settled — the choice itself, or the disposition of a rejected alternative — an
-owner's ruling is marked `(owner, YYYY-MM-DD)`, or by a direct quote, at the point it was ruled. An
-unattributed decision is the recording author's reasoning, not an owner ruling; nothing else
-distinguishes a settled ruling from a session's proposal, so the marker is what a later reader relies
-on.
+**A decision is stated plainly, with no attribution.** Where this document, or a requirement's
+`rationale`, records a decision as settled — the choice itself, or the disposition of a rejected
+alternative — it is written as the document's own position: no parenthetical marker naming who
+decided it, no quote. The prose itself is the ruling; a later reader acts on what is written, not
+on whose it was.
 
 | # | Rev | Decided | Decision |
 |---|---|---|---|
