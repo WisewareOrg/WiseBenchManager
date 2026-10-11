@@ -18,7 +18,7 @@ from wisebench.events import EventLog
 from wisebench.record import Marks, SessionRecord
 from wisebench.ssh import FabricTransport
 
-TST_ID = re.compile(r"[A-Z]{3}[0-9]{3}")
+TST_ID = re.compile(r"[A-Z]{2,}[0-9]{3,}")
 TST_KEYWORDS = {"recorded"}
 
 
@@ -78,7 +78,8 @@ def marks_of(item: pytest.Item) -> Marks:
     item_id = mark.args[0]
     if not isinstance(item_id, str) or not TST_ID.fullmatch(item_id):
         raise pytest.Collector.CollectError(
-            f"{item.nodeid}: tst id {item_id!r} is not three capitals and three digits"
+            f"{item.nodeid}: tst id {item_id!r} is not two or more capitals, "
+            "then three or more digits"
         )
     unknown = set(mark.kwargs) - TST_KEYWORDS
     if unknown:

@@ -251,10 +251,12 @@ def test_fixture_error_is_an_error_outcome(layer: pytest.Pytester) -> None:
 @pytest.mark.parametrize(
     ("marker", "message"),
     [
-        ('tst("TST11")', "tst id 'TST11' is not three capitals and three digits"),
-        ('tst("tst011")', "tst id 'tst011' is not three capitals and three digits"),
-        ('tst("TST0111")', "tst id 'TST0111' is not three capitals and three digits"),
-        ("tst(11)", "tst id 11 is not three capitals and three digits"),
+        ('tst("TST11")', "tst id 'TST11' is not two or more capitals, then three or more"),
+        ('tst("tst011")', "tst id 'tst011' is not two or more capitals, then three or more"),
+        ('tst("T011")', "tst id 'T011' is not two or more capitals, then three or more"),
+        ('tst("TST011a")', "tst id 'TST011a' is not two or more capitals, then three or more"),
+        ('tst("TST 011")', "tst id 'TST 011' is not two or more capitals, then three or more"),
+        ("tst(11)", "tst id 11 is not two or more capitals, then three or more"),
         ("tst", "tst takes exactly one item id"),
         ('tst("TST011", "TST012")', "tst takes exactly one item id"),
         ('tst("TST011", credited=True)', "tst has unknown keyword credited"),
@@ -293,14 +295,14 @@ def test_well_formed_markers_collect_on_classes_and_parametrized_tests(
             def test_a(self, n):
                 pass
 
-        @pytest.mark.tst("SRS010", recorded=False)
+        @pytest.mark.tst("SRSA1010", recorded=False)
         @pytest.mark.provenance
         def test_b():
             pass
         """
     )
     run(layer).assert_outcomes(passed=3)
-    assert {test["item"] for test in record(layer)["tests"]} == {"TST014", "SRS010"}
+    assert {test["item"] for test in record(layer)["tests"]} == {"TST014", "SRSA1010"}
 
 
 def test_markers_are_registered(layer: pytest.Pytester) -> None:

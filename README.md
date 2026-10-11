@@ -93,7 +93,7 @@ learns it.
 
 A test carries the requirement item it discharges as a marker: `@pytest.mark.tst("TST011")`, or
 `@pytest.mark.tst("TST014", recorded=True)` for an item whose status is `recorded` rather than `passed`.
-The id is three capitals and three digits; a malformed marker, an unknown keyword or a second `tst` on
+The id is two or more capitals, then three or more digits; a malformed marker, an unknown keyword or a second `tst` on
 one test is a collection error. The layer marks its provenance test, the one asserting that
 `/etc/buildinfo` names the commit, with `@pytest.mark.provenance`. The record's `items` map gives each
 item one status, `passed`, `recorded` or `not credited` with the reason, and each test entry carries its
