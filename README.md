@@ -85,7 +85,7 @@ is the log. The suites are ordinary pytest directories. Tests ask for the runner
 
 | Fixture | Gives |
 |---|---|
-| `board` | the board behind a hostname check: `run(cmd, timeout=)`, `put` with a hash check, `reboot()`, and labgrid's `SSHDriver` as `board.ssh` for `get` and `forward_local_port` |
+| `board` | the board behind a hostname check: `run(cmd, timeout=)`, `put` with a hash check and `get` (each checked first), `reboot()`, and labgrid's `SSHDriver` as `board.ssh` for `forward_local_port` |
 | `ota` | session-scoped; the installed, booted candidate; its finalizer is the rollback |
 | `proxy(har)` | mitmproxy serving that HAR file on a forwarded loopback port; a miss kills the connection; the file's hash goes into the record |
 
@@ -106,15 +106,14 @@ test then counts as an error.
 
 ## The record
 
-The raw record of a run is pytest's own junit report (`--junitxml`, defaulted into the result directory):
-every test's outcome and the properties it recorded with `record_property`, and the session's facts,
-which the runner and its fixtures record with `record_testsuite_property`: the ref and its commit, the
-runner's version, the bundle hash, the booted slot before and after, the hash of any replay recording
-used. The runner records under `bench.*` and a layer under `layer.*`. Beside the report the runner writes
-one summary per run, and appends a line for it to a JSON-lines index for bulk processing: the runner's
-version, the exact command line, the session facts, the per-item credit map, the verdict and the
-report's path. Both are written at session end, so a run that fails halfway still leaves everything up
-to that point. A run that never requests `ota` records `bench.ota_ran = false` with the board's booted
+The raw record of a run is pytest-reportlog's JSON-lines report (`--report-log`, defaulted into the
+result directory): every test report, with what each test recorded through pytest's `record_property`,
+under `layer.*` for a layer. Beside it the runner writes one summary per run, and appends a line for it
+to a JSON-lines index for bulk processing: the session's facts under `bench.*` (the ref and its commit,
+the runner's version, the bundle hash, the booted slot before and after, the hash of any replay
+recording used), the exact command line, the per-item credit map, the verdict and the report's path.
+The report is written as the run goes and the summary at session end, so a run that fails halfway still
+leaves everything up to that point. A run that never requests `ota` records `bench.ota_ran = false` with the board's booted
 slot and `/etc/buildinfo`, and carries no verdict.
 
 ## Operating it

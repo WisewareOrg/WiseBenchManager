@@ -16,8 +16,10 @@ uv sync --project WiseBenchManager --frozen
 
 `uv sync --frozen` installs exactly the versions in `uv.lock`, and a Python of at least 3.11 if the host
 has none. The package's version is derived from the checked-out tag by hatch-vcs when uv builds it, and
-uv rebuilds it whenever the commit or the tags change; the record carries that version. The clone must stay
-clean: the runner refuses to start when `git status --porcelain --untracked-files=no` lists a change.
+uv rebuilds it whenever the commit or the tags change (`[tool.uv] cache-keys` names the git commit and
+tags, as uv's documentation on dynamic metadata describes); the record carries that version. At start the
+runner refuses a version that differs from the one setuptools-scm, hatch-vcs's engine, derives from the
+checkout then, and a clone where `git status --porcelain --untracked-files=no` lists a change.
 
 ## Run a layer's tests
 
@@ -48,18 +50,20 @@ The board is reached through labgrid's `SSHDriver`, which runs the host's own Op
 ControlMaster connection: authentication is ssh's, with the host user's keys, agent and `~/.ssh/config`,
 and the `none` method where the board accepts it. labgrid does not check or save host keys, so the
 board's identity is the hostname check: every connection the runner activates, including each one while
-it waits out a reboot, answers `hostname` before any other command, and a wrong answer is the bench's
-failure. labgrid's master sends an ssh keepalive every 15 s. `board.run` times out after 120 s unless the
+it waits out a reboot, answers `hostname` before any other command of the runner's, and so does the
+board before every `put` and `get`, since scp may open a direct connection once the master is lost. A
+wrong answer is the bench's failure. labgrid's own activation runs only `cat` over the new master, as its
+keepalive; the master also sends an ssh keepalive every 15 s. `board.run` times out after 120 s unless the
 test passes `timeout=`; a timeout or a lost connection is the bench's failure.
 
 ## What a run writes
 
 In `BENCH_RESULT_DIR`:
 
-- `<UTC start time>.xml` — pytest's junit report: every test's outcome and `record_property` facts, and
-  the session's `record_testsuite_property` facts. `--junitxml` names another path instead.
+- `<UTC start time>.reportlog.jsonl` — pytest-reportlog's record: one JSON line per test report, with
+  its `record_property` facts. `--report-log` names another path instead.
 - `<UTC start time>.json` — the summary: the `bench.*` session facts, the exit status, the verdict, the
-  per-item credit map and the junit report's path.
+  per-item credit map and the report's path.
 - `index.jsonl` — one line per session: start time, record file, runner version, verdict, outcome counts.
 - `events.jsonl` — one line per event (`session_start`, `test_start`, `test_end`, `record_written`), each
   with a UTC `ts`; the status view and the terminal read it.
