@@ -117,7 +117,7 @@ def test_reboot_waits_for_a_new_boot_id_and_records_both() -> None:
     board.reboot()
     assert transport.commands() == ["hostname", BOOT_ID, "reboot", BOOT_ID, BOOT_ID, BOOT_ID]
     assert recorded["bench.boot_ids"] == ["old", "new"]
-    assert clock.now == 3 * Board.POLL_INTERVAL
+    assert clock.now == 15
 
 
 def test_reboot_survives_the_connection_dropping_on_the_reboot_command() -> None:
@@ -131,7 +131,7 @@ def test_reboot_reconnects_with_the_time_left() -> None:
     transport = fake(**{BOOT_ID: [ok("old"), ok("new")], "reboot": ok()})
     board, _ = connect(transport)
     board.reboot()
-    assert ("reconnect", f"{60 - Board.POLL_INTERVAL:g}") in transport.calls
+    assert ("reconnect", "55") in transport.calls
 
 
 def test_reboot_with_an_unchanged_boot_id_fails_at_the_timeout() -> None:

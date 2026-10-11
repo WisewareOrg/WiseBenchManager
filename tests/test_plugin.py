@@ -85,7 +85,8 @@ def test_a_missing_variable_is_an_error_naming_it(
 
 def test_record_carries_session_facts_and_board_state(layer: pytest.Pytester) -> None:
     layer.makepyfile("def test_uses_board(board):\n    pass")
-    run(layer).assert_outcomes(passed=1)
+    result = layer.runpytest("-k", "uses_board", plugins=[FakeBoardPlugin(FakeTransport(BOARD))])
+    result.assert_outcomes(passed=1)
     written = record(layer)
     assert written["bench.runner_version"] == VERSION
     assert written["bench.board"] == "bench"
@@ -95,7 +96,7 @@ def test_record_carries_session_facts_and_board_state(layer: pytest.Pytester) ->
     assert written["verdict"] is None
     assert written["exit_status"] == 0
     assert UTC_ISO.fullmatch(written["started"]) and UTC_ISO.fullmatch(written["finished"])
-    assert isinstance(written["bench.pytest_args"], list)
+    assert written["bench.pytest_args"][:2] == ["-k", "uses_board"]
 
 
 def test_record_without_a_board_has_no_board_state(layer: pytest.Pytester) -> None:
@@ -428,7 +429,10 @@ def test_bench_tree_names_the_checkout_holding_bench_toml(
 ) -> None:
     tree = tmp_path / "tree"
     tree.mkdir()
-    (layer.path / "bench.toml").rename(tree / "bench.toml")
+    start = layer.path / "bench.toml"
+    start.rename(tree / "bench.toml")
+    wrong = (tree / "bench.toml").read_text().replace("${BENCH_HOSTNAME}", "not-this-board")
+    start.write_text(wrong)
     monkeypatch.setenv("BENCH_TREE", str(tree))
     layer.makepyfile("def test_uses_board(board):\n    pass")
     run(layer).assert_outcomes(passed=1)

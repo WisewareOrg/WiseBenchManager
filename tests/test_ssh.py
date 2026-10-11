@@ -31,7 +31,8 @@ def test_run_on_an_unreachable_board_is_a_bench_failure(refused: FabricTransport
 
 def test_reconnect_to_an_unreachable_board_is_a_bench_failure(refused: FabricTransport) -> None:
     with pytest.raises(BenchFailure, match="ssh to the board failed"):
-        refused.reconnect(1)
+        refused.reconnect(7.4)
+    assert refused._connection.connect_timeout == 7
 
 
 def test_put_to_an_unreachable_board_is_a_bench_failure(
@@ -84,7 +85,7 @@ def server(home: Path) -> Iterator[ScriptedSshServer]:
     scripted.close()
 
 
-SCRIPT = {"hostname": ("bench-board\n", 0), "uname -s": ("Linux\n", 0)}
+SCRIPT = {"hostname": ("bench-board\n", 0), "uname -s": ("Linux\n", 0), "false": ("", 1)}
 
 
 @pytest.fixture
@@ -106,7 +107,8 @@ def test_a_changed_host_key_is_accepted_and_never_written(
     known_hosts = (home / "known_hosts").read_text()
     board = board_at(server, "bench-board")
     assert board.run("uname -s") == Result("Linux\n", "", 0)
-    assert server.commands == ["hostname", "uname -s"]
+    assert board.run("false").exit == 1
+    assert server.commands == ["hostname", "uname -s", "false"]
     assert (home / "known_hosts").read_text() == known_hosts
 
 
