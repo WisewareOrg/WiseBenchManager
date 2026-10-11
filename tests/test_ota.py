@@ -1,5 +1,6 @@
 """The slot read from `rauc status` JSON, the mid-OTA marker, and the ssh wait's bound."""
 
+import json
 import time
 
 import pytest
@@ -46,12 +47,20 @@ class FakeDriver:
         self.put_calls.append((filename, remotepath))
 
 
-RAUC_STATUS_OK = (['{"compatible": "x", "booted": "B", "slots": []}'], [], 0)
+def _rauc_status(booted_slot, other_slot):
+    slots = [
+        {booted_slot: {"state": "booted"}},
+        {other_slot: {"state": "inactive"}},
+    ]
+    return ([json.dumps({"compatible": "x", "slots": slots})], [], 0)
 
 
-def test_booted_slot_reads_the_json_field():
+RAUC_STATUS_OK = _rauc_status("rootfs.1", "rootfs.0")  # booted: rootfs.1
+
+
+def test_booted_slot_reads_the_slots_array():
     driver = FakeDriver([RAUC_STATUS_OK])
-    assert ota._booted_slot(driver) == "B"
+    assert ota._booted_slot(driver) == "rootfs.1"
 
 
 def test_run_raises_ota_error_on_nonzero_exit():
@@ -62,8 +71,8 @@ def test_run_raises_ota_error_on_nonzero_exit():
 
 def test_write_marker_then_clear_marker_round_trips(tmp_path):
     marker = tmp_path / "mid-ota"
-    ota.write_marker(marker, "B")
-    assert marker.read_text() == "B"
+    ota.write_marker(marker, "rootfs.1")
+    assert marker.read_text() == "rootfs.1"
     ota.clear_marker(marker)
     assert not marker.exists()
 
@@ -80,24 +89,26 @@ def test_recover_does_nothing_without_a_marker(tmp_path):
 
 def test_recover_marks_the_candidate_bad_when_it_is_still_booted(tmp_path):
     marker = tmp_path / "mid-ota"
-    ota.write_marker(marker, "B")
+    ota.write_marker(marker, "rootfs.1")
     driver = FakeDriver(
         [
-            RAUC_STATUS_OK,  # _booted_slot: still on the candidate "B"
-            ([], [], 0),  # rauc status mark-bad B
+            RAUC_STATUS_OK,  # _booted_slot: still on the candidate "rootfs.1"
+            ([], [], 0),  # rauc status mark-bad rootfs.1
             ([], [], 0),  # reboot
             ([], [], 0),  # _wait_for_ssh's probe
         ]
     )
     ota.recover(driver, marker)
-    assert "rauc status mark-bad B" in driver.run_calls
+    assert "rauc status mark-bad rootfs.1" in driver.run_calls
     assert not marker.exists()
 
 
 def test_recover_only_clears_the_marker_when_the_good_slot_is_already_booted(tmp_path):
     marker = tmp_path / "mid-ota"
-    ota.write_marker(marker, "B")
-    driver = FakeDriver([(['{"compatible": "x", "booted": "A", "slots": []}'], [], 0)])
+    ota.write_marker(marker, "rootfs.1")
+    driver = FakeDriver(
+        [_rauc_status("rootfs.0", "rootfs.1")]
+    )  # booted: rootfs.0, not the marker's
     ota.recover(driver, marker)
     assert driver.run_calls == ["rauc status --output-format=json"]
     assert not marker.exists()

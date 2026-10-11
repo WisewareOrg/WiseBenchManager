@@ -22,9 +22,11 @@ def _run(driver, cmd):
 
 
 def _booted_slot(driver):
-    """Return the bootname of the currently booted slot, from `rauc status --output-format=json`."""
+    """Return the currently booted slot's name (e.g. `rootfs.0`) from the `slots` array of
+    `rauc status --output-format=json`."""
     (line,) = _run(driver, "rauc status --output-format=json")
-    return json.loads(line)["booted"]
+    slots = json.loads(line)["slots"]
+    return next(name for slot in slots for name, info in slot.items() if info["state"] == "booted")
 
 
 def _reconnect(driver):
