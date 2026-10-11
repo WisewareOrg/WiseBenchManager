@@ -23,9 +23,10 @@ jobs:
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run pytest
-      # The consumer-name boundary; a missing path (exit 2) fails as well as a match.
+      # The consumer-name boundary over every tracked file but the three that state it;
+      # git grep exits 1 for no match, so a match or an error fails.
       - name: no consumer name
         run: |
           status=0
-          grep -rniI kiosk src tests pyproject.toml docs/operating.md || status=$?
+          git grep -niI kiosk -- . ':!CLAUDE.md' ':!docs/decisions/' ':!.github/workflows/ci.yml' || status=$?
           if [ "$status" -ne 1 ]; then exit 1; fi
