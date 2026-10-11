@@ -299,10 +299,15 @@ def test_well_formed_markers_collect_on_classes_and_parametrized_tests(
         @pytest.mark.provenance
         def test_b():
             pass
+
+        @pytest.mark.tst("SR001")
+        def test_c():
+            pass
         """
     )
-    run(layer).assert_outcomes(passed=3)
-    assert {test["item"] for test in record(layer)["tests"]} == {"TST014", "SRSA1010"}
+    run(layer).assert_outcomes(passed=4)
+    items = {test["item"] for test in record(layer)["tests"]}
+    assert items == {"TST014", "SRSA1010", "SR001"}
 
 
 def test_markers_are_registered(layer: pytest.Pytester) -> None:
