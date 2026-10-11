@@ -39,10 +39,10 @@ def write(root: Path, text: str) -> Path:
 def test_reads_every_table_and_the_board_from_the_environment(tmp_path: Path) -> None:
     config = Config.load(write(tmp_path, FULL))
     assert config.board_config() == BoardConfig("root@board.test", "bench-board", "board", 180)
-    assert config.bundle.path == "build/update.raucb"
-    assert config.hooks.build == "make build"
-    assert config.tests.target_suite == "tests/target_suite"
-    assert config.github == {"check_name": "bench"}
+    assert config.toml.bundle.path == "build/update.raucb"
+    assert config.toml.hooks.build == "make build"
+    assert config.toml.tests.target_suite == "tests/target_suite"
+    assert config.toml.github == {"check_name": "bench"}
 
 
 def test_board_table_keys_are_read(tmp_path: Path) -> None:
@@ -70,12 +70,39 @@ def test_empty_board_variable_is_refused(tmp_path: Path, monkeypatch: pytest.Mon
         Config.load(write(tmp_path, FULL))
 
 
-def test_the_board_is_not_read_from_the_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "key", ["BENCH_ADDRESS", "BENCH_HOSTNAME", "bench_hostname", "Bench_Address"]
+)
+@pytest.mark.parametrize("environment", ["set", "unset"])
+def test_an_identity_key_in_the_file_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, environment: str
 ) -> None:
-    monkeypatch.delenv("BENCH_ADDRESS")
-    text = FULL.replace("schema = 1", 'schema = 1\naddress = "board.test"')
-    with pytest.raises(BenchFailure, match="BENCH_ADDRESS: Field required"):
+    if environment == "unset":
+        monkeypatch.delenv("BENCH_ADDRESS")
+        monkeypatch.delenv("BENCH_HOSTNAME")
+    text = FULL.replace("schema = 1", f'schema = 1\n{key} = "root@committed.example"')
+    with pytest.raises(BenchFailure, match=f"{key} is read from the environment only"):
+        Config.load(write(tmp_path, text))
+
+
+@pytest.mark.parametrize("name", ["hostname", "HOSTNAME", "address"])
+def test_a_key_that_cannot_name_the_board_is_ignored(tmp_path: Path, name: str) -> None:
+    text = FULL.replace("schema = 1", f'schema = 1\n{name} = "elsewhere"')
+    assert Config.load(write(tmp_path, text)).board_config().hostname == "bench-board"
+
+
+@pytest.mark.parametrize(
+    ("table", "value"),
+    [("github", '{"check_name": "from-env"}'), ("hooks", '{"build": "x"}'), ("schema", "1")],
+)
+def test_the_environment_does_not_fill_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table: str, value: str
+) -> None:
+    monkeypatch.setenv(table.upper(), value)
+    text = (
+        FULL.replace("schema = 1", "") if table == "schema" else FULL.replace(f"[{table}]", "[x]")
+    )
+    with pytest.raises(BenchFailure, match=f"{table}: Field required"):
         Config.load(write(tmp_path, text))
 
 

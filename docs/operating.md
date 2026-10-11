@@ -40,8 +40,8 @@ records `bench.ota_ran = false`, credits no requirement item and carries no verd
 | `BENCH_TREE` | the plugin | The checkout holding `bench.toml`; default the directory pytest is started in |
 | `BENCH_RESULT_DIR` | the plugin | Where records and the event stream are written; default `records/` under the start directory |
 
-The board's address and hostname are read from these variables only, never from `bench.toml`; either
-one unset is the bench's failure. ssh authentication is the host
+The board's address and hostname are read from these variables only: a `bench.toml` naming either one
+is refused, and either one unset is the bench's failure. ssh authentication is the host
 user's own: the keys `ssh` would offer, from `~/.ssh/config`, the agent and `~/.ssh/id_*`.
 Authentication follows OpenSSH's order: key, then none. The board's identity is the hostname check;
 host keys are not pinned, because a reflash changes them, and `known_hosts` is neither read nor written.

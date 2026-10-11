@@ -75,7 +75,9 @@ check_name = "bench"
 ```
 
 `schema` must be 1; any other value is refused. A missing variable, table or key, or an empty string, is
-the bench's failure, named in the message; keys the runner does not know are ignored.
+the bench's failure, named in the message; keys the runner does not know are ignored. A `bench.toml` that
+names `BENCH_ADDRESS` or `BENCH_HOSTNAME` at its top level, in any case, is refused, and no environment
+variable fills a table of the file.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_TARGET` and `BENCH_RESULT_DIR` in its environment; its exit status is pass or fail and its output

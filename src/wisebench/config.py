@@ -53,13 +53,25 @@ class SuitesTable(BaseModel):
     target_suite: Text
 
 
-class Config(BaseSettings):
-    """`bench.toml` under a checkout; `BENCH_ADDRESS` and `BENCH_HOSTNAME` from the environment."""
+IDENTITY_KEYS = ("BENCH_ADDRESS", "BENCH_HOSTNAME")
 
-    model_config = SettingsConfigDict(extra="ignore")
+
+class Identity(BaseSettings):
+    """The board's address and hostname, from the environment and nowhere else."""
 
     address: Text = Field(validation_alias="BENCH_ADDRESS")
     hostname: Text = Field(validation_alias="BENCH_HOSTNAME")
+
+    @classmethod
+    def read(cls) -> Identity:
+        return cls(_build_sources=((EnvSettingsSource(cls),), {}))
+
+
+class BenchToml(BaseSettings):
+    """`bench.toml`, from the file and nowhere else; unknown keys are ignored."""
+
+    model_config = SettingsConfigDict(extra="ignore")
+
     schema_version: Annotated[StrictInt, Field(ge=1, le=1)] = Field(validation_alias="schema")
     board: BoardTable = BoardTable()
     bundle: BundleTable
@@ -68,14 +80,32 @@ class Config(BaseSettings):
     github: dict[str, Any]
 
     @classmethod
+    def read(cls, path: Path) -> BenchToml:
+        """Read the file; a top-level key naming an identity variable, in any case, is refused."""
+        source = TomlConfigSettingsSource(cls, toml_file=path)
+        identity = {key.casefold() for key in IDENTITY_KEYS}
+        for key in source.toml_data:
+            if key.casefold() in identity:
+                raise BenchFailure(f"{FILENAME}: {key} is read from the environment only")
+        return cls(_build_sources=((source,), {}))
+
+
+@dataclass(frozen=True)
+class Config:
+    """The checkout's `bench.toml` and the board's identity from the environment."""
+
+    identity: Identity
+    toml: BenchToml
+
+    @classmethod
     def load(cls, root: Path) -> Config:
         """Read `root/bench.toml` and the environment; any missing or invalid value raises."""
         path = root / FILENAME
         if not path.is_file():
             raise BenchFailure(f"{FILENAME} not found in {root}")
         try:
-            sources = (TomlConfigSettingsSource(cls, toml_file=path), EnvSettingsSource(cls))
-            return cls(_build_sources=(sources, {}))
+            toml = BenchToml.read(path)
+            return cls(identity=Identity.read(), toml=toml)
         except tomllib.TOMLDecodeError as error:
             raise BenchFailure(f"{FILENAME}: {error}") from None
         except ValidationError as error:
@@ -87,8 +117,8 @@ class Config(BaseSettings):
 
     def board_config(self) -> BoardConfig:
         return BoardConfig(
-            address=self.address,
-            hostname=self.hostname,
-            name=self.board.name,
-            reboot_timeout=self.board.reboot_timeout,
+            address=self.identity.address,
+            hostname=self.identity.hostname,
+            name=self.toml.board.name,
+            reboot_timeout=self.toml.board.reboot_timeout,
         )
