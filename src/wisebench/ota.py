@@ -43,23 +43,6 @@ class Ota:
         self._timeout = timeout
         self._interval = interval
 
-    def _run(self, cmd):
-        """Run a command on the board and raise on a nonzero exit.
-
-        Args:
-            cmd (str): The command line to run on the board.
-
-        Returns:
-            list[str]: The command's stdout, one line per element.
-
-        Raises:
-            OtaError: The command's exit code was nonzero.
-        """
-        stdout, stderr, returncode = self._driver.run(cmd)
-        if returncode != 0:
-            raise OtaError(f"{cmd!r} exited {returncode}: {stderr}")
-        return stdout
-
     def _booted_slot(self):
         """Read the currently booted slot's name from the board.
 
@@ -71,8 +54,10 @@ class Ota:
         Raises:
             OtaError: `rauc status` exited nonzero.
         """
-        (line,) = self._run("rauc status --output-format=json")
-        slots = json.loads(line)["slots"]
+        stdout, stderr, returncode = self._driver.run("rauc status --output-format=json")
+        if returncode != 0:
+            raise OtaError(f"rauc status exited {returncode}: {stderr}")
+        slots = json.loads(stdout[0])["slots"]
         return next(
             name for slot in slots for name, info in slot.items() if info["state"] == "booted"
         )
@@ -118,7 +103,9 @@ class Ota:
         with open(bundle, "rb") as f:
             sha256 = hashlib.file_digest(f, "sha256").hexdigest()
         self._driver.put(str(bundle), destination)
-        self._run(f"rauc install {destination}")
+        _, stderr, returncode = self._driver.run(f"rauc install {destination}")
+        if returncode != 0:
+            raise OtaError(f"rauc install exited {returncode}: {stderr}")
         self._driver.run("reboot")
         self._wait_for_ssh()
         return self._booted_slot(), sha256
@@ -136,7 +123,9 @@ class Ota:
             OtaError: `rauc status mark-bad` or the slot-status read exited nonzero.
             Exception: ssh did not answer again within the wait bound after rebooting.
         """
-        self._run(f"rauc status mark-bad {slot}")
+        _, stderr, returncode = self._driver.run(f"rauc status mark-bad {slot}")
+        if returncode != 0:
+            raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
         self._driver.run("reboot")
         self._wait_for_ssh()
         return self._booted_slot()
@@ -158,7 +147,9 @@ class Ota:
             return
         candidate = self._marker.read_text().strip()
         if self._booted_slot() == candidate:
-            self._run(f"rauc status mark-bad {candidate}")
+            _, stderr, returncode = self._driver.run(f"rauc status mark-bad {candidate}")
+            if returncode != 0:
+                raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
             self._driver.run("reboot")
             self._wait_for_ssh()
         self.clear_marker()

@@ -67,10 +67,24 @@ def test_booted_slot_reads_the_slots_array(tmp_path):
     assert bench._booted_slot() == "rootfs.1"
 
 
-def test_run_raises_ota_error_on_nonzero_exit(tmp_path):
+def test_booted_slot_raises_ota_error_on_nonzero_exit(tmp_path):
     bench = ota.Ota(FakeDriver([([], ["boom"], 1)]), tmp_path / "mid-ota")
     with pytest.raises(ota.OtaError, match="boom"):
-        bench._run("rauc status mark-bad B")
+        bench._booted_slot()
+
+
+def test_install_raises_ota_error_on_nonzero_rauc_install(tmp_path):
+    bundle = tmp_path / "bundle.raucb"
+    bundle.write_bytes(b"x")
+    bench = ota.Ota(FakeDriver([([], ["boom"], 1)]), tmp_path / "mid-ota")
+    with pytest.raises(ota.OtaError, match="boom"):
+        bench.install(bundle, "/data/update.raucb")
+
+
+def test_rollback_raises_ota_error_on_nonzero_mark_bad(tmp_path):
+    bench = ota.Ota(FakeDriver([([], ["boom"], 1)]), tmp_path / "mid-ota")
+    with pytest.raises(ota.OtaError, match="boom"):
+        bench.rollback("rootfs.0")
 
 
 def test_write_marker_then_clear_marker_round_trips(tmp_path):
