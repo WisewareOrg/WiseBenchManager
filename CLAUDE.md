@@ -17,11 +17,11 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
 ## How it is built
 
 - **Python, one language, written to be read.** Small classes with one job each; a `just` recipe or a
-  shell line is glue only. The owner reads Python and does not read shell.
-- **Well-supported tools before code of ours.** Every piece names what covers it (fabric for ssh,
+  shell line is glue only. Python is read here; shell is not.
+- **Well-supported tools before code of ours.** Every piece names what covers it (labgrid for ssh,
   mitmproxy for replay, pytest for the suites and the record, systemd and `flock` for scheduling, `gh`
   for GitHub). A bespoke piece is written only with a sentence saying why no maintained tool fits, and
-  that sentence is the owner's to accept.
+  that sentence has to hold up under review.
 - **Every check is a test that has been watched failing.** A fixture or runner step is proven on a fake
   board (scripted answers) with a test that fails when the check is removed, and once on the real board.
   A check that cannot fail has measured nothing.
@@ -41,15 +41,15 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
   an ADR with no rejected alternative is not an ADR. Cite one as `ADR NNNN rev M`, never a bare number.
 - **A delegate escalates every ambiguity; it never invents an answer.** A choice settled only by "the
   code already does it this way" is an invention.
-- **Estimates are estimates.** A size an agent derives is labelled so; a budget exists only when the
-  owner states one.
+- **Estimates are estimates.** A size an agent derives is labelled so; a budget exists only when one is
+  stated explicitly.
 
 ## How changes land
 
-- Branch and PR; the owner merges. The PR body carries a reading guide for any diff over a screen: what
-  it does, the stops in reading order, what to skip, where the risk sits.
+- Branch and PR; the maintainer merges. The PR body carries a reading guide for any diff over a screen:
+  what it does, the stops in reading order, what to skip, where the risk sits.
 - Review is the `/pr-ready` flow: three reviewers (content, documentation discipline, test quality) in
-  fresh contexts, findings to the implementer, escalations to the owner; the PR is not called ready
+  fresh contexts, findings to the implementer, escalations to the maintainer; the PR is not called ready
   before they have closed.
 - Comments state mechanism, one or two lines, no history, no issue numbers; the why lives in the ADR or
   the README. No temporal words ("now", "no longer").
