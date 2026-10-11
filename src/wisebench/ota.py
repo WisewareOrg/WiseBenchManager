@@ -40,11 +40,16 @@ class Ota:
         self._previous = None
         self._candidate = None
 
-    def _read_slots(self):
-        """Read the board's slots array from rauc.
+    def _slots(self):
+        """Read the board's slots and name the booted one and the other.
+
+        The single place that reads which slot is booted from `rauc status
+        --output-format=json`; every other method goes through this one.
 
         Returns:
-            list[dict]: The `slots` array of `rauc status --output-format=json`.
+            tuple[str, str]: The booted slot's name (e.g. `rootfs.0`) and the other slot's
+            name -- identifiers `rauc status mark-bad`/`mark-good` accept, not the top-level
+            `booted` field's bootname (`A`/`B`).
 
         Raises:
             OtaError: `rauc status` exited nonzero.
@@ -52,23 +57,14 @@ class Ota:
         stdout, stderr, returncode = self._driver.run("rauc status --output-format=json")
         if returncode != 0:
             raise OtaError(f"rauc status exited {returncode}: {stderr}")
-        return json.loads(stdout[0])["slots"]
-
-    def _booted_slot(self):
-        """Read the currently booted slot's name from the board.
-
-        Returns:
-            str: The booted slot's name (e.g. `rootfs.0`) -- the identifier `rauc status
-            mark-bad`/`mark-good` accept, not the top-level `booted` field's bootname
-            (`A`/`B`).
-
-        Raises:
-            OtaError: `rauc status` exited nonzero.
-        """
-        slots = self._read_slots()
-        return next(
+        slots = json.loads(stdout[0])["slots"]
+        booted = next(
             name for slot in slots for name, info in slot.items() if info["state"] == "booted"
         )
+        other = next(
+            name for slot in slots for name, info in slot.items() if info["state"] != "booted"
+        )
+        return booted, other
 
     def _wait_for_ssh(self):
         """Reconnect and retry a trivial command until ssh answers again or the bound elapses.
@@ -93,6 +89,35 @@ class Ota:
                 self._driver.target.activate(self._driver)
                 self._driver.run("true")
 
+    def _mark_bad_and_verify(self, candidate, expected):
+        """Mark a slot bad, reboot, wait, and confirm the board came back on the right slot.
+
+        Used by both `rollback` and `recover`, so the crash path verifies exactly what the
+        normal path verifies. `reboot`'s own exit status is not checked: it is unreliable
+        once the board goes down.
+
+        Args:
+            candidate (str): The slot's name to mark bad.
+            expected (str): The slot's name that must be booted once the board comes back.
+
+        Returns:
+            str: The booted slot's name (equal to `expected`).
+
+        Raises:
+            OtaError: `rauc status mark-bad` or a slot-status read exited nonzero, or the
+                board came back on a slot other than `expected`.
+            Exception: ssh did not answer again within the wait bound after rebooting.
+        """
+        _, stderr, returncode = self._driver.run(f"rauc status mark-bad {candidate}")
+        if returncode != 0:
+            raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
+        self._driver.run("reboot")
+        self._wait_for_ssh()
+        booted, _ = self._slots()
+        if booted != expected:
+            raise OtaError(f"expected {expected} booted after mark-bad {candidate}, found {booted}")
+        return booted
+
     def install(self, bundle, destination):
         """Put a bundle on the board, install it with rauc, and reboot into it.
 
@@ -114,13 +139,7 @@ class Ota:
             OtaError: `rauc install` or a slot-status read exited nonzero.
             Exception: ssh did not answer again within the wait bound after rebooting.
         """
-        slots = self._read_slots()
-        self._previous = next(
-            name for slot in slots for name, info in slot.items() if info["state"] == "booted"
-        )
-        self._candidate = next(
-            name for slot in slots for name, info in slot.items() if info["state"] != "booted"
-        )
+        self._previous, self._candidate = self._slots()
         self._marker.write_text(self._candidate)
 
         with open(bundle, "rb") as f:
@@ -131,30 +150,25 @@ class Ota:
             raise OtaError(f"rauc install exited {returncode}: {stderr}")
         self._driver.run("reboot")
         self._wait_for_ssh()
-        return self._booted_slot(), sha256
+        booted, _ = self._slots()
+        return booted, sha256
 
     def rollback(self):
         """Mark the candidate slot bad and reboot off it.
 
-        Uses the candidate `install` recorded; clears the marker once the board is back on
-        the previous slot. `reboot`'s own exit status is not checked: it is unreliable once
-        the board goes down.
+        Uses the candidate and previous slots `install` recorded; clears the marker once the
+        board is confirmed back on the previous slot.
 
         Returns:
             str: The booted slot's name after the reboot.
 
         Raises:
-            OtaError: `rauc status mark-bad` or the slot-status read exited nonzero.
+            OtaError: `rauc status mark-bad` or a slot-status read exited nonzero, or the
+                board did not come back on the previous slot.
             Exception: ssh did not answer again within the wait bound after rebooting.
             OSError: The marker file could not be removed.
         """
-        _, stderr, returncode = self._driver.run(f"rauc status mark-bad {self._candidate}")
-        if returncode != 0:
-            raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
-        self._driver.run("reboot")
-        self._wait_for_ssh()
-        booted = self._booted_slot()
-        assert booted == self._previous
+        booted = self._mark_bad_and_verify(self._candidate, self._previous)
         self._marker.unlink()
         return booted
 
@@ -162,20 +176,20 @@ class Ota:
         """Undo a run that died between `install` and `rollback`, then remove the marker.
 
         Reads the candidate from the marker file itself, not from `self._candidate`: a fresh
-        `Ota` built to recover a crashed run never had its own `install` set that state.
+        `Ota` built to recover a crashed run never had its own `install` set that state. If
+        the board is still booted on that candidate, the expected slot after mark-bad is
+        whichever slot is not the candidate.
 
         Raises:
-            OtaError: `rauc status mark-bad` or a slot-status read exited nonzero.
+            OtaError: A slot-status read exited nonzero, `rauc status mark-bad` exited
+                nonzero, or the board did not come back on the expected slot.
             Exception: ssh did not answer again within the wait bound after rebooting.
             OSError: The marker file exists but could not be removed.
         """
         if not self._marker.exists():
             return
         candidate = self._marker.read_text().strip()
-        if self._booted_slot() == candidate:
-            _, stderr, returncode = self._driver.run(f"rauc status mark-bad {candidate}")
-            if returncode != 0:
-                raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
-            self._driver.run("reboot")
-            self._wait_for_ssh()
+        booted, other = self._slots()
+        if booted == candidate:
+            self._mark_bad_and_verify(candidate, other)
         self._marker.unlink()

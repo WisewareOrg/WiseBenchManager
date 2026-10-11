@@ -63,15 +63,15 @@ def test_default_wait_timeout_is_300_seconds():
     assert ota._WAIT_TIMEOUT == 300
 
 
-def test_booted_slot_reads_the_slots_array(tmp_path):
+def test_slots_reads_the_booted_and_other_names(tmp_path):
     bench = ota.Ota(FakeDriver([RAUC_STATUS_OK]), tmp_path / "mid-ota")
-    assert bench._booted_slot() == "rootfs.1"
+    assert bench._slots() == ("rootfs.1", "rootfs.0")
 
 
-def test_booted_slot_raises_ota_error_on_nonzero_exit(tmp_path):
+def test_slots_raises_ota_error_on_nonzero_exit(tmp_path):
     bench = ota.Ota(FakeDriver([([], ["boom"], 1)]), tmp_path / "mid-ota")
     with pytest.raises(ota.OtaError, match="boom"):
-        bench._booted_slot()
+        bench._slots()
 
 
 def test_install_records_previous_and_candidate_and_writes_the_marker(tmp_path):
@@ -132,7 +132,7 @@ def test_rollback_raises_ota_error_on_nonzero_mark_bad(tmp_path):
         bench.rollback()
 
 
-def test_rollback_asserts_the_previous_slot_is_booted(tmp_path):
+def test_rollback_raises_ota_error_when_the_previous_slot_is_not_booted(tmp_path):
     marker = tmp_path / "mid-ota"
     marker.write_text("rootfs.0")
     driver = FakeDriver(
@@ -146,7 +146,7 @@ def test_rollback_asserts_the_previous_slot_is_booted(tmp_path):
     bench = ota.Ota(driver, marker)
     bench._previous = "rootfs.1"
     bench._candidate = "rootfs.0"
-    with pytest.raises(AssertionError):
+    with pytest.raises(ota.OtaError, match="expected rootfs.1 booted"):
         bench.rollback()
 
 
@@ -161,16 +161,48 @@ def test_recover_marks_the_candidate_bad_when_it_is_still_booted(tmp_path):
     marker.write_text("rootfs.1")
     driver = FakeDriver(
         [
-            RAUC_STATUS_OK,  # recover's own _booted_slot: still on the candidate "rootfs.1"
+            RAUC_STATUS_OK,  # recover's own check: still on the candidate "rootfs.1"
             ([], [], 0),  # rauc status mark-bad rootfs.1
             ([], [], 0),  # reboot
             ([], [], 0),  # _wait_for_ssh's probe
+            _rauc_status("rootfs.0", "rootfs.1"),  # verify: booted the expected "rootfs.0"
         ]
     )
     bench = ota.Ota(driver, marker)
     bench.recover()
     assert "rauc status mark-bad rootfs.1" in driver.run_calls
     assert not marker.exists()
+
+
+def test_recover_raises_ota_error_on_nonzero_mark_bad(tmp_path):
+    marker = tmp_path / "mid-ota"
+    marker.write_text("rootfs.1")
+    driver = FakeDriver(
+        [
+            RAUC_STATUS_OK,  # still on the candidate "rootfs.1"
+            ([], ["boom"], 1),  # rauc status mark-bad rootfs.1 fails
+        ]
+    )
+    bench = ota.Ota(driver, marker)
+    with pytest.raises(ota.OtaError, match="boom"):
+        bench.recover()
+
+
+def test_recover_raises_ota_error_when_the_candidate_is_still_booted_after_reboot(tmp_path):
+    marker = tmp_path / "mid-ota"
+    marker.write_text("rootfs.1")
+    driver = FakeDriver(
+        [
+            RAUC_STATUS_OK,  # still on the candidate "rootfs.1"
+            ([], [], 0),  # rauc status mark-bad rootfs.1
+            ([], [], 0),  # reboot
+            ([], [], 0),  # _wait_for_ssh's probe
+            RAUC_STATUS_OK,  # verify: still on "rootfs.1", not the expected "rootfs.0"
+        ]
+    )
+    bench = ota.Ota(driver, marker)
+    with pytest.raises(ota.OtaError, match="expected rootfs.0 booted"):
+        bench.recover()
 
 
 def test_recover_only_clears_the_marker_when_the_good_slot_is_already_booted(tmp_path):
