@@ -2,13 +2,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import make_config
 from fake_board import Dropped, FakeClock, FakeTransport, UnexpectedCall, ok
 
 from wisebench.board import BOOT_ID, BUILDINFO, RAUC_STATUS, Board, Result, WrongBoard
-from wisebench.config import BoardConfig
 from wisebench.errors import BenchFailure
 
-CONFIG = BoardConfig(address="board.test", hostname="bench-board", name="bench", reboot_timeout=60)
+CONFIG = make_config("board.test", "bench-board")
 
 
 class Recorded(dict[str, Any]):

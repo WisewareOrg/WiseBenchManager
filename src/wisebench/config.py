@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, StrictFloat, StrictInt, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    StringConstraints,
+    ValidationError,
+)
 from pydantic_settings import (
     BaseSettings,
     EnvSettingsSource,
@@ -21,16 +28,6 @@ FILENAME = "bench.toml"
 
 Text = Annotated[str, StringConstraints(min_length=1)]
 Seconds = Annotated[StrictInt | StrictFloat, Field(gt=0)]
-
-
-@dataclass(frozen=True)
-class BoardConfig:
-    """What the board fixture needs: where the board is, who it must be, and its timeout."""
-
-    address: str
-    hostname: str
-    name: str
-    reboot_timeout: float
 
 
 class BoardTable(BaseModel):
@@ -90,9 +87,10 @@ class BenchToml(BaseSettings):
         return cls(_build_sources=((source,), {}))
 
 
-@dataclass(frozen=True)
-class Config:
+class Config(BaseModel):
     """The checkout's `bench.toml` and the board's identity from the environment."""
+
+    model_config = ConfigDict(frozen=True)
 
     identity: Identity
     toml: BenchToml
@@ -109,16 +107,4 @@ class Config:
         except tomllib.TOMLDecodeError as error:
             raise BenchFailure(f"{FILENAME}: {error}") from None
         except ValidationError as error:
-            problems = "; ".join(
-                f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}"
-                for problem in error.errors()
-            )
-            raise BenchFailure(f"{FILENAME} and environment: {problems}") from None
-
-    def board_config(self) -> BoardConfig:
-        return BoardConfig(
-            address=self.identity.address,
-            hostname=self.identity.hostname,
-            name=self.toml.board.name,
-            reboot_timeout=self.toml.board.reboot_timeout,
-        )
+            raise BenchFailure(f"{FILENAME} and environment: {error}") from None

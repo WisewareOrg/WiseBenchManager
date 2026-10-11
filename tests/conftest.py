@@ -4,6 +4,7 @@ import pytest
 from fake_board import LAYER_CONFTEST
 
 import wisebench.version
+from wisebench.config import BenchToml, BoardTable, Config, Identity
 
 VERSION = "v0.1.0-3-gabc1234"
 
@@ -57,3 +58,9 @@ def layer(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.
 
 def results(pytester: pytest.Pytester) -> Path:
     return pytester.path / "results"
+
+
+def make_config(address: str, hostname: str, name: str = "bench", timeout: float = 60) -> Config:
+    """A Config built without reading any file or environment."""
+    toml = BenchToml.model_construct(board=BoardTable(name=name, reboot_timeout=timeout))
+    return Config(identity=Identity.model_construct(address=address, hostname=hostname), toml=toml)

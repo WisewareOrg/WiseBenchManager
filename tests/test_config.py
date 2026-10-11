@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from wisebench.config import BoardConfig, Config
+from wisebench.config import Config
 from wisebench.errors import BenchFailure
 
 FULL = """
@@ -38,7 +38,8 @@ def write(root: Path, text: str) -> Path:
 
 def test_reads_every_table_and_the_board_from_the_environment(tmp_path: Path) -> None:
     config = Config.load(write(tmp_path, FULL))
-    assert config.board_config() == BoardConfig("root@board.test", "bench-board", "board", 180)
+    assert (config.identity.address, config.identity.hostname) == ("root@board.test", "bench-board")
+    assert (config.toml.board.name, config.toml.board.reboot_timeout) == ("board", 180)
     assert config.toml.bundle.path == "build/update.raucb"
     assert config.toml.hooks.build == "make build"
     assert config.toml.tests.target_suite == "tests/target_suite"
@@ -47,7 +48,7 @@ def test_reads_every_table_and_the_board_from_the_environment(tmp_path: Path) ->
 
 def test_board_table_keys_are_read(tmp_path: Path) -> None:
     text = FULL + '\n[board]\nname = "bench"\nreboot_timeout = 30\n'
-    board = Config.load(write(tmp_path, text)).board_config()
+    board = Config.load(write(tmp_path, text)).toml.board
     assert (board.name, board.reboot_timeout) == ("bench", 30)
 
 
@@ -60,13 +61,13 @@ def test_missing_board_variable_is_named(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str
 ) -> None:
     monkeypatch.delenv(variable)
-    with pytest.raises(BenchFailure, match=f"{variable}: Field required"):
+    with pytest.raises(BenchFailure, match=rf"{variable}\s+Field required"):
         Config.load(write(tmp_path, FULL))
 
 
 def test_empty_board_variable_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCH_HOSTNAME", "")
-    with pytest.raises(BenchFailure, match="BENCH_HOSTNAME: String should have at least 1"):
+    with pytest.raises(BenchFailure, match=r"BENCH_HOSTNAME\s+String should have at least 1"):
         Config.load(write(tmp_path, FULL))
 
 
@@ -88,7 +89,7 @@ def test_an_identity_key_in_the_file_is_refused(
 @pytest.mark.parametrize("name", ["hostname", "HOSTNAME", "address"])
 def test_a_key_that_cannot_name_the_board_is_ignored(tmp_path: Path, name: str) -> None:
     text = FULL.replace("schema = 1", f'schema = 1\n{name} = "elsewhere"')
-    assert Config.load(write(tmp_path, text)).board_config().hostname == "bench-board"
+    assert Config.load(write(tmp_path, text)).identity.hostname == "bench-board"
 
 
 @pytest.mark.parametrize(
@@ -102,18 +103,18 @@ def test_the_environment_does_not_fill_the_file(
     text = (
         FULL.replace("schema = 1", "") if table == "schema" else FULL.replace(f"[{table}]", "[x]")
     )
-    with pytest.raises(BenchFailure, match=f"{table}: Field required"):
+    with pytest.raises(BenchFailure, match=rf"{table}\s+Field required"):
         Config.load(write(tmp_path, text))
 
 
 @pytest.mark.parametrize("schema", ["2", "0", '"1"', "true", "1.0"])
 def test_any_schema_but_1_is_refused(tmp_path: Path, schema: str) -> None:
-    with pytest.raises(BenchFailure, match="schema: "):
+    with pytest.raises(BenchFailure, match=r"schema\s+"):
         Config.load(write(tmp_path, FULL.replace("schema = 1", f"schema = {schema}")))
 
 
 def test_missing_schema_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(BenchFailure, match="schema: Field required"):
+    with pytest.raises(BenchFailure, match=r"schema\s+Field required"):
         Config.load(write(tmp_path, FULL.replace("schema = 1", "")))
 
 
@@ -130,7 +131,7 @@ def test_malformed_toml_is_refused(tmp_path: Path) -> None:
 @pytest.mark.parametrize("table", ["bundle", "hooks", "tests", "github"])
 def test_missing_table_is_refused(tmp_path: Path, table: str) -> None:
     text = FULL.replace(f"[{table}]", "[unrelated]")
-    with pytest.raises(BenchFailure, match=f"{table}: Field required"):
+    with pytest.raises(BenchFailure, match=rf"{table}\s+Field required"):
         Config.load(write(tmp_path, text))
 
 
@@ -140,12 +141,12 @@ def test_missing_table_is_refused(tmp_path: Path, table: str) -> None:
 )
 def test_missing_key_is_refused(tmp_path: Path, key: str, where: str) -> None:
     text = "\n".join(line for line in FULL.splitlines() if not line.startswith(f"{key} "))
-    with pytest.raises(BenchFailure, match=f"{where}: Field required"):
+    with pytest.raises(BenchFailure, match=rf"{where}\s+Field required"):
         Config.load(write(tmp_path, text))
 
 
 def test_empty_string_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(BenchFailure, match="hooks.build: String should have at least 1"):
+    with pytest.raises(BenchFailure, match=r"hooks.build\s+String should have at least 1"):
         Config.load(write(tmp_path, FULL.replace('build = "make build"', 'build = ""')))
 
 

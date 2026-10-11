@@ -20,7 +20,7 @@ from typing import Any, Protocol
 
 from tenacity import RetryError, Retrying, retry_if_exception, retry_if_result, wait_fixed
 
-from wisebench.config import BoardConfig
+from wisebench.config import Config
 from wisebench.errors import BenchFailure
 
 BOOT_ID = "cat /proc/sys/kernel/random/boot_id"
@@ -70,7 +70,7 @@ class Board:
     def __init__(
         self,
         transport: Transport,
-        config: BoardConfig,
+        config: Config,
         record: Callable[[str, Any], None],
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
@@ -81,7 +81,7 @@ class Board:
         self._clock = clock
         self._sleep = sleep
         self._boot_ids: list[str] = []
-        record("bench.board", config.name)
+        record("bench.board", config.toml.board.name)
         self._connect()
         self._boot_id()
 
@@ -89,10 +89,10 @@ class Board:
         """Open a fresh connection and refuse it unless the board answers with its hostname."""
         self._transport.reconnect(timeout)
         live = self._checked("hostname").strip()
-        if live != self._config.hostname:
+        if live != self._config.identity.hostname:
             raise WrongBoard(
-                f"board {self._config.name!r} answers as hostname {live!r}, "
-                f"not the configured {self._config.hostname!r}; nothing else was sent"
+                f"board {self._config.toml.board.name!r} answers as hostname {live!r}, "
+                f"not the configured {self._config.identity.hostname!r}; nothing else was sent"
             )
 
     def _checked(self, cmd: str) -> str:
@@ -138,7 +138,7 @@ class Board:
         with contextlib.suppress(BenchFailure):  # the connection may drop as the board goes down
             self._transport.run("reboot")
         start = self._clock()
-        timeout = self._config.reboot_timeout
+        timeout = self._config.toml.board.reboot_timeout
         polling = Retrying(
             stop=lambda state: self._clock() - start >= timeout,
             wait=wait_fixed(self.POLL_INTERVAL),
@@ -149,7 +149,8 @@ class Board:
             polling(self._reconnected_boot_id, lambda: timeout - (self._clock() - start))
         except RetryError:
             raise BenchFailure(
-                f"board {self._config.name!r} showed no new boot id within {timeout:g} s of reboot"
+                f"board {self._config.toml.board.name!r} showed no new boot id "
+                f"within {timeout:g} s of reboot"
             ) from None
 
     def _reconnected_boot_id(self, time_left: Callable[[], float]) -> str:

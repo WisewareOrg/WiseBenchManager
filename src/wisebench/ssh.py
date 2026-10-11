@@ -13,15 +13,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import fabric
 import paramiko
-from fabric import Config, Connection
+from fabric import Connection
 from fabric.auth import OpenSSHAuthStrategy
 from invoke.exceptions import CommandTimedOut
 from paramiko.auth_strategy import AuthSource, NoneAuth
 from tenacity import RetryError, Retrying, retry_if_exception_type, stop_after_delay, wait_fixed
 
 from wisebench.board import Result
-from wisebench.config import BoardConfig
+from wisebench.config import Config
 from wisebench.errors import BenchFailure
 
 CONNECTION_ERRORS = (OSError, EOFError, paramiko.SSHException)
@@ -51,10 +52,10 @@ class FabricTransport:
     unless the call gives another limit.
     """
 
-    def __init__(self, config: BoardConfig) -> None:
+    def __init__(self, config: Config) -> None:
         # Authentication follows OpenSSH's order: each public key, then the `none` login.
-        settings = Config(overrides={"authentication": {"strategy_class": KeyThenNone}})
-        self._connection = Connection(host=config.address, config=settings)
+        settings = fabric.Config(overrides={"authentication": {"strategy_class": KeyThenNone}})
+        self._connection = Connection(host=config.identity.address, config=settings)
 
     def _open(self) -> Connection:
         if not self._connection.is_connected:

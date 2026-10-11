@@ -82,7 +82,7 @@ def test_a_missing_variable_is_an_error_naming_it(
     layer.makepyfile("def test_uses_board(board):\n    pass")
     result = run(layer)
     result.assert_outcomes(errors=1)
-    result.stdout.fnmatch_lines(["*BENCH_ADDRESS: Field required*"])
+    result.stdout.fnmatch_lines(["*BENCH_ADDRESS*", "*Field required*"])
 
 
 def test_record_carries_session_facts_and_board_state(layer: pytest.Pytester) -> None:

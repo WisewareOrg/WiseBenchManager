@@ -8,12 +8,12 @@ import fabric.tunnels
 import invoke.runners
 import paramiko
 import pytest
+from conftest import make_config
 from invoke.exceptions import CommandTimedOut
 from ssh_server import ScriptedSshServer
 
 import wisebench.ssh
 from wisebench.board import BOOT_ID, Board, Result, WrongBoard
-from wisebench.config import BoardConfig
 from wisebench.errors import BenchFailure
 from wisebench.ssh import FabricTransport, free_port
 
@@ -26,11 +26,11 @@ SCRIPT = {
 
 
 def transport_to(port: int, user: str = "") -> FabricTransport:
-    return FabricTransport(BoardConfig(f"{user}127.0.0.1:{port}", "bench-board", "bench", 60))
+    return FabricTransport(make_config(f"{user}127.0.0.1:{port}", "bench-board"))
 
 
 def board_at(server: ScriptedSshServer, hostname: str = "bench-board") -> Board:
-    config = BoardConfig(f"127.0.0.1:{server.port}", hostname, "bench", 60)
+    config = make_config(f"127.0.0.1:{server.port}", hostname)
     return Board(FabricTransport(config), config, lambda name, value: None, sleep=lambda s: None)
 
 
