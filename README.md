@@ -126,9 +126,3 @@ elapsed times, build progress, the test running now, the replay window's state a
 from the runner's own event stream. Replay recordings are made by hand with `bench record <set>`, the only
 time the proxy reaches a real upstream. Installing, the environment and tagging are in
 [`docs/operating.md`](docs/operating.md).
-
-## Status
-
-ADR 0001 rev 1 is the design. Implemented: `bench.toml`, the `board` fixture, the `tst` and `provenance`
-markers, the record and the event stream. The `ota` and `proxy` fixtures and the `bench` commands are not
-part of this version; each lands in its own small PR, proven on a real board before the next.
