@@ -1,15 +1,16 @@
-"""The run record: session facts, every test's outcome, and each requirement item's credit.
+"""The run's summary beside pytest's junit report: session facts and each requirement item's credit.
 
-No maintained tool fits because ADR 0001 rev 1 decision 5 fixes one flat JSON file per run
-plus an index line, the only JSON-per-run plugin (pytest-json-report) has had no release
-since 2022, junitxml writes XML, and the credit rule is this project's own.
+No maintained tool fits because the credit rule, which folds every test carrying an item into one
+status, is this project's own; the raw record is pytest's junit report.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,11 +40,9 @@ class TestRecord:
     nodeid: str
     marks: Marks
     outcome: str | None = None
-    properties: dict[str, Any] = field(default_factory=dict)
     bench_failed: bool = False
 
     def add(self, report: pytest.TestReport, bench_failure: bool = False) -> None:
-        self.properties = dict(report.user_properties)
         if bench_failure or (report.when != "call" and report.failed):
             self.bench_failed = True
             self.outcome = "error"
@@ -113,17 +112,27 @@ class Credit:
 
 
 class SessionRecord:
-    """Everything one pytest session learns, written as one flat JSON file and one index line."""
+    """One session's facts and test outcomes, summarised as `<started>.json` and an index line.
+
+    The raw record is pytest's junit report, `<started>.xml` unless `--junitxml` names another;
+    each fact set here is also passed to `report_property` (pytest's `record_testsuite_property`)
+    once the session hands it over.
+    """
 
     def __init__(self, result_dir: Path) -> None:
         self.result_dir = result_dir
         self.started = datetime.now(UTC)
         self.properties: dict[str, Any] = {}
         self.tests: dict[str, TestRecord] = {}
+        self.report_property: Callable[[str, Any], None] | None = None
+        self.stem = self.started.strftime("%Y%m%dT%H%M%S.%fZ")
+        self.report = result_dir / f"{self.stem}.xml"
 
     def set(self, name: str, value: Any) -> None:
-        """Record a session fact under its namespaced name."""
+        """Record a session fact under its namespaced name, in the summary and the junit report."""
         self.properties[name] = value
+        if self.report_property is not None:
+            self.report_property(name, value)
 
     def add(
         self, nodeid: str, marks: Marks, report: pytest.TestReport, bench_failure: bool = False
@@ -133,25 +142,24 @@ class SessionRecord:
         return test
 
     def write(self, exit_status: int) -> Path:
-        """Write `<started>.json` and append its line to `index.jsonl`; return the file written."""
+        """Write the summary and append its line to `index.jsonl`; return the summary's path."""
         self.properties.setdefault("bench.ota_ran", False)
         self.properties.setdefault("bench.booted_slot", None)
         self.properties.setdefault("bench.board_buildinfo", None)
         tests = list(self.tests.values())
-        credit = Credit(self.properties["bench.ota_ran"] is True, tests)
-        path = self.result_dir / f"{self.started.strftime('%Y%m%dT%H%M%S.%fZ')}.json"
-        document = {
+        path = self.result_dir / f"{self.stem}.json"
+        summary = {
             "started": self.started.isoformat().replace("+00:00", "Z"),
             "finished": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "exit_status": exit_status,
             "verdict": None,
+            "report": os.path.relpath(self.report, self.result_dir),
             **self.properties,
-            "items": credit.items(tests),
-            "tests": [self._test_entry(test, credit) for test in tests],
+            "items": Credit(self.properties["bench.ota_ran"] is True, tests).items(tests),
         }
-        path.write_text(json.dumps(document, indent=2, default=str) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
         index = {
-            "timestamp": document["started"],
+            "timestamp": summary["started"],
             "file": path.name,
             "runner_version": self.properties.get("bench.runner_version"),
             "verdict": None,
@@ -160,15 +168,3 @@ class SessionRecord:
         with (self.result_dir / INDEX).open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(index, default=str) + "\n")
         return path
-
-    @staticmethod
-    def _test_entry(test: TestRecord, credit: Credit) -> dict[str, Any]:
-        status, reason = credit.status(test)
-        return {
-            "nodeid": test.nodeid,
-            "outcome": test.outcome,
-            "properties": test.properties,
-            "item": test.marks.item_id,
-            "status": status,
-            "reason": reason,
-        }

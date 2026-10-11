@@ -111,6 +111,7 @@ def marks_of(item: pytest.Item) -> Marks:
     return Marks(item_id=item_id, recorded=recorded, provenance=provenance)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "tst(item_id, recorded=False): the requirement item this test discharges"
@@ -125,6 +126,10 @@ def pytest_configure(config: pytest.Config) -> None:
         raise BenchFailure("the runner's clone has uncommitted changes; refusing to run")
     bench = Bench(result_dir, importlib.metadata.version("wisebench"))
     config.stash[Bench.KEY] = bench
+    if config.option.xmlpath:
+        bench.record.report = Path(config.option.xmlpath)
+    else:
+        config.option.xmlpath = str(bench.record.report)
     config.pluginmanager.register(bench, "wisebench-session")
 
 
@@ -137,6 +142,15 @@ def pytest_pycollect_makeitem(
         if isinstance(item, pytest.Item):
             marks_of(item)
     return result
+
+
+@pytest.fixture(scope="session", autouse=True)
+def bench_report(request: pytest.FixtureRequest, record_testsuite_property: Any) -> None:
+    """Pass the session's facts, those set already and those to come, into the junit report."""
+    record = Bench.of(request.config).record
+    record.report_property = record_testsuite_property
+    for name, value in record.properties.items():
+        record_testsuite_property(name, value)
 
 
 @pytest.fixture(scope="session")

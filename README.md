@@ -95,27 +95,27 @@ learns it.
 
 A test carries the requirement item it discharges as a marker: `@pytest.mark.tst("TST011")`, or
 `@pytest.mark.tst("TST014", recorded=True)` for an item whose status is `recorded` rather than `passed`.
-The id is two or more capitals, then three or more digits; a malformed marker, an unknown keyword or a second `tst` on
-one test is a collection error. The layer marks its provenance test, the one asserting that
-`/etc/buildinfo` names the commit, with `@pytest.mark.provenance`. The record's `items` map gives each
-item one status, `passed`, `recorded` or `not credited` with the reason, and each test entry carries its
-own. A test is credited only when the `ota` fixture ran, the bench did not fail, and at least one
-provenance test ran and every one passed; an item is credited only when every test carrying it is, and
-those tests agree on `recorded`. The bench fails
-when a fixture raises, or when a test body raises the runner's `BenchFailure`; the record shows that
-test's outcome as `error`.
+The id is two or more capitals, then three or more digits; a malformed marker, an unknown keyword or a
+second `tst` on one test is a collection error. The layer marks its provenance test, the one asserting
+that `/etc/buildinfo` names the commit, with `@pytest.mark.provenance`. The summary's `items` map gives
+each item one status, `passed`, `recorded` or `not credited` with the reason. A test is credited only
+when the `ota` fixture ran, the bench did not fail, and at least one provenance test ran and every one
+passed; an item is credited only when every test carrying it is, and those tests agree on `recorded`.
+The bench fails when a fixture raises, or when a test body raises the runner's `BenchFailure`; that
+test then counts as an error.
 
 ## The record
 
-One flat JSON file per run, plus one line appended to a JSON-lines index for bulk processing: the ref
-and its commit, the runner's version (the tag the clone is at), the bundle hash, the booted slot before
-and after, the hash of any replay recording used, every test's outcome, the items discharged and the
-exact command line. Each per-test fact is recorded by the test that learns it, through pytest's
-`record_property`; each session fact is recorded by the runner directly to the session record. The file
-is written at session end, so a run that fails halfway still leaves everything up to that point. The
-runner records under `bench.*` and a layer under `layer.*`. A run that
-never requests `ota` records `bench.ota_ran = false` with the board's booted slot and `/etc/buildinfo`,
-and carries no verdict.
+The raw record of a run is pytest's own junit report (`--junitxml`, defaulted into the result directory):
+every test's outcome and the properties it recorded with `record_property`, and the session's facts,
+which the runner and its fixtures record with `record_testsuite_property`: the ref and its commit, the
+runner's version, the bundle hash, the booted slot before and after, the hash of any replay recording
+used. The runner records under `bench.*` and a layer under `layer.*`. Beside the report the runner writes
+one summary per run, and appends a line for it to a JSON-lines index for bulk processing: the runner's
+version, the exact command line, the session facts, the per-item credit map, the verdict and the
+report's path. Both are written at session end, so a run that fails halfway still leaves everything up
+to that point. A run that never requests `ota` records `bench.ota_ran = false` with the board's booted
+slot and `/etc/buildinfo`, and carries no verdict.
 
 ## Operating it
 

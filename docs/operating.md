@@ -56,8 +56,10 @@ test passes `timeout=`; a timeout or a lost connection is the bench's failure.
 
 In `BENCH_RESULT_DIR`:
 
-- `<UTC start time>.json` — one flat record per session: the `bench.*` session facts, the exit status,
-  the verdict, and every test's node id, outcome, recorded properties, item id and status.
+- `<UTC start time>.xml` — pytest's junit report: every test's outcome and `record_property` facts, and
+  the session's `record_testsuite_property` facts. `--junitxml` names another path instead.
+- `<UTC start time>.json` — the summary: the `bench.*` session facts, the exit status, the verdict, the
+  per-item credit map and the junit report's path.
 - `index.jsonl` — one line per session: start time, record file, runner version, verdict, outcome counts.
 - `events.jsonl` — one line per event (`session_start`, `test_start`, `test_end`, `record_written`), each
   with a UTC `ts`; the status view and the terminal read it.

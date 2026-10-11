@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 import pytest
 from conftest import VERSION, ScriptedSsh, ok, results
@@ -23,9 +24,11 @@ def record(layer: pytest.Pytester) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def entry_of(layer: pytest.Pytester, name: str) -> dict[str, Any]:
-    (test,) = [test for test in record(layer)["tests"] if test["nodeid"].endswith(name)]
-    return test
+def outcome_of(result: pytest.RunResult, name: str) -> str | None:
+    """The outcome the plugin folded for the test named `name` in an in-process run."""
+    config = result.reprec.getcall("pytest_sessionfinish").session.config
+    (test,) = [t for n, t in Bench.of(config).record.tests.items() if n.endswith(f"::{name}")]
+    return test.outcome
 
 
 def lines(path: Path) -> list[dict[str, Any]]:
@@ -59,13 +62,14 @@ def test_wrong_hostname_is_an_error_and_nothing_else_is_sent(
     assert written["bench.booted_slot"] is None
     assert written["bench.board_buildinfo"] is None
     assert "bench.boot_ids" not in written
-    assert [test["outcome"] for test in written["tests"]] == ["error", "error"]
+    assert [outcome_of(result, name) for name in ("test_one", "test_two")] == ["error", "error"]
 
 
 def test_a_failing_test_stays_a_failure(layer: pytest.Pytester) -> None:
     layer.makepyfile("def test_fails(board):\n    assert False")
-    run(layer).assert_outcomes(failed=1)
-    assert entry_of(layer, "test_fails")["outcome"] == "failed"
+    result = run(layer)
+    result.assert_outcomes(failed=1)
+    assert outcome_of(result, "test_fails") == "failed"
 
 
 def test_a_missing_variable_is_an_error_naming_it(
@@ -107,7 +111,7 @@ def test_record_without_a_board_has_no_board_state(
     assert ssh.calls == []
 
 
-def test_every_test_entry_has_its_outcome_properties_and_item(layer: pytest.Pytester) -> None:
+def test_each_test_s_outcome_and_item_are_read(layer: pytest.Pytester) -> None:
     layer.makepyfile(
         """
         import pytest
@@ -125,14 +129,11 @@ def test_every_test_entry_has_its_outcome_properties_and_item(layer: pytest.Pyte
             pass
         """
     )
-    run(layer).assert_outcomes(passed=2, skipped=1)
-    item = entry_of(layer, "test_item")
-    assert item["outcome"] == "passed"
-    assert item["properties"] == {"layer.page_state": {"cards": 3}, "bench.anything": 1}
-    assert item["item"] == "TST011"
-    plain = entry_of(layer, "test_plain")
-    assert (plain["item"], plain["status"], plain["reason"]) == (None, None, None)
-    assert entry_of(layer, "test_skipped")["outcome"] == "skipped"
+    result = run(layer)
+    result.assert_outcomes(passed=2, skipped=1)
+    outcomes = [outcome_of(result, name) for name in ("test_item", "test_plain", "test_skipped")]
+    assert outcomes == ["passed", "passed", "skipped"]
+    assert list(record(layer)["items"]) == ["TST011"]
 
 
 def test_without_ota_every_item_is_not_credited(layer: pytest.Pytester) -> None:
@@ -154,11 +155,7 @@ def test_without_ota_every_item_is_not_credited(layer: pytest.Pytester) -> None:
         """
     )
     run(layer).assert_outcomes(passed=3)
-    statuses = {
-        test["item"]: (test["status"], test["reason"])
-        for test in record(layer)["tests"]
-        if test["item"]
-    }
+    statuses = {item: (s["status"], s["reason"]) for item, s in record(layer)["items"].items()}
     assert statuses == {
         "TST011": ("not credited", "ota did not run"),
         "TST014": ("not credited", "ota did not run"),
@@ -211,7 +208,7 @@ def test_record_is_written_when_collection_errors(layer: pytest.Pytester) -> Non
     assert result.ret == pytest.ExitCode.INTERRUPTED
     written = record(layer)
     assert written["exit_status"] == pytest.ExitCode.INTERRUPTED
-    assert written["tests"] == []
+    assert written["items"] == {}
 
 
 def test_result_dir_defaults_to_records_under_the_start_directory(
@@ -238,8 +235,9 @@ def test_fixture_error_is_an_error_outcome(layer: pytest.Pytester) -> None:
             pass
         """
     )
-    run(layer).assert_outcomes(errors=1)
-    assert entry_of(layer, "test_a")["outcome"] == "error"
+    result = run(layer)
+    result.assert_outcomes(errors=1)
+    assert outcome_of(result, "test_a") == "error"
 
 
 @pytest.mark.parametrize(
@@ -300,7 +298,7 @@ def test_well_formed_markers_collect_on_classes_and_parametrized_tests(
         """
     )
     run(layer).assert_outcomes(passed=4)
-    items = {test["item"] for test in record(layer)["tests"]}
+    items = set(record(layer)["items"])
     assert items == {"TST014", "SRSA1010", "SR001"}
 
 
@@ -334,8 +332,9 @@ def test_fixture_error_in_teardown_is_an_error_outcome(layer: pytest.Pytester) -
             pass
         """
     )
-    run(layer).assert_outcomes(passed=1, errors=1)
-    assert entry_of(layer, "test_a")["outcome"] == "error"
+    result = run(layer)
+    result.assert_outcomes(passed=1, errors=1)
+    assert outcome_of(result, "test_a") == "error"
 
 
 STUB_OTA = """
@@ -423,9 +422,10 @@ def test_xfail_outcomes_are_named(layer: pytest.Pytester) -> None:
             pass
         """
     )
-    run(layer).assert_outcomes(xfailed=1, xpassed=1)
-    assert entry_of(layer, "test_expected")["outcome"] == "xfailed"
-    assert entry_of(layer, "test_unexpected")["outcome"] == "xpassed"
+    result = run(layer)
+    result.assert_outcomes(xfailed=1, xpassed=1)
+    assert outcome_of(result, "test_expected") == "xfailed"
+    assert outcome_of(result, "test_unexpected") == "xpassed"
 
 
 def test_bench_tree_names_the_checkout_holding_bench_toml(
@@ -473,11 +473,7 @@ def test_with_ota_and_provenance_passed_items_are_credited(layer: pytest.Pyteste
         """
     )
     run(layer).assert_outcomes(passed=3)
-    statuses = {
-        test["item"]: (test["status"], test["reason"])
-        for test in record(layer)["tests"]
-        if test["item"]
-    }
+    statuses = {item: (s["status"], s["reason"]) for item, s in record(layer)["items"].items()}
     assert statuses == {"TST011": ("passed", None), "TST014": ("recorded", None)}
 
 
@@ -502,10 +498,13 @@ def test_a_bench_failure_in_a_test_body_is_the_bench_s_and_credits_nothing(
             raise BenchFailure("the board went away")
         """
     )
-    run(layer).assert_outcomes(passed=2, failed=1)
-    assert entry_of(layer, "test_bench_breaks")["outcome"] == "error"
-    passes = entry_of(layer, "test_passes")
-    assert (passes["status"], passes["reason"]) == ("not credited", "the bench failed")
+    result = run(layer)
+    result.assert_outcomes(passed=2, failed=1)
+    assert outcome_of(result, "test_bench_breaks") == "error"
+    assert record(layer)["items"]["TST011"] == {
+        "status": "not credited",
+        "reason": "the bench failed",
+    }
 
 
 def test_an_ordinary_failure_in_a_test_body_stays_the_candidate_s(layer: pytest.Pytester) -> None:
@@ -526,9 +525,10 @@ def test_an_ordinary_failure_in_a_test_body_stays_the_candidate_s(layer: pytest.
             raise OSError("the candidate broke")
         """
     )
-    run(layer).assert_outcomes(passed=2, failed=1)
-    assert entry_of(layer, "test_candidate_fails")["outcome"] == "failed"
-    assert entry_of(layer, "test_passes")["status"] == "passed"
+    result = run(layer)
+    result.assert_outcomes(passed=2, failed=1)
+    assert outcome_of(result, "test_candidate_fails") == "failed"
+    assert record(layer)["items"]["TST011"]["status"] == "passed"
 
 
 def test_the_record_lists_each_item_once_with_one_status(layer: pytest.Pytester) -> None:
@@ -556,3 +556,23 @@ def test_the_record_lists_each_item_once_with_one_status(layer: pytest.Pytester)
         "TST011": {"status": "not credited", "reason": "test failed"},
         "TST014": {"status": "recorded", "reason": None},
     }
+
+
+def test_the_junit_report_holds_the_session_facts(layer: pytest.Pytester) -> None:
+    layer.makepyfile("def test_uses_board(board):\n    pass")
+    run(layer).assert_outcomes(passed=1)
+    written = record(layer)
+    suite = ElementTree.parse(results(layer) / written["report"]).getroot().find("testsuite")
+    facts = {p.get("name"): p.get("value") for p in suite.iter("property")}
+    assert facts["bench.runner_version"] == VERSION
+    assert facts["bench.board"] == "bench"
+    assert facts["bench.boot_ids"] == "['one']"
+    assert facts["bench.booted_slot"] == "A"
+
+
+def test_a_junit_path_given_on_the_command_line_is_the_report(layer: pytest.Pytester) -> None:
+    layer.makepyfile("def test_a():\n    pass")
+    layer.runpytest(f"--junitxml={layer.path / 'mine.xml'}").assert_outcomes(passed=1)
+    assert (layer.path / "mine.xml").is_file()
+    assert record(layer)["report"] == "../mine.xml"
+    assert not list(results(layer).glob("*.xml"))
