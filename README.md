@@ -48,7 +48,10 @@ schema = 1
 
 [board]
 address  = "${BENCH_ADDRESS}"     # from the environment, never committed
-hostname = "${BENCH_HOSTNAME}"
+hostname = "${BENCH_HOSTNAME}"    # the board's live hostname must equal this before any command
+name     = "bench"                # optional, default "board": the non-identifying label the record carries
+user     = "root"                 # optional, default "root": the ssh user
+reboot_timeout = 180              # optional, default 180: seconds a reboot has to show a new boot id
 
 [bundle]
 path = "build/.../update-bundle-<machine>.raucb"
@@ -65,6 +68,9 @@ target_suite = "tests/target_suite"
 [github]
 check_name = "bench"
 ```
+
+`schema` must be 1; any other value is refused. Every string has `${VAR}` replaced from the environment,
+and a variable that is not set is the bench's failure, never a default.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_TARGET` and `BENCH_RESULT_DIR` in its environment; its exit status is pass or fail and its output
