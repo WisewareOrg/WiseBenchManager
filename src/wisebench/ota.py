@@ -169,7 +169,7 @@ def recover(driver, marker):
         _run(driver, f"rauc status mark-bad {candidate}")
         driver.run("reboot")
         _wait_for_ssh(driver)
-    marker.unlink()
+    clear_marker(marker)
 
 
 def write_marker(marker, slot):

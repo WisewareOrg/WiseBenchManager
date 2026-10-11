@@ -24,9 +24,10 @@ whatever a layer's own tests recorded against them, and the exact command line.
 
 ## The job
 
-1. `precondition` hook — the bench is in a known state. If a marker from a run that died mid-OTA is
-   present, the runner asks RAUC which slot booted, marks the candidate bad and reboots if it is not the
-   recorded good slot, verifies, clears the marker and continues.
+1. `precondition` hook — the bench is in a known state. `ota.recover(driver, marker)` checks the
+   marker `ota.write_marker` wrote before an install that died mid-OTA: if the board is still
+   booted on the candidate slot the marker names, it marks that slot bad and reboots off it;
+   either way it removes the marker (`ota.clear_marker`) before continuing.
 2. `build` and `bundle` hooks — the layer's own commands, run in the checkout of the ref under test.
 3. `host_suite` — pytest on the pipeline host against the built artefacts, before anything is installed.
 4. Install and boot — `ota.install(driver, bundle, destination)`: labgrid's `put`, `rauc install`,
