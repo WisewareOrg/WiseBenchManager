@@ -236,8 +236,8 @@ def test_a_forward_that_never_listens_is_a_bench_failure(
 def test_an_error_inside_a_forward_is_not_converted(server: ScriptedSshServer) -> None:
     transport = transport_to(server.port)
     transport.reconnect()
-    with pytest.raises(ZeroDivisionError), transport.forward(8080):
-        raise ZeroDivisionError
+    with pytest.raises(ConnectionResetError), transport.forward(8080):
+        raise ConnectionResetError
 
 
 def test_put_over_a_connection_without_sftp_is_a_bench_failure(
