@@ -46,6 +46,9 @@ class ScriptedSsh:
 
     An answer list is consumed in order and an exception is raised; `activations` scripts the
     failure, if any, of each activation in turn. `sha256sum` answers from the files put.
+
+    No maintained tool fits because labgrid ships no scripted driver; this replaces only the
+    SSHDriver methods that start ssh, so labgrid's own Target and activation still run.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
