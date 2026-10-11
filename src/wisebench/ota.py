@@ -1,10 +1,4 @@
-"""OTA install, rollback and mid-OTA recovery over labgrid's SSHDriver and rauc.
-
-The mid-OTA marker is a file at a caller-chosen path. Its content is the candidate slot's
-name. The caller constructs one `Ota` per run: `write_marker` writes the marker before
-`install`, `clear_marker` removes it after `rollback`, and `recover` reads it to detect a run
-that died with it still present.
-"""
+"""OTA install, rollback and mid-OTA recovery over labgrid's SSHDriver and rauc."""
 
 import hashlib
 import json
@@ -22,8 +16,10 @@ class OtaError(Exception):
 class Ota:
     """Install, rollback and mid-OTA recovery for one board, over one labgrid SSHDriver.
 
-    Holds the driver, the mid-OTA marker's path, and the ssh-wait bound. Calls the driver;
-    never re-exposes it.
+    Holds the driver, the mid-OTA marker's path, and the ssh-wait bound; calls the driver,
+    never re-exposing it. The marker's content is the candidate slot's name: `write_marker`
+    writes it before `install`, `clear_marker` removes it after `rollback`, and `recover`
+    reads it to detect a run that died with it still present.
     """
 
     def __init__(self, driver, marker, timeout=_WAIT_TIMEOUT, interval=_WAIT_INTERVAL):
@@ -34,9 +30,6 @@ class Ota:
             marker (pathlib.Path): Path to the mid-OTA marker file.
             timeout (float): Seconds to keep retrying an ssh reconnect before giving up.
             interval (float): Seconds to wait between ssh reconnect retries.
-
-        Returns:
-            None.
         """
         self._driver = driver
         self._marker = marker
@@ -63,18 +56,7 @@ class Ota:
         )
 
     def _wait_for_ssh(self):
-        """Reconnect and run a trivial command until ssh answers again.
-
-        Reconnecting re-establishes the SSH control master labgrid tears down on reboot
-        (`driver.target.deactivate`/`.activate`).
-
-        Returns:
-            None.
-
-        Raises:
-            Exception: The last exception raised by reconnecting or running, once the
-                bound timeout elapses without ssh answering.
-        """
+        """Reconnect and retry a trivial command until ssh answers again or the bound elapses."""
         for attempt in Retrying(
             stop=stop_after_delay(self._timeout),
             wait=wait_fixed(self._interval),
@@ -106,7 +88,7 @@ class Ota:
         _, stderr, returncode = self._driver.run(f"rauc install {destination}")
         if returncode != 0:
             raise OtaError(f"rauc install exited {returncode}: {stderr}")
-        self._driver.run("reboot")
+        self._driver.run("reboot")  # exit status is unreliable once the board goes down
         self._wait_for_ssh()
         return self._booted_slot(), sha256
 
@@ -126,42 +108,24 @@ class Ota:
         _, stderr, returncode = self._driver.run(f"rauc status mark-bad {slot}")
         if returncode != 0:
             raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
-        self._driver.run("reboot")
+        self._driver.run("reboot")  # exit status is unreliable once the board goes down
         self._wait_for_ssh()
         return self._booted_slot()
 
     def recover(self):
-        """Undo a run that died between `install` and `rollback`.
-
-        If the marker exists and the board is still booted on the slot it names, mark that
-        slot bad and reboot off it. Either way, remove the marker once the board is safe.
-
-        Returns:
-            None.
-
-        Raises:
-            OtaError: `rauc status mark-bad` or a slot-status read exited nonzero.
-            Exception: ssh did not answer again within the wait bound after rebooting.
-        """
+        """Undo a run that died between `install` and `rollback`, then clear the marker."""
         if not self._marker.exists():
             return
         candidate = self._marker.read_text().strip()
         if self._booted_slot() == candidate:
-            _, stderr, returncode = self._driver.run(f"rauc status mark-bad {candidate}")
-            if returncode != 0:
-                raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
-            self._driver.run("reboot")
-            self._wait_for_ssh()
+            self.rollback(candidate)
         self.clear_marker()
 
     def write_marker(self, slot):
-        """Write the mid-OTA marker file.
+        """Write `slot` to the marker file.
 
         Args:
-            slot (str): The candidate slot's name, written as the marker's content.
-
-        Returns:
-            None.
+            slot (str): The candidate slot's name.
 
         Raises:
             OSError: The marker file could not be written.
@@ -169,12 +133,5 @@ class Ota:
         self._marker.write_text(slot)
 
     def clear_marker(self):
-        """Remove the mid-OTA marker file, if present.
-
-        Returns:
-            None.
-
-        Raises:
-            OSError: The marker file exists but could not be removed.
-        """
+        """Remove the marker file, if present."""
         self._marker.unlink(missing_ok=True)

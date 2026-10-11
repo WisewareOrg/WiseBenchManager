@@ -110,10 +110,11 @@ def test_recover_marks_the_candidate_bad_when_it_is_still_booted(tmp_path):
     marker = tmp_path / "mid-ota"
     driver = FakeDriver(
         [
-            RAUC_STATUS_OK,  # _booted_slot: still on the candidate "rootfs.1"
-            ([], [], 0),  # rauc status mark-bad rootfs.1
-            ([], [], 0),  # reboot
-            ([], [], 0),  # _wait_for_ssh's probe
+            RAUC_STATUS_OK,  # recover's own _booted_slot: still on the candidate "rootfs.1"
+            ([], [], 0),  # rollback: rauc status mark-bad rootfs.1
+            ([], [], 0),  # rollback: reboot
+            ([], [], 0),  # rollback: _wait_for_ssh's probe
+            _rauc_status("rootfs.0", "rootfs.1"),  # rollback's own _booted_slot after reboot
         ]
     )
     bench = ota.Ota(driver, marker)
