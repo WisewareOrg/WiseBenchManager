@@ -95,9 +95,11 @@ A test carries the requirement item it discharges as a marker: `@pytest.mark.tst
 `@pytest.mark.tst("TST014", recorded=True)` for an item whose status is `recorded` rather than `passed`.
 The id is three capitals and three digits; a malformed marker, an unknown keyword or a second `tst` on
 one test is a collection error. The layer marks its provenance test, the one asserting that
-`/etc/buildinfo` names the commit, with `@pytest.mark.provenance`. Each item's status in the record is
-`passed`, `recorded` or `not credited` with the reason: an item is credited only when the `ota` fixture
-ran, the bench did not fail, and at least one provenance test ran and every one passed. The bench fails
+`/etc/buildinfo` names the commit, with `@pytest.mark.provenance`. The record's `items` map gives each
+item one status, `passed`, `recorded` or `not credited` with the reason, and each test entry carries its
+own. A test is credited only when the `ota` fixture ran, the bench did not fail, and at least one
+provenance test ran and every one passed; an item is credited only when every test carrying it is, and
+those tests agree on `recorded`. The bench fails
 when a fixture raises, or when a test body raises the runner's `BenchFailure`; the record shows that
 test's outcome as `error`.
 

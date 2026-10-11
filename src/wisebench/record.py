@@ -88,6 +88,24 @@ class Credit:
             return "not credited", reason
         return ("recorded" if test.marks.recorded else "passed"), None
 
+    def items(self, tests: list[TestRecord]) -> dict[str, dict[str, str | None]]:
+        """Each item's status: credited only when every test carrying it is, and alike."""
+        statuses: dict[str, list[tuple[str | None, str | None]]] = {}
+        for test in tests:
+            if test.marks.item_id is not None:
+                statuses.setdefault(test.marks.item_id, []).append(self.status(test))
+        return {item: self._item(results) for item, results in statuses.items()}
+
+    @staticmethod
+    def _item(results: list[tuple[str | None, str | None]]) -> dict[str, str | None]:
+        refused = [reason for status, reason in results if status == "not credited"]
+        if refused:
+            return {"status": "not credited", "reason": refused[0]}
+        kinds = {status for status, _ in results}
+        if len(kinds) > 1:
+            return {"status": "not credited", "reason": "its tests disagree on recorded"}
+        return {"status": kinds.pop(), "reason": None}
+
 
 class SessionRecord:
     """Everything one pytest session learns, written as one flat JSON file and one index line."""
@@ -123,6 +141,7 @@ class SessionRecord:
             "exit_status": exit_status,
             "verdict": None,
             **self.properties,
+            "items": credit.items(tests),
             "tests": [self._test_entry(test, credit) for test in tests],
         }
         path.write_text(json.dumps(document, indent=2, default=str) + "\n", encoding="utf-8")

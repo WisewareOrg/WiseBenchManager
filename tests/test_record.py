@@ -64,3 +64,27 @@ def test_an_item_whose_test_did_not_pass_is_not_credited(outcome: str) -> None:
 
 def test_a_test_without_an_item_has_no_status() -> None:
     assert status(item("passed")) == (None, None)
+
+
+def test_an_item_is_credited_when_every_test_carrying_it_is() -> None:
+    tests = [item("passed", "TST011"), item("passed", "TST011"), provenance()]
+    assert Credit(True, tests).items(tests) == {"TST011": {"status": "passed", "reason": None}}
+
+
+def test_one_failing_test_withholds_its_item() -> None:
+    tests = [item("passed", "TST011"), item("failed", "TST011"), provenance()]
+    assert Credit(True, tests).items(tests) == {
+        "TST011": {"status": "not credited", "reason": "test failed"}
+    }
+
+
+def test_recorded_items_and_untagged_tests() -> None:
+    tests = [item("passed", "TST014", recorded=True), item("passed"), provenance()]
+    assert Credit(True, tests).items(tests) == {"TST014": {"status": "recorded", "reason": None}}
+
+
+def test_tests_disagreeing_on_recorded_withhold_the_item() -> None:
+    tests = [item("passed", "TST011"), item("passed", "TST011", recorded=True), provenance()]
+    assert Credit(True, tests).items(tests) == {
+        "TST011": {"status": "not credited", "reason": "its tests disagree on recorded"}
+    }

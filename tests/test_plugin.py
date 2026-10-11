@@ -530,3 +530,30 @@ def test_an_ordinary_failure_in_a_test_body_stays_the_candidate_s(layer: pytest.
     run(layer).assert_outcomes(passed=2, failed=1)
     assert entry_of(layer, "test_candidate_fails")["outcome"] == "failed"
     assert entry_of(layer, "test_passes")["status"] == "passed"
+
+
+def test_the_record_lists_each_item_once_with_one_status(layer: pytest.Pytester) -> None:
+    with_stub_ota(layer)
+    layer.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.provenance
+        def test_provenance(ota):
+            pass
+
+        @pytest.mark.tst("TST011")
+        @pytest.mark.parametrize("case", [1, 2])
+        def test_item(ota, case):
+            assert case == 1
+
+        @pytest.mark.tst("TST014", recorded=True)
+        def test_records(ota):
+            pass
+        """
+    )
+    run(layer).assert_outcomes(passed=3, failed=1)
+    assert record(layer)["items"] == {
+        "TST011": {"status": "not credited", "reason": "test failed"},
+        "TST014": {"status": "recorded", "reason": None},
+    }
