@@ -41,6 +41,14 @@ def described(stdout: str, returncode: int = 0, stderr: str = "") -> Any:
 
 
 @pytest.fixture(autouse=True)
+def isolated_home(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HOME is a temporary directory in every test, so none reaches the real ~/.ssh."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
+
+
+@pytest.fixture(autouse=True)
 def clean_clone(monkeypatch: pytest.MonkeyPatch) -> None:
     """The runner's clone reads as clean at a known version."""
     monkeypatch.setattr(wisebench.version, "run", described(VERSION + "\n"))
