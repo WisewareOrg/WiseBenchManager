@@ -70,6 +70,8 @@ class Ota:
     def install(self, bundle, destination):
         """Put a bundle on the board, install it with rauc, and reboot into it.
 
+        `reboot`'s own exit status is not checked: it is unreliable once the board goes down.
+
         Args:
             bundle (str | os.PathLike): Path to the local `.raucb` bundle file.
             destination (str): Path on the board to copy the bundle to before installing it.
@@ -88,12 +90,14 @@ class Ota:
         _, stderr, returncode = self._driver.run(f"rauc install {destination}")
         if returncode != 0:
             raise OtaError(f"rauc install exited {returncode}: {stderr}")
-        self._driver.run("reboot")  # exit status is unreliable once the board goes down
+        self._driver.run("reboot")
         self._wait_for_ssh()
         return self._booted_slot(), sha256
 
     def rollback(self, slot):
         """Mark a slot bad and reboot off it.
+
+        `reboot`'s own exit status is not checked: it is unreliable once the board goes down.
 
         Args:
             slot (str): The slot's name (e.g. `rootfs.0`) to mark bad.
@@ -108,7 +112,7 @@ class Ota:
         _, stderr, returncode = self._driver.run(f"rauc status mark-bad {slot}")
         if returncode != 0:
             raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
-        self._driver.run("reboot")  # exit status is unreliable once the board goes down
+        self._driver.run("reboot")
         self._wait_for_ssh()
         return self._booted_slot()
 
