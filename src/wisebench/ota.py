@@ -56,7 +56,18 @@ class Ota:
         )
 
     def _wait_for_ssh(self):
-        """Reconnect and retry a trivial command until ssh answers again or the bound elapses."""
+        """Reconnect and retry a trivial command until ssh answers again or the bound elapses.
+
+        Reconnecting re-establishes the SSH control master labgrid tears down on reboot
+        (`driver.target.deactivate`/`.activate`); that alone only proves the master
+        authenticated, not that a session is usable, since the keepalive is a separate,
+        unchecked subprocess and every real command gates on it -- so each retry also runs a
+        trivial command (`true`) as the actual proof.
+
+        Raises:
+            Exception: The last exception raised by reconnecting or running, once the bound
+                timeout elapses without ssh answering.
+        """
         for attempt in Retrying(
             stop=stop_after_delay(self._timeout),
             wait=wait_fixed(self._interval),
@@ -117,7 +128,13 @@ class Ota:
         return self._booted_slot()
 
     def recover(self):
-        """Undo a run that died between `install` and `rollback`, then clear the marker."""
+        """Undo a run that died between `install` and `rollback`, then clear the marker.
+
+        Raises:
+            OtaError: The slot-status read, or `rollback`'s own mark-bad, exited nonzero.
+            Exception: ssh did not answer again within the wait bound after rebooting.
+            OSError: The marker file exists but could not be removed.
+        """
         if not self._marker.exists():
             return
         candidate = self._marker.read_text().strip()
@@ -137,5 +154,9 @@ class Ota:
         self._marker.write_text(slot)
 
     def clear_marker(self):
-        """Remove the marker file, if present."""
+        """Remove the marker file, if present.
+
+        Raises:
+            OSError: The marker file exists but could not be removed.
+        """
         self._marker.unlink(missing_ok=True)
