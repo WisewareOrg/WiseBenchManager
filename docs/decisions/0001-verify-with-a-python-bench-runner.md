@@ -36,6 +36,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 - **`uv tool install` / pipx.** Not needed: the host clones the repository and runs it at a tag; the record names the tag.
 
 8. The operator's view is `bench status --watch`, about 150 lines on a maintained terminal library reading the runner's own event stream, keeping the functionality of the existing TUI and no more.
+9. Provenance is structural, not recorded on trust: `bench test <ref>` has no way to skip the build or supply an artefact. It resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what it built, and the first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. A run therefore cannot test something it did not build from a ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
 
 ## Consequences
 
@@ -44,3 +45,4 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 - Requirement items point at pytest functions; the record names the items discharged, the image commit, the dirty flag, the set hash and the runner version.
 - The merge queue is gated on one physical board, so merges serialise at a job's length; this is accepted.
 - Reopened if a second board, power control or a serial console arrives (labgrid becomes worth adopting; the tests' shape does not change), or if the organisation's CI policy changes what may run on the build host.
+- An investigation's run is as traceable as a gate's: same command path, same record, no bypass.
