@@ -5,8 +5,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import fabric.tunnels
+import invoke.runners
 import paramiko
 import pytest
+from invoke.exceptions import CommandTimedOut
 from ssh_server import ScriptedSshServer
 
 import wisebench.ssh
@@ -267,3 +269,17 @@ def test_a_command_without_a_limit_gets_the_default_timeout(
     transport.run("uname -s")
     transport.run("uname -s", timeout=600)
     assert limits == [120.0, 600]
+
+
+def test_fabric_s_command_timeout_is_a_bench_failure(
+    server: ScriptedSshServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transport = transport_to(server.port)
+    transport.reconnect()
+
+    def timed_out(self, command, **kwargs):
+        raise CommandTimedOut(invoke.runners.Result(command=command), timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(type(transport._connection), "run", timed_out)
+    with pytest.raises(BenchFailure, match="'uname -s' on the board timed out after 120 s"):
+        transport.run("uname -s")
