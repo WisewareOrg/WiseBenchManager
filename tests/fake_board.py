@@ -7,6 +7,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 from wisebench.board import Result
 from wisebench.errors import BenchFailure
 
@@ -93,3 +95,27 @@ class FakeClock:
 
     def sleep(self, seconds: float) -> None:
         self.now += seconds
+
+
+TRANSPORT = pytest.StashKey[FakeTransport]()
+
+LAYER_CONFTEST = """
+import pytest
+
+from fake_board import TRANSPORT
+
+
+@pytest.fixture(scope="session")
+def bench_transport(request):
+    return request.config.stash[TRANSPORT]
+"""
+
+
+class FakeBoardPlugin:
+    """Puts the given fake where the inner run's conftest hands it out as the transport."""
+
+    def __init__(self, transport: FakeTransport) -> None:
+        self.transport = transport
+
+    def pytest_configure(self, config: pytest.Config) -> None:
+        config.stash[TRANSPORT] = self.transport
