@@ -8,13 +8,14 @@ from conftest import VERSION, results
 from fake_board import FakeBoardPlugin, FakeTransport, ok
 
 import wisebench.version
-from wisebench.board import BUILDINFO, RAUC_STATUS
+from wisebench.board import BOOT_ID, BUILDINFO, RAUC_STATUS
 from wisebench.errors import BenchFailure
 from wisebench.plugin import Bench, marks_of
 from wisebench.record import Marks
 
 BOARD = {
     "hostname": ok("bench-board\n"),
+    BOOT_ID: ok("one\n"),
     RAUC_STATUS: ok('{"compatible": "test", "booted": "A"}'),
     BUILDINFO: ok("DISTRO = test\n"),
 }
@@ -44,7 +45,7 @@ def test_board_fixture_runs_after_the_hostname_check(layer: pytest.Pytester) -> 
     transport = FakeTransport({**BOARD, "uname": ok("Linux\n")})
     layer.makepyfile("def test_uname(board):\n    assert board.run('uname').stdout == 'Linux\\n'")
     run(layer, transport).assert_outcomes(passed=1)
-    assert transport.commands() == ["hostname", "uname", RAUC_STATUS, BUILDINFO]
+    assert transport.commands() == ["hostname", BOOT_ID, "uname", RAUC_STATUS, BUILDINFO]
 
 
 def test_wrong_hostname_is_an_error_and_nothing_else_is_sent(
@@ -59,7 +60,7 @@ def test_wrong_hostname_is_an_error_and_nothing_else_is_sent(
     result = run(layer, transport)
     result.assert_outcomes(errors=2)
     result.stdout.fnmatch_lines(["*answers as hostname 'bench-board'*nothing else was sent*"])
-    assert transport.calls == [("run", "hostname")]
+    assert transport.calls == [("reconnect", "default"), ("run", "hostname")]
     written = record(layer)
     assert written["bench.board"] == "bench"
     assert written["bench.booted_slot"] is None
@@ -360,7 +361,7 @@ def test_when_ota_ran_the_board_state_is_not_read_at_session_end(layer: pytest.P
     transport = FakeTransport(BOARD)
     layer.makepyfile("def test_a(ota):\n    pass")
     run(layer, transport).assert_outcomes(passed=1)
-    assert transport.commands() == ["hostname"]
+    assert transport.commands() == ["hostname", BOOT_ID]
     written = record(layer)
     assert written["bench.ota_ran"] is True
     assert written["bench.booted_slot"] is None

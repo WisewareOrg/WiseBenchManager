@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 
 import paramiko
 
@@ -37,8 +38,15 @@ class _Session(paramiko.ServerInterface):
         return True
 
 
+Answer = tuple[str, int | None] | None
+
+
 class ScriptedSshServer:
     """Answers each command from `script` (stdout, exit) and logs it.
+
+    An answer list is consumed per request, its last answer repeating; `None` never answers, and
+    an exit of `None` closes the channel without an exit status.
+    After a command in `drop_after` is answered, the connection is closed.
 
     `accepts` names the auth methods that succeed: `publickey` (any key) and `none`. Every
     attempt is logged in `attempts` as `(method, succeeded)`, and every user name in `usernames`.
@@ -46,9 +54,13 @@ class ScriptedSshServer:
     """
 
     def __init__(
-        self, script: dict[str, tuple[str, int]], accepts: frozenset[str] = frozenset({"publickey"})
+        self,
+        script: dict[str, Answer | list[Answer]],
+        accepts: frozenset[str] = frozenset({"publickey"}),
+        drop_after: frozenset[str] = frozenset(),
     ) -> None:
         self.script = script
+        self.drop_after = drop_after
         self.accepts = accepts
         self.commands: list[str] = []
         self.attempts: list[tuple[str, bool]] = []
@@ -72,10 +84,17 @@ class ScriptedSshServer:
             threading.Thread(target=self._tunnel, args=(transport, session), daemon=True).start()
 
     def _tunnel(self, transport: paramiko.Transport, session: _Session) -> None:
-        """Echo every byte a forwarded channel sends back down it."""
+        """Echo every byte a forwarded channel sends back down it.
+
+        Every accepted channel is kept, since paramiko closes a channel that is collected.
+        """
+        accepted: list[paramiko.Channel] = []
         while transport.is_active():
             channel = transport.accept(1)
-            if channel is not None and channel.get_id() in session.tunnels:
+            if channel is None:
+                continue
+            accepted.append(channel)
+            if channel.get_id() in session.tunnels:
                 threading.Thread(target=self._echo, args=(channel,), daemon=True).start()
 
     @staticmethod
@@ -92,10 +111,21 @@ class ScriptedSshServer:
 
     def answer(self, channel: paramiko.Channel, command: str) -> None:
         self.commands.append(command)
-        stdout, status = self.script.get(command, ("", 127))
+        answer = self.script.get(command, ("", 127))
+        if isinstance(answer, list):
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
+        if answer is None:
+            return
+        stdout, status = answer
         channel.sendall(stdout.encode())
+        if status is None:
+            time.sleep(0.2)  # let the exec reply reach the client before the channel closes
+            channel.close()
+            return
         channel.send_exit_status(status)
         channel.shutdown_write()
+        if command in self.drop_after:
+            channel.get_transport().close()
 
     def close(self) -> None:
         self._listener.close()

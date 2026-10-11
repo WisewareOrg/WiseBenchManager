@@ -7,11 +7,13 @@ import hashlib
 import json
 import shlex
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+from tenacity import RetryError, Retrying, retry_if_exception, retry_if_result, wait_fixed
 
 from wisebench.config import BoardConfig
 from wisebench.errors import BenchFailure
@@ -28,10 +30,17 @@ class Result:
     exit: int
 
 
-class Transport(Protocol):
-    """How the board is reached; a connection failure raises `BenchFailure`."""
+class WrongBoard(BenchFailure):
+    """The address answered with a hostname other than the configured one."""
 
-    def run(self, cmd: str) -> Result: ...
+
+class Transport(Protocol):
+    """How the board is reached; a connection failure raises `BenchFailure`.
+
+    `reconnect` is the only way a connection opens; any other call on a closed one raises.
+    """
+
+    def run(self, cmd: str, timeout: float | None = None) -> Result: ...
 
     def put(self, local: Path, remote: str) -> None: ...
 
@@ -39,15 +48,16 @@ class Transport(Protocol):
 
     def forward(self, port: int) -> AbstractContextManager[int]: ...
 
-    def reconnect(self, timeout: float) -> None: ...
+    def reconnect(self, timeout: float | None = None) -> None: ...
 
     def close(self) -> None: ...
 
 
 class Board:
-    """The configured board, its identity proven before any other command is sent.
+    """The configured board, its hostname checked on every connection before any other command.
 
-    `record` receives each fact the board learns: `bench.board` and `bench.boot_ids`.
+    `record` receives each fact the board learns: `bench.board` and `bench.boot_ids`, the boot id
+    read on connecting and every one seen since.
     """
 
     POLL_INTERVAL = 5.0
@@ -67,12 +77,15 @@ class Board:
         self._sleep = sleep
         self._boot_ids: list[str] = []
         record("bench.board", config.name)
-        self._check_hostname()
+        self._connect()
+        self._boot_id()
 
-    def _check_hostname(self) -> None:
+    def _connect(self, timeout: float | None = None) -> None:
+        """Open a fresh connection and refuse it unless the board answers with its hostname."""
+        self._transport.reconnect(timeout)
         live = self._checked("hostname").strip()
         if live != self._config.hostname:
-            raise BenchFailure(
+            raise WrongBoard(
                 f"board {self._config.name!r} answers as hostname {live!r}, "
                 f"not the configured {self._config.hostname!r}; nothing else was sent"
             )
@@ -85,9 +98,12 @@ class Board:
             )
         return result.stdout
 
-    def run(self, cmd: str) -> Result:
-        """Run `cmd` on the board; a non-zero exit is returned, not raised."""
-        return self._transport.run(cmd)
+    def run(self, cmd: str, timeout: float | None = None) -> Result:
+        """Run `cmd` on the board; a non-zero exit is returned, not raised.
+
+        `timeout` overrides the transport's default for a long command; expiry raises.
+        """
+        return self._transport.run(cmd, timeout)
 
     def put(self, local: Path, remote: str) -> None:
         """Copy `local` to `remote`, then compare the board's sha256 of it with the local one."""
@@ -109,23 +125,31 @@ class Board:
         return self._transport.forward(port)
 
     def reboot(self) -> None:
-        """Reboot and return once the board answers with a new boot id within the timeout."""
+        """Reboot and return once the board answers, as itself, with a new boot id in time.
+
+        Each attempt reconnects and re-checks the hostname; a wrong hostname stops the polling.
+        """
         before = self._boot_id()
         with contextlib.suppress(BenchFailure):  # the connection may drop as the board goes down
             self._transport.run("reboot")
-        deadline = self._clock() + self._config.reboot_timeout
-        for remaining in self._polls(deadline):
-            try:
-                self._transport.reconnect(remaining)
-                after = self._boot_id()
-            except BenchFailure:
-                continue
-            if after != before:
-                return
-        raise BenchFailure(
-            f"board {self._config.name!r} showed no new boot id within "
-            f"{self._config.reboot_timeout:g} s of reboot"
+        start = self._clock()
+        timeout = self._config.reboot_timeout
+        polling = Retrying(
+            stop=lambda state: self._clock() - start >= timeout,
+            wait=wait_fixed(self.POLL_INTERVAL),
+            retry=retry_if_exception(_unreachable) | retry_if_result(lambda boot: boot == before),
+            sleep=self._sleep,
         )
+        try:
+            polling(self._reconnected_boot_id, lambda: timeout - (self._clock() - start))
+        except RetryError:
+            raise BenchFailure(
+                f"board {self._config.name!r} showed no new boot id within {timeout:g} s of reboot"
+            ) from None
+
+    def _reconnected_boot_id(self, time_left: Callable[[], float]) -> str:
+        self._connect(time_left())
+        return self._boot_id()
 
     def booted_slot(self) -> str:
         """The slot RAUC reports as booted."""
@@ -142,18 +166,14 @@ class Board:
         """The raw text of the board's /etc/buildinfo."""
         return self._checked(BUILDINFO)
 
-    def _polls(self, deadline: float) -> Iterator[float]:
-        """Yield the time left before `deadline`, once per poll interval, until it passes."""
-        while True:
-            self._sleep(self.POLL_INTERVAL)
-            remaining = deadline - self._clock()
-            if remaining <= 0:
-                return
-            yield remaining
-
     def _boot_id(self) -> str:
         boot_id = self._checked(BOOT_ID).strip()
         if boot_id not in self._boot_ids:
             self._boot_ids.append(boot_id)
             self._record("bench.boot_ids", list(self._boot_ids))
         return boot_id
+
+
+def _unreachable(error: BaseException) -> bool:
+    """A transport failure, worth another attempt; a wrong board is not."""
+    return isinstance(error, BenchFailure) and not isinstance(error, WrongBoard)

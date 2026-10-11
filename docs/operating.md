@@ -45,6 +45,11 @@ one unset is the bench's failure. ssh authentication is the host
 user's own: the keys `ssh` would offer, from `~/.ssh/config`, the agent and `~/.ssh/id_*`.
 Authentication follows OpenSSH's order: key, then none. The board's identity is the hostname check;
 host keys are not pinned, because a reflash changes them, and `known_hosts` is neither read nor written.
+Every connection the runner opens, including each one while it waits out a reboot, is checked against
+`BENCH_HOSTNAME` before any other command, and a connection the board closed is never reopened behind
+that check. A command on the board times out after 120 s unless the test passes `timeout=`, and the
+connection sends an ssh keepalive every 15 s; a timeout, like a dropped connection, is the bench's
+failure.
 
 ## What a run writes
 

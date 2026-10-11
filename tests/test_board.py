@@ -2,9 +2,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fake_board import FakeClock, FakeTransport, UnexpectedCall, ok
+from fake_board import Dropped, FakeClock, FakeTransport, UnexpectedCall, ok
 
-from wisebench.board import BOOT_ID, BUILDINFO, RAUC_STATUS, Board, Result
+from wisebench.board import BOOT_ID, BUILDINFO, RAUC_STATUS, Board, Result, WrongBoard
 from wisebench.config import BoardConfig
 from wisebench.errors import BenchFailure
 
@@ -23,30 +23,48 @@ def connect(transport: FakeTransport, clock: FakeClock | None = None) -> tuple[B
     return board, recorded
 
 
-def fake(**script: Any) -> FakeTransport:
-    return FakeTransport({"hostname": ok("bench-board\n"), **script})
+def fake(reconnects: list[Exception | None] | None = None, **script: Any) -> FakeTransport:
+    return FakeTransport(
+        {"hostname": ok("bench-board\n"), BOOT_ID: ok("one\n"), **script}, reconnects
+    )
 
 
-def test_hostname_is_the_first_command_and_the_name_is_recorded() -> None:
+def every_connection_is_checked_first(transport: FakeTransport) -> bool:
+    """After each successful reconnect, the next call is `hostname`."""
+    calls = transport.calls
+    return all(
+        calls[index + 1] == ("run", "hostname")
+        for index, call in enumerate(calls)
+        if call[0] == "reconnect" and index + 1 < len(calls) and calls[index + 1][0] == "run"
+    )
+
+
+def test_connecting_checks_the_hostname_then_reads_the_boot_id() -> None:
     transport = fake()
-    board, recorded = connect(transport)
-    assert transport.commands() == ["hostname"]
-    assert recorded == {"bench.board": "bench"}
-    assert isinstance(board, Board)
+    _, recorded = connect(transport)
+    assert transport.calls == [("reconnect", "default"), ("run", "hostname"), ("run", BOOT_ID)]
+    assert recorded == {"bench.board": "bench", "bench.boot_ids": ["one"]}
 
 
 def test_wrong_hostname_is_refused_and_nothing_else_is_sent() -> None:
     transport = FakeTransport({"hostname": ok("someone-else\n")})
-    with pytest.raises(BenchFailure, match="answers as hostname 'someone-else'"):
+    with pytest.raises(WrongBoard, match="answers as hostname 'someone-else'"):
         connect(transport)
-    assert transport.calls == [("run", "hostname")]
+    assert transport.calls == [("reconnect", "default"), ("run", "hostname")]
 
 
 def test_failing_hostname_command_is_refused() -> None:
     transport = FakeTransport({"hostname": Result("", "denied", 1)})
     with pytest.raises(BenchFailure, match="exited 1: denied"):
         connect(transport)
-    assert transport.calls == [("run", "hostname")]
+    assert transport.calls == [("reconnect", "default"), ("run", "hostname")]
+
+
+def test_an_unreachable_board_is_refused_before_any_command() -> None:
+    transport = fake(reconnects=[BenchFailure("ssh to the board failed")])
+    with pytest.raises(BenchFailure, match="ssh to the board failed"):
+        connect(transport)
+    assert transport.commands() == []
 
 
 def test_run_returns_output_and_a_failing_exit_without_raising() -> None:
@@ -55,13 +73,21 @@ def test_run_returns_output_and_a_failing_exit_without_raising() -> None:
     assert board.run("false").exit == 1
 
 
+def test_run_passes_a_timeout_override_to_the_transport() -> None:
+    transport = fake(**{"long": ok()})
+    board, _ = connect(transport)
+    board.run("long", timeout=600)
+    board.run("long")
+    assert transport.timeouts[-2:] == [600, None]
+
+
 def test_put_checks_the_hash_of_what_arrived(tmp_path: Path) -> None:
     local = tmp_path / "bundle"
     local.write_bytes(b"payload")
     transport = fake()
     board, _ = connect(transport)
     board.put(local, "/data/bundle")
-    assert transport.calls[1:] == [
+    assert transport.calls[3:] == [
         ("put", str(local), "/data/bundle"),
         ("run", "sha256sum /data/bundle"),
     ]
@@ -108,44 +134,64 @@ def test_forward_gives_the_bound_local_port() -> None:
     assert transport.forwarded == [8080]
 
 
-def test_reboot_waits_for_a_new_boot_id_and_records_both() -> None:
+def test_reboot_waits_for_a_new_boot_id_checking_the_hostname_on_each_connection() -> None:
     transport = fake(
-        **{BOOT_ID: [ok("old\n"), BenchFailure("down"), ok("old\n"), ok("new\n")], "reboot": ok()}
+        reconnects=[None, None, BenchFailure("down"), None],
+        **{BOOT_ID: [ok("one\n"), ok("one\n"), ok("one\n"), ok("two\n")], "reboot": ok()},
     )
     clock = FakeClock()
     board, recorded = connect(transport, clock)
     board.reboot()
-    assert transport.commands() == ["hostname", BOOT_ID, "reboot", BOOT_ID, BOOT_ID, BOOT_ID]
-    assert recorded["bench.boot_ids"] == ["old", "new"]
-    assert clock.now == 15
+    assert transport.commands() == [
+        "hostname", BOOT_ID, BOOT_ID, "reboot", "hostname", BOOT_ID, "hostname", BOOT_ID
+    ]  # fmt: skip
+    assert every_connection_is_checked_first(transport)
+    assert recorded["bench.boot_ids"] == ["one", "two"]
+    assert clock.now == 10
 
 
 def test_reboot_survives_the_connection_dropping_on_the_reboot_command() -> None:
-    transport = fake(**{BOOT_ID: [ok("old"), ok("new")], "reboot": BenchFailure("closed")})
+    transport = fake(**{BOOT_ID: [ok("one"), ok("one"), ok("two")], "reboot": Dropped("closed")})
     board, recorded = connect(transport)
     board.reboot()
-    assert recorded["bench.boot_ids"] == ["old", "new"]
+    assert recorded["bench.boot_ids"] == ["one", "two"]
 
 
 def test_reboot_reconnects_with_the_time_left() -> None:
-    transport = fake(**{BOOT_ID: [ok("old"), ok("new")], "reboot": ok()})
+    transport = fake(**{BOOT_ID: [ok("one"), ok("one"), ok("one"), ok("two")], "reboot": ok()})
     board, _ = connect(transport)
     board.reboot()
-    assert ("reconnect", "55") in transport.calls
+    assert [call[1] for call in transport.calls if call[0] == "reconnect"] == [
+        "default",
+        "60",
+        "55",
+    ]
+
+
+def test_reboot_onto_another_board_stops_at_once() -> None:
+    transport = fake(
+        **{"hostname": [ok("bench-board\n"), ok("other-board\n")], "reboot": ok()},
+    )
+    clock = FakeClock()
+    board, _ = connect(transport, clock)
+    with pytest.raises(WrongBoard, match="answers as hostname 'other-board'"):
+        board.reboot()
+    assert transport.calls[-2:] == [("reconnect", "60"), ("run", "hostname")]
+    assert clock.now == 0
 
 
 def test_reboot_with_an_unchanged_boot_id_fails_at_the_timeout() -> None:
-    transport = fake(**{BOOT_ID: ok("old"), "reboot": ok()})
+    transport = fake(**{"reboot": ok()})
     clock = FakeClock()
     board, recorded = connect(transport, clock)
     with pytest.raises(BenchFailure, match="no new boot id within 60 s"):
         board.reboot()
     assert clock.now == 60
-    assert recorded["bench.boot_ids"] == ["old"]
+    assert recorded["bench.boot_ids"] == ["one"]
 
 
 def test_reboot_with_an_unreachable_board_fails_at_the_timeout() -> None:
-    transport = fake(**{BOOT_ID: [ok("old")] + [BenchFailure("down")] * 20, "reboot": ok()})
+    transport = fake(reconnects=[None] + [BenchFailure("down")] * 20, **{"reboot": ok()})
     clock = FakeClock()
     board, _ = connect(transport, clock)
     with pytest.raises(BenchFailure, match="no new boot id"):
@@ -174,3 +220,12 @@ def test_the_fake_raises_on_an_unscripted_command() -> None:
     board, _ = connect(fake())
     with pytest.raises(UnexpectedCall):
         board.run("rm -rf /")
+
+
+def test_the_fake_refuses_a_closed_connection() -> None:
+    transport = fake(**{"reboot": Dropped("closed")})
+    board, _ = connect(transport)
+    with pytest.raises(Dropped):
+        board.run("reboot")
+    with pytest.raises(BenchFailure, match="only reconnect opens one"):
+        board.run("hostname")

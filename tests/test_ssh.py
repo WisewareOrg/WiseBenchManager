@@ -1,67 +1,41 @@
+import contextlib
 import socket
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import fabric.tunnels
 import paramiko
 import pytest
 from ssh_server import ScriptedSshServer
 
-from wisebench.board import BOOT_ID, Board, Result
+import wisebench.ssh
+from wisebench.board import BOOT_ID, Board, Result, WrongBoard
 from wisebench.config import BoardConfig
 from wisebench.errors import BenchFailure
 from wisebench.ssh import FabricTransport, free_port
+
+SCRIPT = {
+    "hostname": ("bench-board\n", 0),
+    BOOT_ID: ("one\n", 0),
+    "uname -s": ("Linux\n", 0),
+    "false": ("", 1),
+}
+
+
+def transport_to(port: int, user: str = "") -> FabricTransport:
+    return FabricTransport(BoardConfig(f"{user}127.0.0.1:{port}", "bench-board", "bench", 60))
+
+
+def board_at(server: ScriptedSshServer, hostname: str = "bench-board") -> Board:
+    config = BoardConfig(f"127.0.0.1:{server.port}", hostname, "bench", 60)
+    return Board(FabricTransport(config), config, lambda name, value: None, sleep=lambda s: None)
 
 
 @pytest.fixture
 def refused() -> FabricTransport:
     """A transport aimed at a loopback port nothing listens on."""
-    address = f"127.0.0.1:{free_port()}"
-    return FabricTransport(BoardConfig(address, "unused", "bench", 1))
-
-
-def test_free_port_can_be_bound() -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("localhost", free_port()))
-
-
-def test_run_on_an_unreachable_board_is_a_bench_failure(refused: FabricTransport) -> None:
-    with pytest.raises(BenchFailure, match="ssh to the board failed"):
-        refused.run("hostname")
-
-
-def test_reconnect_to_an_unreachable_board_is_a_bench_failure(refused: FabricTransport) -> None:
-    with pytest.raises(BenchFailure, match="ssh to the board failed"):
-        refused.reconnect(7.4)
-    assert refused._connection.connect_timeout == 7
-
-
-def test_put_to_an_unreachable_board_is_a_bench_failure(
-    refused: FabricTransport, tmp_path: Path
-) -> None:
-    (tmp_path / "file").write_text("x")
-    with pytest.raises(BenchFailure, match="put .* failed"):
-        refused.put(tmp_path / "file", "/tmp/file")
-
-
-def test_get_from_an_unreachable_board_is_a_bench_failure(
-    refused: FabricTransport, tmp_path: Path
-) -> None:
-    with pytest.raises(BenchFailure, match="get /tmp/file from the board failed"):
-        refused.get("/tmp/file", tmp_path / "file")
-
-
-def test_forward_to_an_unreachable_board_is_a_bench_failure(refused: FabricTransport) -> None:
-    with (
-        pytest.raises(BenchFailure, match="forward to port 8080 on the board failed"),
-        refused.forward(8080),
-    ):
-        pass
-
-
-def test_an_error_inside_a_forward_is_not_converted(server: ScriptedSshServer) -> None:
-    transport = FabricTransport(BoardConfig(f"127.0.0.1:{server.port}", "unused", "bench", 1))
-    with pytest.raises(ZeroDivisionError), transport.forward(8080):
-        raise ZeroDivisionError
+    return transport_to(free_port())
 
 
 @pytest.fixture
@@ -76,100 +50,220 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def server(home: Path) -> Iterator[ScriptedSshServer]:
-    """A scripted ssh server whose key differs from the one known_hosts holds for it."""
-    scripted = ScriptedSshServer(SCRIPT)
-    stale = paramiko.RSAKey.generate(2048).get_base64()
-    (home / "known_hosts").write_text(f"[127.0.0.1]:{scripted.port} ssh-rsa {stale}\n")
-    yield scripted
-    scripted.close()
+def serve(home: Path) -> Iterator:
+    """Start scripted ssh servers for one test and close them after it."""
+    servers: list[ScriptedSshServer] = []
 
+    def start(script: dict = SCRIPT, **options: object) -> ScriptedSshServer:
+        servers.append(ScriptedSshServer(dict(script), **options))
+        return servers[-1]
 
-SCRIPT = {"hostname": ("bench-board\n", 0), "uname -s": ("Linux\n", 0), "false": ("", 1)}
+    yield start
+    for server in servers:
+        server.close()
 
 
 @pytest.fixture
-def none_only(home: Path) -> Iterator[ScriptedSshServer]:
-    """A scripted ssh server that refuses every key and admits the `none` login."""
-    scripted = ScriptedSshServer(SCRIPT, accepts=frozenset({"none"}))
-    yield scripted
-    scripted.close()
+def server(serve) -> ScriptedSshServer:
+    """A scripted ssh server accepting any key; known_hosts holds a different key for it."""
+    scripted = serve()
+    stale = paramiko.RSAKey.generate(2048).get_base64()
+    (Path.home() / ".ssh" / "known_hosts").write_text(
+        f"[127.0.0.1]:{scripted.port} ssh-rsa {stale}\n"
+    )
+    return scripted
 
 
-def board_at(server: ScriptedSshServer, hostname: str) -> Board:
-    config = BoardConfig(f"127.0.0.1:{server.port}", hostname, "bench", 1)
-    return Board(FabricTransport(config), config, lambda name, value: None)
+def test_free_port_can_be_bound() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("localhost", free_port()))
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda t: t.run("hostname"),
+        lambda t: t.put(Path(__file__), "/tmp/file"),
+        lambda t: t.get("/tmp/file", Path("unused")),
+        lambda t: t.forward(8080).__enter__(),
+    ],
+    ids=["run", "put", "get", "forward"],
+)
+def test_nothing_opens_a_connection_but_reconnect(refused: FabricTransport, call) -> None:
+    with pytest.raises(BenchFailure, match="only reconnect opens one"):
+        call(refused)
+
+
+def test_reconnect_to_an_unreachable_board_is_a_bench_failure(refused: FabricTransport) -> None:
+    with pytest.raises(BenchFailure, match="ssh to the board failed"):
+        refused.reconnect(7.4)
+    assert refused._connection.connect_timeout == 7
 
 
 def test_a_changed_host_key_is_accepted_and_never_written(
     server: ScriptedSshServer, home: Path
 ) -> None:
     known_hosts = (home / "known_hosts").read_text()
-    board = board_at(server, "bench-board")
+    board = board_at(server)
     assert board.run("uname -s") == Result("Linux\n", "", 0)
     assert board.run("false").exit == 1
-    assert server.commands == ["hostname", "uname -s", "false"]
+    assert server.commands == ["hostname", BOOT_ID, "uname -s", "false"]
     assert (home / "known_hosts").read_text() == known_hosts
 
 
 def test_over_ssh_a_wrong_hostname_is_refused_before_any_other_command(
     server: ScriptedSshServer,
 ) -> None:
-    with pytest.raises(BenchFailure, match="answers as hostname 'bench-board'"):
+    with pytest.raises(WrongBoard, match="answers as hostname 'bench-board'"):
         board_at(server, "another-board")
     assert server.commands == ["hostname"]
 
 
 def test_a_board_accepting_the_key_is_reached_by_key_alone(server: ScriptedSshServer) -> None:
-    board_at(server, "bench-board")
+    board_at(server)
     assert server.attempts == [("publickey", True)]
 
 
-def test_a_board_refusing_keys_is_reached_by_the_none_login(none_only: ScriptedSshServer) -> None:
-    board = board_at(none_only, "bench-board")
+def test_a_board_refusing_keys_is_reached_by_the_none_login(serve) -> None:
+    none_only = serve(accepts=frozenset({"none"}))
+    board = board_at(none_only)
     assert board.run("uname -s") == Result("Linux\n", "", 0)
     assert none_only.attempts == [("publickey", False), ("none", True)]
 
 
-def test_a_board_refusing_every_method_is_a_bench_failure(home: Path) -> None:
-    closed = ScriptedSshServer(SCRIPT, accepts=frozenset())
-    try:
-        with pytest.raises(BenchFailure, match="ssh to the board failed"):
-            board_at(closed, "bench-board")
-        assert closed.commands == []
-    finally:
-        closed.close()
+def test_a_board_refusing_every_method_is_a_bench_failure(serve) -> None:
+    closed = serve(accepts=frozenset())
+    with pytest.raises(BenchFailure, match="ssh to the board failed"):
+        board_at(closed)
+    assert closed.commands == []
 
 
 def test_the_user_in_the_address_is_the_login(server: ScriptedSshServer) -> None:
-    config = BoardConfig(f"root@127.0.0.1:{server.port}", "bench-board", "bench", 1)
-    Board(FabricTransport(config), config, lambda name, value: None)
+    transport_to(server.port, user="root@").reconnect()
     assert server.usernames == {"root"}
 
 
-class RebootingServer(ScriptedSshServer):
-    """Answers the boot id from a sequence, one per request, and drops the connection on reboot."""
-
-    def __init__(self, boot_ids: list[str]) -> None:
-        super().__init__({**SCRIPT, "reboot": ("", 0)})
-        self.boot_ids = boot_ids
-
-    def answer(self, channel: paramiko.Channel, command: str) -> None:
-        if command == BOOT_ID:
-            self.script[BOOT_ID] = (self.boot_ids.pop(0), 0)
-        super().answer(channel, command)
-        if command == "reboot":
-            channel.get_transport().close()
+def test_a_hung_command_times_out_as_a_bench_failure(serve) -> None:
+    hanging = serve({**SCRIPT, "sleep": None})
+    transport = transport_to(hanging.port)
+    transport.reconnect()
+    with pytest.raises(BenchFailure, match="'sleep' on the board .*timed out after 1 s"):
+        transport.run("sleep", timeout=1)
 
 
-def test_reboot_over_ssh_reconnects_until_a_new_boot_id(home: Path) -> None:
-    rebooting = RebootingServer(["old\n", "old\n", "new\n"])
-    try:
-        config = BoardConfig(f"127.0.0.1:{rebooting.port}", "bench-board", "bench", 60)
-        recorded: dict[str, object] = {}
-        board = Board(FabricTransport(config), config, recorded.__setitem__, sleep=lambda s: None)
-        board.reboot()
-        assert rebooting.commands == ["hostname", BOOT_ID, "reboot", BOOT_ID, BOOT_ID]
-        assert recorded["bench.boot_ids"] == ["old", "new"]
-    finally:
-        rebooting.close()
+def test_a_command_ending_without_an_exit_status_is_a_bench_failure(serve) -> None:
+    cut = serve({**SCRIPT, "cut": ("partial", None)})
+    transport = transport_to(cut.port)
+    transport.reconnect()
+    with pytest.raises(BenchFailure, match="'cut' on the board ended without an exit status"):
+        transport.run("cut")
+
+
+def test_reconnect_sets_a_keepalive(
+    server: ScriptedSshServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    intervals: list[int] = []
+    monkeypatch.setattr(paramiko.Transport, "set_keepalive", lambda self, n: intervals.append(n))
+    transport_to(server.port).reconnect()
+    assert intervals == [15]
+
+
+def test_a_connection_the_board_dropped_is_not_reopened(serve) -> None:
+    dropping = serve({**SCRIPT, "reboot": ("", 0)}, drop_after=frozenset({"reboot"}))
+    board = board_at(dropping)
+    with contextlib.suppress(BenchFailure):
+        board.run("reboot")
+    with pytest.raises(BenchFailure):
+        for _ in range(50):
+            board.run("uname -s")
+    assert "uname -s" not in dropping.commands
+
+
+def test_reboot_over_ssh_checks_the_hostname_on_the_new_connection(serve) -> None:
+    rebooting = serve(
+        {**SCRIPT, BOOT_ID: [("one\n", 0), ("one\n", 0), ("two\n", 0)], "reboot": ("", 0)},
+        drop_after=frozenset({"reboot"}),
+    )
+    board_at(rebooting).reboot()
+    assert rebooting.commands == ["hostname", BOOT_ID, BOOT_ID, "reboot", "hostname", BOOT_ID]
+
+
+def test_reboot_onto_another_board_over_ssh_is_refused(serve) -> None:
+    script = {
+        **SCRIPT,
+        "hostname": [("bench-board\n", 0), ("other-board\n", 0)],
+        BOOT_ID: [("one\n", 0), ("one\n", 0), ("two\n", 0)],
+        "reboot": ("", 0),
+    }
+    swapped = serve(script, drop_after=frozenset({"reboot"}))
+    with pytest.raises(WrongBoard, match="answers as hostname 'other-board'"):
+        board_at(swapped).reboot()
+    assert swapped.commands[-1] == "hostname"
+
+
+def test_forward_carries_bytes_from_the_moment_it_is_given(
+    server: ScriptedSshServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bind = fabric.tunnels.TunnelManager._run
+
+    def slow_bind(self) -> None:
+        time.sleep(0.3)
+        bind(self)
+
+    monkeypatch.setattr(fabric.tunnels.TunnelManager, "_run", slow_bind)
+    transport = transport_to(server.port)
+    transport.reconnect()
+    with (
+        transport.forward(8080) as local,
+        socket.create_connection(("localhost", local), 5) as conn,
+    ):
+        conn.sendall(b"ping")
+        assert conn.recv(4) == b"ping"
+    assert ("localhost", 8080) in server.destinations
+
+
+def test_a_forward_that_never_listens_is_a_bench_failure(
+    server: ScriptedSshServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fabric.tunnels.TunnelManager, "_run", lambda self: None)
+    monkeypatch.setattr(wisebench.ssh, "LISTEN_TIMEOUT", 0.3)
+    transport = transport_to(server.port)
+    transport.reconnect()
+    with pytest.raises(BenchFailure, match="did not start listening"), transport.forward(8080):
+        pass
+
+
+def test_an_error_inside_a_forward_is_not_converted(server: ScriptedSshServer) -> None:
+    transport = transport_to(server.port)
+    transport.reconnect()
+    with pytest.raises(ZeroDivisionError), transport.forward(8080):
+        raise ZeroDivisionError
+
+
+def test_put_over_a_connection_without_sftp_is_a_bench_failure(
+    server: ScriptedSshServer, tmp_path: Path
+) -> None:
+    transport = transport_to(server.port)
+    transport.reconnect()
+    with pytest.raises(BenchFailure, match="put .* to the board failed"):
+        transport.put(Path(__file__), "/tmp/file")
+    with pytest.raises(BenchFailure, match="get /tmp/file from the board failed"):
+        transport.get("/tmp/file", tmp_path / "file")
+
+
+def test_a_command_without_a_limit_gets_the_default_timeout(
+    server: ScriptedSshServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transport = transport_to(server.port)
+    transport.reconnect()
+    limits: list[float] = []
+    real_run = type(transport._connection).run
+
+    def spy(self, command, **kwargs):
+        limits.append(kwargs["timeout"])
+        return real_run(self, command, **kwargs)
+
+    monkeypatch.setattr(type(transport._connection), "run", spy)
+    transport.run("uname -s")
+    transport.run("uname -s", timeout=600)
+    assert limits == [120.0, 600]
