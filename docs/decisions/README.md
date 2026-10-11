@@ -40,7 +40,7 @@ on.
 
 | # | Rev | Decided | Decision |
 |---|---|---|---|
-| [0001](0001-verify-with-a-python-bench-runner.md) | 1 | 2026-10-11 | Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay |
+| [0001](0001-verify-with-a-python-bench-runner.md) | 2 | 2026-10-11 | Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay |
 
 ## Revisions
 

@@ -2,7 +2,7 @@
 
 How the runner is installed on the pipeline host, what it reads from the environment, what it writes,
 and how a release is tagged. What the runner is and the layer contract are in the
-[README](../README.md); the design is ADR 0001 rev 1.
+[README](../README.md); the design is ADR 0001 rev 2.
 
 ## Install at a tag
 
