@@ -58,38 +58,42 @@ def _rauc_status(booted_slot, other_slot):
 RAUC_STATUS_OK = _rauc_status("rootfs.1", "rootfs.0")  # booted: rootfs.1
 
 
-def test_booted_slot_reads_the_slots_array():
-    driver = FakeDriver([RAUC_STATUS_OK])
-    assert ota._booted_slot(driver) == "rootfs.1"
+def test_default_wait_timeout_is_300_seconds():
+    assert ota._WAIT_TIMEOUT == 300
 
 
-def test_run_raises_ota_error_on_nonzero_exit():
-    driver = FakeDriver([([], ["boom"], 1)])
+def test_booted_slot_reads_the_slots_array(tmp_path):
+    bench = ota.Ota(FakeDriver([RAUC_STATUS_OK]), tmp_path / "mid-ota")
+    assert bench._booted_slot() == "rootfs.1"
+
+
+def test_run_raises_ota_error_on_nonzero_exit(tmp_path):
+    bench = ota.Ota(FakeDriver([([], ["boom"], 1)]), tmp_path / "mid-ota")
     with pytest.raises(ota.OtaError, match="boom"):
-        ota._run(driver, "rauc status mark-bad B")
+        bench._run("rauc status mark-bad B")
 
 
 def test_write_marker_then_clear_marker_round_trips(tmp_path):
     marker = tmp_path / "mid-ota"
-    ota.write_marker(marker, "rootfs.1")
+    bench = ota.Ota(FakeDriver([]), marker)
+    bench.write_marker("rootfs.1")
     assert marker.read_text() == "rootfs.1"
-    ota.clear_marker(marker)
+    bench.clear_marker()
     assert not marker.exists()
 
 
 def test_clear_marker_is_a_noop_when_absent(tmp_path):
-    ota.clear_marker(tmp_path / "mid-ota")
+    ota.Ota(FakeDriver([]), tmp_path / "mid-ota").clear_marker()
 
 
 def test_recover_does_nothing_without_a_marker(tmp_path):
     driver = FakeDriver([])
-    ota.recover(driver, tmp_path / "mid-ota")
+    ota.Ota(driver, tmp_path / "mid-ota").recover()
     assert driver.run_calls == []
 
 
 def test_recover_marks_the_candidate_bad_when_it_is_still_booted(tmp_path):
     marker = tmp_path / "mid-ota"
-    ota.write_marker(marker, "rootfs.1")
     driver = FakeDriver(
         [
             RAUC_STATUS_OK,  # _booted_slot: still on the candidate "rootfs.1"
@@ -98,42 +102,48 @@ def test_recover_marks_the_candidate_bad_when_it_is_still_booted(tmp_path):
             ([], [], 0),  # _wait_for_ssh's probe
         ]
     )
-    ota.recover(driver, marker)
+    bench = ota.Ota(driver, marker)
+    bench.write_marker("rootfs.1")
+    bench.recover()
     assert "rauc status mark-bad rootfs.1" in driver.run_calls
     assert not marker.exists()
 
 
 def test_recover_only_clears_the_marker_when_the_good_slot_is_already_booted(tmp_path):
     marker = tmp_path / "mid-ota"
-    ota.write_marker(marker, "rootfs.1")
     driver = FakeDriver(
         [_rauc_status("rootfs.0", "rootfs.1")]
     )  # booted: rootfs.0, not the marker's
-    ota.recover(driver, marker)
+    bench = ota.Ota(driver, marker)
+    bench.write_marker("rootfs.1")
+    bench.recover()
     assert driver.run_calls == ["rauc status --output-format=json"]
     assert not marker.exists()
 
 
-def test_wait_for_ssh_reconnects_and_returns_once_run_succeeds():
+def test_wait_for_ssh_reconnects_and_returns_once_run_succeeds(tmp_path):
     driver = FakeDriver([ExecutionError("down"), ExecutionError("down"), ([], [], 0)])
-    ota._wait_for_ssh(driver, timeout=1, interval=0.01)
+    bench = ota.Ota(driver, tmp_path / "mid-ota", timeout=1, interval=0.01)
+    bench._wait_for_ssh()
     assert driver.target.activate_calls == 3
 
 
-def test_wait_for_ssh_retries_past_a_bare_connect_timeout():
+def test_wait_for_ssh_retries_past_a_bare_connect_timeout(tmp_path):
     # labgrid's own SSHDriver raises a bare Exception, not ExecutionError, when its internal
     # connect timeout expires.
     driver = FakeDriver(
         [([], [], 0)],
         activate_results=[Exception("Timeout while waiting for ssh connection"), None],
     )
-    ota._wait_for_ssh(driver, timeout=1, interval=0.01)
+    bench = ota.Ota(driver, tmp_path / "mid-ota", timeout=1, interval=0.01)
+    bench._wait_for_ssh()
     assert driver.target.activate_calls == 2
 
 
-def test_wait_for_ssh_times_out_when_ssh_never_comes_back():
+def test_wait_for_ssh_times_out_when_ssh_never_comes_back(tmp_path):
     driver = FakeDriver([ExecutionError("down")] * 1000)
+    bench = ota.Ota(driver, tmp_path / "mid-ota", timeout=0.2, interval=0.05)
     start = time.monotonic()
     with pytest.raises(ExecutionError):
-        ota._wait_for_ssh(driver, timeout=0.2, interval=0.05)
+        bench._wait_for_ssh()
     assert time.monotonic() - start < 2

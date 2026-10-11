@@ -24,24 +24,25 @@ whatever a layer's own tests recorded against them, and the exact command line.
 
 ## The job
 
-1. `precondition` hook — the bench is in a known state. `ota.recover(driver, marker)` checks the
-   marker `ota.write_marker` wrote before an install that died mid-OTA: if the board is still
-   booted on the candidate slot the marker names, it marks that slot bad and reboots off it;
-   either way it removes the marker (`ota.clear_marker`) before continuing.
+1. `precondition` hook — the bench is in a known state. One `ota.Ota(driver, marker)` is
+   constructed per run; `Ota.recover()` checks the marker `Ota.write_marker` wrote before an
+   install that died mid-OTA: if the board is still booted on the candidate slot the marker
+   names, it marks that slot bad and reboots off it; either way it removes the marker
+   (`Ota.clear_marker`) before continuing.
 2. `build` and `bundle` hooks — the layer's own commands, run in the checkout of the ref under test.
 3. `host_suite` — pytest on the pipeline host against the built artefacts, before anything is installed.
-4. Install and boot — `ota.install(driver, bundle, destination)`: labgrid's `put`, `rauc install`,
+4. Install and boot — `Ota.install(bundle, destination)`: labgrid's `put`, `rauc install`,
    reboot, wait for ssh to answer again, and return the booted slot (from
    `rauc status --output-format=json`) and the bundle's sha256.
 5. `target_suite` — pytest against the booted board, with labgrid's own env file and
    `--report-log`.
-6. Roll back — `ota.rollback(driver, slot)`, called whether the tests passed or not:
+6. Roll back — `Ota.rollback(slot)`, called whether the tests passed or not:
    `rauc status mark-bad <slot>`, reboot, wait, and return the booted slot.
 7. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
    the terminal (`bench test`).
 
-`install` and `rollback` are plain functions the `bench test` script calls directly; neither is a
-pytest fixture. A failing hook or test is the candidate's failure and is posted. An error in a bench
+`install` and `rollback` are plain methods on `Ota` that the `bench test` script calls directly;
+neither is a pytest fixture. A failing hook or test is the candidate's failure and is posted. An error in a bench
 step — the precondition, an install or a rollback — is the bench's failure: a `DISABLED` marker is
 written, the timer is stopped, nothing is posted.
 
