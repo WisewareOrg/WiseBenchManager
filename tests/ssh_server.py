@@ -11,6 +11,7 @@ import paramiko
 class _Session(paramiko.ServerInterface):
     def __init__(self, server: ScriptedSshServer) -> None:
         self._server = server
+        self.tunnels: set[int] = set()
 
     def get_allowed_auths(self, username: str) -> str:
         return "publickey"
@@ -24,6 +25,13 @@ class _Session(paramiko.ServerInterface):
     def check_channel_request(self, kind: str, chanid: int) -> int:
         return paramiko.OPEN_SUCCEEDED
 
+    def check_channel_direct_tcpip_request(
+        self, chanid: int, origin: tuple[str, int], destination: tuple[str, int]
+    ) -> int:
+        self._server.destinations.append(destination)
+        self.tunnels.add(chanid)
+        return paramiko.OPEN_SUCCEEDED
+
     def check_channel_exec_request(self, channel: paramiko.Channel, command: bytes) -> bool:
         threading.Thread(target=self._server.answer, args=(channel, command.decode())).start()
         return True
@@ -34,6 +42,7 @@ class ScriptedSshServer:
 
     `accepts` names the auth methods that succeed: `publickey` (any key) and `none`. Every
     attempt is logged in `attempts` as `(method, succeeded)`, and every user name in `usernames`.
+    A forwarded channel echoes what it receives; its destination is logged in `destinations`.
     """
 
     def __init__(
@@ -44,6 +53,7 @@ class ScriptedSshServer:
         self.commands: list[str] = []
         self.attempts: list[tuple[str, bool]] = []
         self.usernames: set[str] = set()
+        self.destinations: list[tuple[str, int]] = []
         self.host_key = paramiko.RSAKey.generate(2048)
         self._listener = socket.create_server(("127.0.0.1", 0))
         self.port = self._listener.getsockname()[1]
@@ -57,7 +67,22 @@ class ScriptedSshServer:
                 return
             transport = paramiko.Transport(client)
             transport.add_server_key(self.host_key)
-            transport.start_server(server=_Session(self))
+            session = _Session(self)
+            transport.start_server(server=session)
+            threading.Thread(target=self._tunnel, args=(transport, session), daemon=True).start()
+
+    def _tunnel(self, transport: paramiko.Transport, session: _Session) -> None:
+        """Echo every byte a forwarded channel sends back down it."""
+        while transport.is_active():
+            channel = transport.accept(1)
+            if channel is not None and channel.get_id() in session.tunnels:
+                threading.Thread(target=self._echo, args=(channel,), daemon=True).start()
+
+    @staticmethod
+    def _echo(channel: paramiko.Channel) -> None:
+        while data := channel.recv(1024):
+            channel.sendall(data)
+        channel.close()
 
     def attempt(self, method: str, username: str) -> int:
         self.usernames.add(username)

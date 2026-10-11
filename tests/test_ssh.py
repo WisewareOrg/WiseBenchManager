@@ -6,7 +6,7 @@ import paramiko
 import pytest
 from ssh_server import ScriptedSshServer
 
-from wisebench.board import Board, Result
+from wisebench.board import BOOT_ID, Board, Result
 from wisebench.config import BoardConfig
 from wisebench.errors import BenchFailure
 from wisebench.ssh import FabricTransport, free_port
@@ -145,3 +145,31 @@ def test_the_user_in_the_address_is_the_login(server: ScriptedSshServer) -> None
     config = BoardConfig(f"root@127.0.0.1:{server.port}", "bench-board", "bench", 1)
     Board(FabricTransport(config), config, lambda name, value: None)
     assert server.usernames == {"root"}
+
+
+class RebootingServer(ScriptedSshServer):
+    """Answers the boot id from a sequence, one per request, and drops the connection on reboot."""
+
+    def __init__(self, boot_ids: list[str]) -> None:
+        super().__init__({**SCRIPT, "reboot": ("", 0)})
+        self.boot_ids = boot_ids
+
+    def answer(self, channel: paramiko.Channel, command: str) -> None:
+        if command == BOOT_ID:
+            self.script[BOOT_ID] = (self.boot_ids.pop(0), 0)
+        super().answer(channel, command)
+        if command == "reboot":
+            channel.get_transport().close()
+
+
+def test_reboot_over_ssh_reconnects_until_a_new_boot_id(home: Path) -> None:
+    rebooting = RebootingServer(["old\n", "old\n", "new\n"])
+    try:
+        config = BoardConfig(f"127.0.0.1:{rebooting.port}", "bench-board", "bench", 60)
+        recorded: dict[str, object] = {}
+        board = Board(FabricTransport(config), config, recorded.__setitem__, sleep=lambda s: None)
+        board.reboot()
+        assert rebooting.commands == ["hostname", BOOT_ID, "reboot", BOOT_ID, BOOT_ID]
+        assert recorded["bench.boot_ids"] == ["old", "new"]
+    finally:
+        rebooting.close()
