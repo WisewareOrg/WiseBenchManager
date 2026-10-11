@@ -1,13 +1,12 @@
 [project]
 name = "wisebench"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A generic pytest hardware-in-the-loop runner for over-the-air updated boards"
 authors = [
     { name = "Wise", email = "47094117+tjwise99@users.noreply.github.com" }
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "dunamai>=1.26",
     "fabric>=3.2.3",
     "invoke>=2.0",
     "paramiko>=3.2",
@@ -21,8 +20,14 @@ dependencies = [
 wisebench = "wisebench.plugin"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [dependency-groups]
 dev = [

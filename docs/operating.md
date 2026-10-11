@@ -15,8 +15,9 @@ uv sync --project WiseBenchManager --frozen
 ```
 
 `uv sync --frozen` installs exactly the versions in `uv.lock`, and a Python of at least 3.11 if the host
-has none. The clone must stay clean: the runner reads its version with `git describe --tags --always
---dirty` and refuses to start when the result ends in `-dirty`.
+has none. The package's version is derived from the checked-out tag by hatch-vcs when uv builds it, and
+uv rebuilds it whenever the commit or the tags change; the record carries that version. The clone must stay
+clean: the runner refuses to start when `git status --porcelain --untracked-files=no` lists a change.
 
 ## Run a layer's tests
 
@@ -69,7 +70,8 @@ here.
 
 ## Tagging a release
 
-Each merged runner PR gets one annotated tag on its merge commit, pushed by the person who merged it:
+Each merged runner PR gets one annotated version tag (`v<major>.<minor>.<patch>`, the form hatch-vcs
+reads) on its merge commit, pushed by the person who merged it:
 
 ```sh
 git fetch origin
@@ -77,5 +79,5 @@ git tag -a <tag> origin/main -m "<PR title>"
 git push origin <tag>
 ```
 
-The pipeline host then checks the new tag out in its clone. A host running a commit with no tag records
-the `git describe` form instead (`<last tag>-<commits since>-g<hash>`, or the bare hash before any tag).
+The pipeline host then checks the new tag out in its clone. A commit past a tag, or before any tag,
+records hatch-vcs's development form instead, such as `0.2.1.dev3+g<hash>`.

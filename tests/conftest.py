@@ -1,12 +1,13 @@
+import importlib.metadata
 from pathlib import Path
 
 import pytest
 from fake_board import LAYER_CONFTEST
 
-import wisebench.version
+import wisebench.plugin
 from wisebench.config import BenchToml, BoardTable, Config, Identity
 
-VERSION = "v0.1.0-3-gabc1234"
+VERSION = importlib.metadata.version("wisebench")
 
 BENCH_TOML = """
 schema = 1
@@ -40,8 +41,8 @@ def isolated_home(
 
 @pytest.fixture(autouse=True)
 def clean_clone(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The runner's clone reads as clean at a known version."""
-    monkeypatch.setattr(wisebench.version, "describe", lambda clone: VERSION)
+    """The runner's clone reads as clean."""
+    monkeypatch.setattr(wisebench.plugin, "clone_changes", lambda clone: "")
 
 
 @pytest.fixture

@@ -2,21 +2,37 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import os
 import re
+import subprocess
 from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from wisebench import version
 from wisebench.board import Board, Transport
 from wisebench.config import Config
 from wisebench.errors import BenchFailure
 from wisebench.events import EventLog
 from wisebench.record import Marks, SessionRecord
 from wisebench.ssh import FabricTransport
+
+CLONE = Path(__file__).resolve().parent
+
+
+def clone_changes(clone: Path) -> str:
+    """Tracked changes in `clone`, as `git status --porcelain` lists them; no clone raises."""
+    status = subprocess.run(
+        ["git", "-C", str(clone), "status", "--porcelain", "--untracked-files=no"],
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode:
+        raise BenchFailure(f"the runner is not run from its git clone: {status.stderr.strip()}")
+    return status.stdout
+
 
 TST_ID = re.compile(r"[A-Z]{2,}[0-9]{3,}")
 TST_KEYWORDS = {"recorded"}
@@ -106,7 +122,9 @@ def pytest_configure(config: pytest.Config) -> None:
     result_dir = Path(
         os.environ.get("BENCH_RESULT_DIR") or config.invocation_params.dir / "records"
     )
-    bench = Bench(result_dir, version.runner_version())
+    if clone_changes(CLONE):
+        raise BenchFailure("the runner's clone has uncommitted changes; refusing to run")
+    bench = Bench(result_dir, importlib.metadata.version("wisebench"))
     config.stash[Bench.KEY] = bench
     config.pluginmanager.register(bench, "wisebench-session")
 
