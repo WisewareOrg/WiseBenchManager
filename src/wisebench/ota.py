@@ -19,7 +19,9 @@ class Ota:
     Holds the driver, the mid-OTA marker's path, and the ssh-wait bound; calls the driver,
     never re-exposing it. `install` records the booted slot and the candidate it is about to
     boot into, and writes the marker (the candidate's name) before rebooting; `rollback` and
-    `recover` each remove the marker once the board is back on a known-good slot.
+    `recover` each remove the marker once the board is back on a known-good slot. `recover`,
+    built fresh after a crash, reads the marker's own content for the candidate it never
+    recorded locally.
     """
 
     def __init__(self, driver, marker, timeout=_WAIT_TIMEOUT, interval=_WAIT_INTERVAL):
