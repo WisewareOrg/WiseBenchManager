@@ -181,6 +181,9 @@ def write_marker(marker, slot):
 
     Returns:
         None.
+
+    Raises:
+        OSError: The marker file could not be written.
     """
     marker.write_text(slot)
 
@@ -193,5 +196,8 @@ def clear_marker(marker):
 
     Returns:
         None.
+
+    Raises:
+        OSError: The marker file exists but could not be removed.
     """
     marker.unlink(missing_ok=True)
