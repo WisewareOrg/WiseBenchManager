@@ -28,14 +28,16 @@ class KeyThenNone(OpenSSHAuthStrategy):
 
 
 class FabricTransport:
-    """Runs commands and moves files over one fabric `Connection` to the board's address."""
+    """Runs commands and moves files over one fabric `Connection` to the board's address.
+
+    Host keys are accepted in memory and never pinned (fabric's client policy, with no
+    known_hosts loaded or saved); the hostname check is the identity guard.
+    """
 
     def __init__(self, config: BoardConfig) -> None:
         # Authentication follows OpenSSH's order: each public key, then the `none` login.
         settings = Config(overrides={"authentication": {"strategy_class": KeyThenNone}})
         self._connection = Connection(host=config.address, config=settings)
-        # Host keys are accepted in memory and never pinned; the hostname check is the guard.
-        self._connection.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     def run(self, cmd: str) -> Result:
         try:
