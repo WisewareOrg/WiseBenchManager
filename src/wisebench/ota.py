@@ -77,21 +77,11 @@ class Ota:
             name for slot in slots for name, info in slot.items() if info["state"] == "booted"
         )
 
-    def _reconnect(self):
-        """Re-establish the SSH control master labgrid tears down on reboot.
-
-        Returns:
-            None.
-
-        Raises:
-            Exception: labgrid raised while deactivating or reactivating the driver
-                (including, but not limited to, `labgrid.driver.ExecutionError`).
-        """
-        self._driver.target.deactivate(self._driver)
-        self._driver.target.activate(self._driver)
-
     def _wait_for_ssh(self):
-        """Retry reconnecting and running a trivial command until ssh answers again.
+        """Reconnect and run a trivial command until ssh answers again.
+
+        Reconnecting re-establishes the SSH control master labgrid tears down on reboot
+        (`driver.target.deactivate`/`.activate`).
 
         Returns:
             None.
@@ -106,7 +96,8 @@ class Ota:
             reraise=True,
         ):
             with attempt:
-                self._reconnect()
+                self._driver.target.deactivate(self._driver)
+                self._driver.target.activate(self._driver)
                 self._driver.run("true")
 
     def install(self, bundle, destination):
