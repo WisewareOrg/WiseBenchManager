@@ -45,12 +45,14 @@ class _Session(paramiko.ServerInterface):
 
 
 Answer = tuple[str, int | None] | None
+SLOW_SECONDS = 5
 
 
 class ScriptedSshServer:
     """Answers each command from `script` (stdout, exit) and logs it.
 
-    An answer list is consumed per request, its last answer repeating; `None` never answers, and
+    An answer list is consumed per request, its last answer repeating; `None` answers only after
+    `SLOW_SECONDS`, so a missing client timeout fails a test instead of hanging it; and
     an exit of `None` closes the channel without an exit status.
     After a command in `drop_after` is answered, the connection is closed.
 
@@ -121,7 +123,8 @@ class ScriptedSshServer:
         if isinstance(answer, list):
             answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if answer is None:
-            return
+            time.sleep(SLOW_SECONDS)
+            answer = ("", 0)
         stdout, status = answer
         channel.sendall(stdout.encode())
         if status is None:
