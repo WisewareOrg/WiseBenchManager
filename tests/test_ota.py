@@ -121,8 +121,8 @@ def test_wait_for_ssh_reconnects_and_returns_once_run_succeeds():
 
 
 def test_wait_for_ssh_retries_past_a_bare_connect_timeout():
-    # labgrid's own SSHDriver raises a bare Exception, not ExecutionError, when its
-    # internal connect timeout expires (confirmed against labgrid 26.0 on the bench).
+    # labgrid's own SSHDriver raises a bare Exception, not ExecutionError, when its internal
+    # connect timeout expires.
     driver = FakeDriver(
         [([], [], 0)],
         activate_results=[Exception("Timeout while waiting for ssh connection"), None],
