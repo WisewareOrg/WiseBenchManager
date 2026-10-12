@@ -75,7 +75,8 @@ A hook is a command run with the checkout as its working directory and `BENCH_SH
 `BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output inherited straight to the terminal;
 its exit status is pass or fail. The suites are ordinary pytest directories, run under the
 runner's own interpreter, so a layer's test helpers may import only labgrid, pytest,
-pytest-reportlog, tenacity, the standard library and whatever the layer's own `pythonpath` adds.
+pytest-reportlog, tenacity, mitmproxy, the standard library and whatever the layer's own
+`pythonpath` adds.
 The checkout's own `pyproject.toml` `addopts` never reach that run; its `testpaths`, `pythonpath`
 and markers still do.
 
@@ -109,7 +110,7 @@ field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `bundle_sha
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
-stderr to `proxy-<node id>.log` beside that run's `report.jsonl`.
+stderr to `proxy-<counter>.log` beside that run's `report.jsonl`, one file per fixture use.
 
 ## Running it
 
@@ -162,5 +163,5 @@ mitmdump --listen-host 127.0.0.1 --listen-port <port> --set hardump=<path>.har
 Point a client at the running `mitmdump` as its HTTP(S) proxy and exercise whatever the set
 should hold; what a recording keeps or drops is decided then, by whoever is recording, not by
 this runner. mitmproxy generates its own CA at `~/.mitmproxy/mitmproxy-ca-cert.pem` on first
-start; installing that CA on the board, so it is trusted by the `proxy` fixture's own `mitmdump`
-in turn, is the layer's precondition, not something this runner does.
+start; installing that CA on the board, so the board trusts the certificates the `proxy`
+fixture's `mitmdump` presents, is the layer's precondition, not something this runner does.

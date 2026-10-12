@@ -1,8 +1,10 @@
 """mitmdump serving one recorded HAR, over a loopback port the fixture picks itself."""
 
 import hashlib
+import itertools
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ from tenacity import Retrying, stop_after_delay, wait_fixed
 
 _LISTEN_TIMEOUT = 10
 _LISTEN_INTERVAL = 0.1
+_log_counter = itertools.count()
 
 
 class ProxyError(Exception):
@@ -41,12 +44,13 @@ class Proxy:
         """Start mitmdump and wait until it accepts connections on `self.port`.
 
         Raises:
-            tenacity.RetryError: mitmdump never accepted a connection within the wait bound.
+            OSError: mitmdump never accepted a connection within the wait bound.
         """
+        mitmdump = str(Path(sys.executable).parent / "mitmdump")
         with open(self.log_path, "w") as log:
             self._process = subprocess.Popen(
                 [
-                    "mitmdump",
+                    mitmdump,
                     "--server-replay",
                     str(self.har),
                     "--set",
@@ -83,7 +87,7 @@ class Proxy:
         """Retry a loopback connect to `self.port` until it succeeds or the wait bound elapses.
 
         Raises:
-            tenacity.RetryError: No connection succeeded within the wait bound.
+            OSError: No connection succeeded within the wait bound.
         """
         for attempt in Retrying(
             stop=stop_after_delay(_LISTEN_TIMEOUT),
@@ -104,10 +108,12 @@ def proxy(request, record_property):
     `@pytest.mark.parametrize("proxy", [<path>], indirect=True)` -- which set to replay is the
     layer's own choice, not this fixture's. The recording's sha256 is recorded through
     `record_property` under the key `recording_sha256`. mitmdump's combined stdout and stderr
-    are written to one file named for the test's node id, beside this run's `report.jsonl`. At
-    teardown, a `killed non-replay request` line in that file means the board asked for
-    something the recording does not hold, and ends the session with `pytest.exit(...,
-    returncode=2)` so the run is reported as the bench's own failure.
+    are written to one file per fixture use, named by an incrementing counter, beside this
+    run's `report.jsonl` -- not by the test's node id, which embeds the recording's full path
+    under indirect parametrization and can exceed the filesystem's name length. At teardown, a
+    `killed non-replay request` line in that file means the board asked for something the
+    recording does not hold, and ends the session with `pytest.exit(..., returncode=2)` so the
+    run is reported as the bench's own failure.
 
     Args:
         request (pytest.FixtureRequest): Supplies the recording path as `request.param`.
@@ -129,7 +135,7 @@ def proxy(request, record_property):
         port = sock.getsockname()[1]
 
     run_dir = Path(request.config.option.report_log).parent
-    log_path = run_dir / f"proxy-{request.node.nodeid.replace('/', '_')}.log"
+    log_path = run_dir / f"proxy-{next(_log_counter)}.log"
 
     server = Proxy(har, port, log_path)
     server.start()

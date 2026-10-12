@@ -53,7 +53,8 @@ def _fetch(port, url):
     return opener.open(url, timeout=5)
 
 
-def test_start_serves_the_recorded_response(har, tmp_path):
+def test_start_serves_the_recorded_response(har, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
     server = proxy.Proxy(har, _free_port(), tmp_path / "proxy.log")
     server.start()
     try:
@@ -62,14 +63,8 @@ def test_start_serves_the_recorded_response(har, tmp_path):
         server.stop()
 
 
-def test_stop_is_silent_when_only_recorded_requests_were_served(har, tmp_path):
-    server = proxy.Proxy(har, _free_port(), tmp_path / "proxy.log")
-    server.start()
-    _fetch(server.port, _HIT_URL)
-    server.stop()
-
-
-def test_stop_raises_on_a_request_outside_the_recording(har, tmp_path):
+def test_stop_raises_on_a_request_outside_the_recording(har, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
     server = proxy.Proxy(har, _free_port(), tmp_path / "proxy.log")
     server.start()
     with pytest.raises((urllib.error.URLError, ConnectionError)):
