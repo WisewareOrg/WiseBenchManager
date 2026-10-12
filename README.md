@@ -75,7 +75,10 @@ check_name = "bench"
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_RESULT_DIR` and `BENCH_SET` in its environment; its exit status is pass or fail and its output
-is the log. The suites are ordinary pytest directories.
+is the log. The suites are ordinary pytest directories, run under the runner's own interpreter, so a
+layer's test helpers may import only labgrid, pytest, pytest-reportlog, tenacity, the standard
+library and whatever the layer's own `pythonpath` adds. The checkout's own `pyproject.toml`
+`addopts` never reach that run; its `testpaths`, `pythonpath` and markers still do.
 
 The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
 `NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
