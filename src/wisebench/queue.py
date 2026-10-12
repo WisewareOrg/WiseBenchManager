@@ -11,15 +11,17 @@ _REF_RE = re.compile(r"pr-(\d+)-([0-9a-f]+)")
 class Queue:
     """The GitHub merge queue's head entry, read with `git ls-remote` against one checkout.
 
-    Holds the checkout `git ls-remote` and `git rev-parse` run in; `head()` is the whole
-    mechanism, swappable for a different queue adapter (e.g. Mergify) behind the same signature.
+    Holds the checkout `git fetch`, `git ls-remote` and `git rev-parse` run in; `head()` is the
+    whole mechanism, swappable for a different queue adapter (e.g. Mergify) behind the same
+    signature.
     """
 
     def __init__(self, checkout):
         """Bind one Queue to a checkout.
 
         Args:
-            checkout (pathlib.Path): The layer's clone `git ls-remote` and `git rev-parse` run in.
+            checkout (pathlib.Path): The layer's clone `git fetch`, `git ls-remote` and
+                `git rev-parse` run in.
         """
         self.checkout = checkout
 
@@ -37,8 +39,10 @@ class Queue:
 
         Raises:
             BenchFailure: More than one ref qualifies.
-            subprocess.CalledProcessError: `git ls-remote` or `git rev-parse` failed.
+            subprocess.CalledProcessError: `git fetch`, `git ls-remote` or `git rev-parse`
+                failed.
         """
+        subprocess.run(["git", "fetch", "origin"], cwd=self.checkout, check=True)
         main = subprocess.run(
             ["git", "rev-parse", "origin/main"],
             cwd=self.checkout,

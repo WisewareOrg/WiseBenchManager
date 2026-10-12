@@ -196,11 +196,13 @@ its elapsed time, the build's progress tail, the test running now, and recent ve
 
 ### Installing `bench run`
 
-Copy `contrib/bench-run.service` and `contrib/bench-run.timer` to
-`~/.config/systemd/user/<unit>.service` and `.timer` (`<unit>` is `bench.toml`'s `[run] unit`),
-edit `WorkingDirectory` (the layer checkout), `ExecStart` (the venv's `bench`) and `RuntimeMaxSec`
-(comfortably longer than one build-and-test cycle), write `LG_ENV` and `LG_BENCH_ADDRESS` into
-`EnvironmentFile`'s path, then `systemctl --user enable --now <unit>.timer`.
+In this clone, edit `contrib/bench-run.service`'s `WorkingDirectory` (the layer checkout),
+`ExecStart` (this clone's own `.venv/bin/bench`) and `RuntimeMaxSec` (comfortably longer than one
+build-and-test cycle); rename both `contrib/bench-run.service` and `contrib/bench-run.timer` to
+`<unit>.service`/`<unit>.timer` if `bench.toml`'s `[run] unit` is not `bench-run`. Write `LG_ENV`
+and `LG_BENCH_ADDRESS` into the path `EnvironmentFile` names. Link and start both units straight
+from this checkout: `systemctl --user enable --now <this clone>/contrib/<unit>.service <this
+clone>/contrib/<unit>.timer`.
 
 A run that hits its own failure writes `DISABLED` beside the records and disables that timer.
 Clearing it is a by-hand step, not something `bench run` does itself: read `DISABLED`, remove it,

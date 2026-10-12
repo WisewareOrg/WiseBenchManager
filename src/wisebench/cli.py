@@ -49,8 +49,12 @@ def main(argv=None):
     directory = Path.cwd() / os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
 
     if args.command == "run":
-        config = Config.load(Path.cwd() / "bench.toml")
-        bench_run = BenchRun(Path.cwd(), config)
+        try:
+            config = Config.load(Path.cwd() / "bench.toml")
+            bench_run = BenchRun(Path.cwd(), config, directory)
+        except Exception as exc:
+            print(f"BENCH ERROR: {exc}", file=sys.stderr)
+            return 2
         with contextlib.ExitStack() as stack:
             try:
                 stack.enter_context(Lock(directory))

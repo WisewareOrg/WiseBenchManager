@@ -141,9 +141,10 @@ class _FakeBenchRun:
     instances = []
     outcome = None
 
-    def __init__(self, checkout, config):
+    def __init__(self, checkout, config, result_dir):
         self.checkout = checkout
         self.config = config
+        self.result_dir = result_dir
         self.run_calls = []
         _FakeBenchRun.instances.append(self)
 
@@ -179,6 +180,40 @@ def test_main_run_returns_2_on_any_exception(made_run, monkeypatch, tmp_path):
 
 def test_main_run_returns_2_when_lg_env_is_not_set(monkeypatch, tmp_path):
     monkeypatch.delenv("LG_ENV", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["run"]) == 2
+
+
+def test_main_run_returns_2_when_bench_toml_has_no_run_table(monkeypatch, tmp_path):
+    """Exercises the real `Config.load`/`BenchRun.__init__`, not the fake -- the fake's own
+    constructor does not validate `run_unit`, so only the real classes prove the exit mapping."""
+    (tmp_path / "bench.toml").write_text("""
+[hooks]
+precondition = "true"
+build = "true"
+bundle = "true"
+
+[bundle]
+path = "build/x.raucb"
+destination = "/data/x.raucb"
+
+[tests]
+host_suite = "host_suite"
+target_suite = "target_suite"
+
+[github]
+repo = "acme/layer"
+app_id = 1
+private_key = "/outside/the/tree/app.pem"
+check = "bench"
+""")
+    monkeypatch.setenv("LG_ENV", "unused.yaml")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["run"]) == 2
+
+
+def test_main_run_returns_2_when_bench_toml_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("LG_ENV", "unused.yaml")
     monkeypatch.chdir(tmp_path)
     assert cli.main(["run"]) == 2
 
