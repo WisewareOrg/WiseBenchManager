@@ -16,6 +16,9 @@ dependencies = [
 [project.entry-points.pytest11]
 wisebench = "wisebench.plugin"
 
+[project.scripts]
+bench = "wisebench.cli:main"
+
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
