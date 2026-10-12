@@ -77,9 +77,16 @@ def test_init_raises_oserror_when_the_private_key_path_is_missing(tmp_path):
         check.Check("acme/layer", 1, tmp_path / "missing.pem", "bench")
 
 
-def test_init_raises_valueerror_when_repo_has_no_slash(private_key_path):
-    with pytest.raises(ValueError, match="not enough values to unpack"):
-        check.Check("acme-layer", 1, private_key_path, "bench")
+@pytest.mark.parametrize(
+    ("repo", "match"),
+    [
+        ("acme-layer", "not enough values to unpack"),
+        ("acme/layer/extra", "too many values to unpack"),
+    ],
+)
+def test_init_raises_valueerror_when_repo_is_not_owner_slash_name(private_key_path, repo, match):
+    with pytest.raises(ValueError, match=match):
+        check.Check(repo, 1, private_key_path, "bench")
 
 
 def test_post_creates_one_completed_check_run(monkeypatch, private_key_path):

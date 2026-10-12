@@ -8,8 +8,9 @@ _CONCLUSIONS = ("success", "failure")
 class Check:
     """One check run per `post`, authenticated as a GitHub App installed on one repository.
 
-    Holds the repository's "owner/name", the app's authentication and the check run's name;
-    calls PyGithub's `GithubIntegration` and the objects it returns, never re-exposing them.
+    Holds the repository's owner and name, split from "owner/name", the app's authentication
+    and the check run's name; calls PyGithub's `GithubIntegration` and the objects it returns,
+    never re-exposing them.
     """
 
     def __init__(self, repo, app_id, private_key, check):
