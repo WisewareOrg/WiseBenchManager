@@ -5,7 +5,7 @@ import subprocess
 
 from wisebench.bench_test import BenchFailure
 
-_REF_RE = re.compile(r"pr-(\d+)-([0-9a-f]+)")
+_REF_RE = re.compile(r"pr-\d+-([0-9a-f]+)")
 
 
 class Queue:
@@ -33,9 +33,8 @@ class Queue:
         stale entry (based on an earlier tip) reads as no job, the same as an empty queue.
 
         Returns:
-            tuple[str, str, int] | None: The ref name, the ref's own sha (the commit to build,
-            from `git ls-remote`'s own column, not the ref name) and the PR number, or None when
-            no ref qualifies.
+            tuple[str, str] | None: The ref name and the ref's own sha (the commit to build,
+            from `git ls-remote`'s own column, not the ref name), or None when no ref qualifies.
 
         Raises:
             BenchFailure: More than one ref qualifies.
@@ -65,8 +64,8 @@ class Queue:
             sha, ref = line.split("\t")
             name = ref.rsplit("/", 1)[-1]
             match = _REF_RE.fullmatch(name)
-            if match and match.group(2) == main:
-                matches.append((ref, sha, int(match.group(1))))
+            if match and match.group(1) == main:
+                matches.append((ref, sha))
 
         if not matches:
             return None

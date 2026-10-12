@@ -1,5 +1,6 @@
 """BenchRun: one `bench run` cycle -- the queue head, through `BenchTest`, to one check run."""
 
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -59,7 +60,7 @@ class BenchRun:
             if head is None:
                 print("bench run: no job")
                 return
-            ref, sha, _pr_number = head
+            ref, sha = head
 
             subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
 
@@ -69,14 +70,15 @@ class BenchRun:
                 self.config.github_private_key,
                 self.config.github_check,
             )
+            summary = os.path.relpath(self._result_dir, self.checkout)
 
             try:
                 BenchTest(self.checkout, sha, None).run(lg_env, [])
             except CandidateFailure as exc:
-                check.post(sha, "failure", str(exc).splitlines()[0], str(self._result_dir))
+                check.post(sha, "failure", str(exc).splitlines()[0], summary)
                 return
 
-            check.post(sha, "success", "PASS", str(self._result_dir))
+            check.post(sha, "success", "PASS", summary)
         except Exception as exc:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""

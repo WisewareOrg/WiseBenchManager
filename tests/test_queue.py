@@ -44,7 +44,7 @@ def test_head_returns_none_when_no_ref_is_based_on_the_current_tip(monkeypatch, 
     assert queue.Queue(tmp_path).head() is None
 
 
-def test_head_returns_the_ref_sha_and_pr_number_of_the_one_match(monkeypatch, tmp_path):
+def test_head_returns_the_ref_and_sha_of_the_one_match(monkeypatch, tmp_path):
     _stub_git(
         monkeypatch,
         "cafef00d",
@@ -53,10 +53,9 @@ def test_head_returns_the_ref_sha_and_pr_number_of_the_one_match(monkeypatch, tm
             "11111111\trefs/heads/gh-readonly-queue/main/pr-9-0bad0000",
         ],
     )
-    ref, sha, pr_number = queue.Queue(tmp_path).head()
+    ref, sha = queue.Queue(tmp_path).head()
     assert ref == "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
     assert sha == "deadbeef"
-    assert pr_number == 14
 
 
 def test_head_fetches_origin_before_reading_the_tip_or_the_queue(monkeypatch, tmp_path):
@@ -125,7 +124,6 @@ def test_head_sees_a_queue_ref_based_on_a_main_tip_the_checkout_has_not_fetched_
 
     head = queue.Queue(local).head()
     assert head is not None
-    ref, sha, pr_number = head
+    ref, sha = head
     assert ref == f"refs/heads/gh-readonly-queue/main/pr-7-{new_main}"
     assert sha == new_main
-    assert pr_number == 7

@@ -197,16 +197,18 @@ its elapsed time, the build's progress tail, the test running now, and recent ve
 ### Installing `bench run`
 
 In this clone, edit `contrib/bench-run.service`'s `WorkingDirectory` (the layer checkout),
-`ExecStart` (this clone's own `.venv/bin/bench`) and `RuntimeMaxSec` (comfortably longer than one
-build-and-test cycle); rename both `contrib/bench-run.service` and `contrib/bench-run.timer` to
-`<unit>.service`/`<unit>.timer` if `bench.toml`'s `[run] unit` is not `bench-run`. Write `LG_ENV`
-and `LG_BENCH_ADDRESS` into the path `EnvironmentFile` names. Link and start both units straight
-from this checkout: `systemctl --user enable --now <this clone>/contrib/<unit>.service <this
-clone>/contrib/<unit>.timer`.
+`ExecStart` (this clone's own `.venv/bin/bench`) and `TimeoutStartSec` (comfortably longer than
+one build-and-test cycle -- `RuntimeMaxSec` has no effect on a `Type=oneshot` service;
+`TimeoutStartSec` is what bounds one); rename both `contrib/bench-run.service` and
+`contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if `bench.toml`'s `[run] unit` is
+not `bench-run`. Write `LG_ENV` and `LG_BENCH_ADDRESS` into the path `EnvironmentFile` names.
+Link and start both units straight from this checkout: `systemctl --user enable --now <this
+clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
 
-A run that hits its own failure writes `DISABLED` beside the records and disables that timer.
-Clearing it is a by-hand step, not something `bench run` does itself: read `DISABLED`, remove it,
-then `systemctl --user enable --now <unit>.timer` again.
+A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`, writes
+`DISABLED` beside the records and disables that timer. Clearing it is a by-hand step, not
+something `bench run` does itself: read `DISABLED`, remove it, then `systemctl --user enable
+--now <unit>.timer` again.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

@@ -6,4 +6,4 @@ Type=oneshot
 WorkingDirectory=/path/to/the/layer/checkout
 EnvironmentFile=%h/.config/wisebench/env
 ExecStart=/path/to/the/venv/bin/bench run
-RuntimeMaxSec=6h
+TimeoutStartSec=6h

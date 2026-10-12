@@ -2,10 +2,12 @@
 
 import contextlib
 import fcntl
+import os
+import signal
 
 import pytest
 
-from wisebench import bench_test, cli
+from wisebench import bench_run, bench_test, cli
 from wisebench.lock import Lock
 
 
@@ -245,3 +247,56 @@ def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_pa
     monkeypatch.setattr(cli, "BenchRun", _ContendingBenchRun)
     assert cli.main(["run"]) == 0
     assert made_run[0].run_calls == ["unused.yaml"]
+
+
+def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch, tmp_path):
+    """Exercises the real `BenchRun` (not the fake) -- `TimeoutStartSec` kills the process with
+    `SIGTERM`, and only the real class's own `DISABLED`/timer-disable handling can prove that
+    `main`'s installed handler turns it into a `BenchFailure` the bench-failure path catches."""
+    _write_bench_toml(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LG_ENV", "unused.yaml")
+
+    calls = []
+
+    def fake_subprocess_run(command, **kwargs):
+        calls.append(command)
+
+        class _Result:
+            returncode = 0
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(bench_run.subprocess, "run", fake_subprocess_run)
+
+    class _StubQueue:
+        def __init__(self, checkout):
+            pass
+
+        def head(self):
+            return ("main", "deadbeef")
+
+    class _StubCheck:
+        def __init__(self, *a, **kw):
+            pass
+
+        def post(self, *a, **kw):
+            pass
+
+    class _SigtermBenchTest:
+        def __init__(self, checkout, ref, set_name):
+            pass
+
+        def run(self, lg_env, pytest_args):
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(bench_run, "Queue", _StubQueue)
+    monkeypatch.setattr(bench_run, "Check", _StubCheck)
+    monkeypatch.setattr(bench_run, "BenchTest", _SigtermBenchTest)
+
+    assert cli.main(["run"]) == 2
+
+    disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
+    assert "TimeoutStartSec" in disabled[1]
+    assert calls[-1] == ["systemctl", "--user", "disable", "--now", "bench-run.timer"]

@@ -115,7 +115,7 @@ def _stub_subprocess(monkeypatch, *, error_on=None):
     return calls
 
 
-_QUEUE_HEAD = ("refs/heads/gh-readonly-queue/main/pr-14-cafef00d", "cafef00d", 14)
+_QUEUE_HEAD = ("refs/heads/gh-readonly-queue/main/pr-14-cafef00d", "cafef00d")
 
 
 def _assert_bench_failure_path(tmp_path, calls, run_unit, reason_substring):
@@ -167,7 +167,7 @@ def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monk
     assert _FakeBenchTest.instances[0].ref == "cafef00d"
     assert _FakeBenchTest.instances[0].set_name is None
     assert _FakeBenchTest.instances[0].run_calls == [("env.yaml", [])]
-    assert _FakeCheck.posts == [("cafef00d", "success", "PASS", str(tmp_path / "records"))]
+    assert _FakeCheck.posts == [("cafef00d", "success", "PASS", "records")]
 
 
 def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monkeypatch, tmp_path):
@@ -177,9 +177,7 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monke
     run = _make_run(tmp_path)
     run.run("env.yaml")
 
-    assert _FakeCheck.posts == [
-        ("cafef00d", "failure", "target_suite failed", str(tmp_path / "records"))
-    ]
+    assert _FakeCheck.posts == [("cafef00d", "failure", "target_suite failed", "records")]
 
 
 # -- the bench-failure path: one test per raise site --

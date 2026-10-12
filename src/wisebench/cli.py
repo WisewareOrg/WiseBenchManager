@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -11,6 +12,19 @@ from wisebench.bench_test import BenchFailure, BenchTest, CandidateFailure
 from wisebench.config import Config
 from wisebench.lock import Lock
 from wisebench.plugin import BENCH_RESULT_DIR, DEFAULT_RESULT_DIR
+
+
+def _raise_on_sigterm(signum, frame):
+    """Turn `SIGTERM` (systemd's `TimeoutStartSec` kill) into a bench failure.
+
+    Args:
+        signum: Unused.
+        frame: Unused.
+
+    Raises:
+        BenchFailure: Always.
+    """
+    raise BenchFailure("terminated: the job exceeded TimeoutStartSec")
 
 
 def main(argv=None):
@@ -61,11 +75,14 @@ def main(argv=None):
             except BenchFailure:
                 print("bench run: another run holds the lock")
                 return 0
+            previous_handler = signal.signal(signal.SIGTERM, _raise_on_sigterm)
             try:
                 bench_run.run(lg_env)
             except Exception as exc:
                 print(f"BENCH ERROR: {exc}", file=sys.stderr)
                 return 2
+            finally:
+                signal.signal(signal.SIGTERM, previous_handler)
         return 0
 
     bench = BenchTest(Path.cwd(), args.ref, args.set_name)
