@@ -34,7 +34,7 @@ def test_head_returns_none_when_no_ref_is_based_on_the_current_tip(monkeypatch, 
     _stub_git(
         monkeypatch,
         "cafef00d",
-        ["deadbeef\trefs/heads/gh-readonly-queue/main/pr-14-stale0000"],
+        ["deadbeef\trefs/heads/gh-readonly-queue/main/pr-14-badc0de0"],
     )
     assert queue.Queue(tmp_path).head() is None
 

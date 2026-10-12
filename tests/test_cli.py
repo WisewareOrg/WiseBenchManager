@@ -6,6 +6,7 @@ import fcntl
 import pytest
 
 from wisebench import bench_test, cli
+from wisebench.lock import Lock
 
 
 class _FakeBenchTest:
@@ -189,3 +190,23 @@ def test_main_run_returns_0_when_the_lock_is_already_held(made_run, monkeypatch,
     with _hold_lock(tmp_path):
         assert cli.main(["run"]) == 0
     assert made_run[0].run_calls == []
+
+
+def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_path):
+    """A second `Lock` on the same directory, taken from inside `BenchRun.run` itself, must
+    fail -- proving `main` still holds its own lock for the whole call, not just acquisition."""
+    _write_bench_toml(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    class _ContendingBenchRun(_FakeBenchRun):
+        def run(self, lg_env):
+            super().run(lg_env)
+            with (
+                pytest.raises(bench_test.BenchFailure, match="another run holds the lock"),
+                Lock(tmp_path / "records"),
+            ):
+                pass
+
+    monkeypatch.setattr(cli, "BenchRun", _ContendingBenchRun)
+    assert cli.main(["run"]) == 0
+    assert made_run[0].run_calls == ["unused.yaml"]
