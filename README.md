@@ -35,8 +35,8 @@ whatever a layer's own tests recorded against them, and the exact command line.
    verifies the board booted the candidate (raising on a rauc fallback); returns the bundle's
    sha256.
 6. `target_suite` — pytest against the booted board, with labgrid's own env file.
-7. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
-   the terminal (`bench test`).
+7. Verdict — one GitHub check run via `Check.post`, naming the verdict and the report path
+   (`bench run`), or the terminal (`bench test`).
 
 `install` is a plain method the `bench test` script calls directly; it is not a pytest fixture.
 A failing hook or test is the candidate's failure and is posted. An error in a bench step — the
@@ -66,10 +66,45 @@ bundle       = "just bundle"
 [tests]
 host_suite   = "tests/host_suite"
 target_suite = "tests/target_suite"
+
+[github]
+repo        = "owner/name"
+app_id      = 123456
+private_key = "/path/outside/the/tree/app.pem"
+check       = "bench"
 ```
 
-A `[github]` table (the check name to post a verdict under) arrives with issue #6; `Config.load`
-does not read one yet.
+`[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
+layer's own repository, `app_id` the App's id, `private_key` a filesystem path to the App's
+PEM-encoded private key outside any tree (`~` is expanded), `check` the check run's name,
+exactly as the layer's ruleset lists it as a required check. `bench test` does not read
+`[github]`; a `bench.toml` without the table is fine for it. `Check`, built only by `bench run`,
+raises if any of the four is missing.
+
+`bench run` calls:
+
+```python
+Check(repo, app_id, private_key, check).post(sha, conclusion, title, summary)
+```
+
+creating one completed check run on `sha` with `conclusion` `"success"` or `"failure"`, `title`
+the one-line verdict and `summary` the report directory path.
+
+### Setting the GitHub App up
+
+A one-time, by-hand step, before `[github]` can be filled in:
+
+1. Organization Settings → Developer settings → GitHub Apps → New GitHub App. Name it. Homepage
+   URL: the runner's repository. Webhook: untick Active.
+2. Repository permissions: Checks = Read and write. Nothing else (Metadata read is automatic).
+3. Where can this app be installed: Only on this account. Create.
+4. General page: note the App ID. Generate a private key. Move the downloaded PEM to a path
+   outside any tree, e.g. `~/.config/wisebench/app.pem`, mode 600.
+5. Install the App on the organization: Only select repositories, the layer's repository.
+6. In the layer's repository: Settings → Rules → Rulesets → the main ruleset → Require status
+   checks to pass → add the check's name. After the first check run has been posted, edit that
+   entry and set its source to the App, so only the App can satisfy it.
+7. Write `[github]` `repo`, `app_id`, `private_key` and `check` into `bench.toml`.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output inherited straight to the terminal;
@@ -149,7 +184,7 @@ That env file, and everything else naming this board, lives in the layer, not he
 The runner is cloned on the pipeline host and run from its checkout at a tag; the record names the
 tag. `bench run` is started by a systemd user timer under `flock`, so a second start while a job is
 running exits without touching the board; it asks a queue adapter for the head entry (the GitHub
-merge queue, via `gh api graphql`) and posts a commit status and PR comment with the verdict.
+merge queue, via `gh api graphql`) and posts the verdict as a GitHub check run (`Check.post`).
 `bench status --watch`, on `rich`, reads `run.json`, `report.jsonl` and the hook logs: the queue
 head, the timer and lock state, the current phase and its elapsed time, the build's progress tail,
 the test running now, and recent verdicts.

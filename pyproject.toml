@@ -9,6 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
     "labgrid>=26.0",
     "mitmproxy>=11.0.2",
+    "pygithub>=2.10.0",
     "pytest>=9.1.1",
     "pytest-reportlog>=1.0",
     "tenacity>=9.0",

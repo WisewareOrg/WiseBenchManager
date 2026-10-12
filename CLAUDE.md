@@ -20,8 +20,8 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
   shell line is glue only. Python is read here; shell is not.
 - **Well-supported tools before code of ours.** Every piece names what covers it (labgrid for ssh,
   mitmproxy for replay, pytest for the suites and the record, systemd and `flock` for scheduling, `gh`
-  for GitHub). A bespoke piece is written only with a sentence saying why no maintained tool fits, and
-  that sentence has to hold up under review.
+  and PyGithub for GitHub). A bespoke piece is written only with a sentence saying why no maintained
+  tool fits, and that sentence has to hold up under review.
 - **Every check is a test that has been watched failing.** A fixture or runner step is proven on a fake
   board (scripted answers) with a test that fails when the check is removed, and once on the real board.
   A check that cannot fail has measured nothing.
