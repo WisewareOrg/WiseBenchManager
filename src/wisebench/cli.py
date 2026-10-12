@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from wisebench.bench_test import BenchFailure, BenchTest, CandidateFailure
+from wisebench.bench_test import BenchTest, CandidateFailure
 
 
 def main(argv=None):
@@ -39,12 +39,12 @@ def main(argv=None):
     bench = BenchTest(Path.cwd(), args.ref, args.set_name)
     try:
         bench.run(lg_env, pytest_args)
-    except BenchFailure as exc:
-        print(f"BENCH ERROR: {exc}", file=sys.stderr)
-        return 2
     except CandidateFailure as exc:
         print(f"FAIL: {exc}")
         return 1
+    except Exception as exc:
+        print(f"BENCH ERROR: {exc}", file=sys.stderr)
+        return 2
     print("PASS")
     return 0
 

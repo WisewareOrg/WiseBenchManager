@@ -22,8 +22,7 @@ BENCH_BUNDLE_SHA256 = "BENCH_BUNDLE_SHA256"
 
 # run.json field name -> the environment variable it comes from, when that fact is known.
 # BENCH_SHA/SET are set for every hook and suite; BENCH_BUNDLE_SHA256 only for the target
-# suite, once install() has run. BENCH_TREE is a hook variable only -- it never reaches
-# run.json.
+# suite, once install() has run.
 BENCH_FIELDS = {
     "image_commit": BENCH_SHA,
     "set": BENCH_SET,

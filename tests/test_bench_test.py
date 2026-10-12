@@ -116,12 +116,12 @@ def _stub_labgrid(monkeypatch, install_error=None, calls=None):
 # -- one test per failure class --
 
 
-def test_a_dirty_tree_is_a_bench_failure(tmp_path):
+def test_a_dirty_tree_raises_runtime_error(tmp_path):
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     (tmp_path / "tracked.txt").write_text("changed\n")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match=r"tree is dirty: \["):
+    with pytest.raises(RuntimeError, match=r"tree is dirty: \["):
         bench.run("env.yaml", [])
 
 
@@ -167,13 +167,13 @@ def test_a_failing_target_suite_is_a_candidate_failure(monkeypatch, tmp_path):
         bench.run(lg_env, [])
 
 
-def test_an_ota_raise_is_a_bench_failure(monkeypatch, tmp_path):
+def test_an_ota_raise_propagates_as_is(monkeypatch, tmp_path):
     _stub_labgrid(monkeypatch, install_error=RuntimeError("rauc blew up"))
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match="rauc blew up"):
+    with pytest.raises(RuntimeError, match="rauc blew up"):
         bench.run("env.yaml", [])
 
 

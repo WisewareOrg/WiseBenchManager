@@ -43,8 +43,7 @@ class Ota:
 
         Returns:
             tuple[str, str]: The booted slot's name (e.g. `rootfs.0`) and the other slot's
-            name -- identifiers `rauc status mark-bad`/`mark-good` accept, not the top-level
-            `booted` field's bootname (`A`/`B`).
+            name.
 
         Raises:
             OtaError: `rauc status` exited nonzero.

@@ -19,7 +19,7 @@ from wisebench.plugin import (
 
 
 class BenchFailure(Exception):
-    """A failure that is this runner's own: a precondition hook, `Ota`, or pytest faulting."""
+    """A failure that is this runner's own: a precondition hook, or pytest faulting."""
 
 
 class CandidateFailure(Exception):
@@ -63,19 +63,12 @@ class BenchTest:
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
 
         Raises:
-            BenchFailure: A precondition hook, `Ota`, or pytest itself (exit 2-5) faulted, or
-                any other step raised.
+            BenchFailure: A precondition hook, or pytest itself (exit 2-5), faulted.
             CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed.
+            Exception: Any other step raised (a dirty tree, `Ota`, git itself) -- propagated
+                as-is, not wrapped; the CLI treats anything but `CandidateFailure` as the
+                bench's own.
         """
-        try:
-            self._run(lg_env, pytest_args)
-        except (BenchFailure, CandidateFailure):
-            raise
-        except Exception as exc:
-            raise BenchFailure(str(exc)) from exc
-
-    def _run(self, lg_env, pytest_args):
-        """The job itself, before `run`'s blanket exception mapping. See `run`."""
         commit = self._checkout_commit()
         config = Config.load(self.checkout / "bench.toml")
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
