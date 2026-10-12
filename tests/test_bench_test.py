@@ -253,3 +253,13 @@ def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_p
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     bench._run_suite("suite", {**os.environ}, [])  # returns None; a raise means the suite failed
+
+
+def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monkeypatch):
+    """pytest exiting nonzero for a reason other than a failing test (a usage error, here) is
+    `BenchFailure`, not `CandidateFailure` -- the bench's own fault, not the candidate's."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    _write_suite(tmp_path, "suite", passing=True)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    with pytest.raises(bench_test.BenchFailure, match="pytest exited"):
+        bench._run_suite("suite", {**os.environ}, ["--no-such-flag"])
