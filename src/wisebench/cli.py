@@ -221,7 +221,9 @@ class BenchTest:
             `run.json` landed in (None if exactly one new directory did not appear).
         """
         before = set(self.result_base.iterdir()) if self.result_base.exists() else set()
-        command = ["uv", "run", "pytest", suite]
+        # This process's own interpreter, not `uv run`: the checkout's cwd may hold its own
+        # pyproject.toml, and pytest must run where wisebench's plugin and labgrid are installed.
+        command = [sys.executable, "-m", "pytest", suite]
         if lg_env:
             command += [
                 "--lg-env",
