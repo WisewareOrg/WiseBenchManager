@@ -30,10 +30,11 @@ class BenchTest:
     three hooks (a nonzero `precondition` is this runner's own failure; `build`/`bundle` are
     the candidate's), run the host suite, build the `Ota` only now -- after the hooks, so a
     build that runs for hours never holds labgrid's ssh master open across it -- recover a
-    mid-OTA crash, install, run the target suite, roll back (always, even if the target suite
-    itself raised). `run.json`'s enrichment is the pytest plugin's own job (`plugin.py`'s
-    `BENCH_FIELDS`), fed through `BENCH_*` environment variables; this class never opens or
-    writes a `run.json`.
+    mid-OTA crash, install, run the target suite, roll back -- always, even if the target
+    suite itself raised, preserving that raise rather than letting a rollback failure mask it.
+    `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
+    `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
+    writes a `run.json` itself.
     """
 
     def __init__(self, checkout, ref, set_name):
@@ -89,20 +90,29 @@ class BenchTest:
         marker = Path(os.environ.get("BENCH_RESULT_DIR", DEFAULT_RESULT_DIR)) / "mid-ota"
         ota = Ota(driver, marker)
         ota.recover()
-        slot_after, bundle_sha256 = ota.install(
+        _, bundle_sha256 = ota.install(
             self.checkout / config.bundle_path, config.bundle_destination
         )
 
         target_env = {
             **env,
             "BENCH_BUNDLE_SHA256": bundle_sha256,
-            "BENCH_SLOT_BEFORE": ota._previous_slot,
-            "BENCH_SLOT_AFTER": slot_after,
+            "BENCH_SLOT_BEFORE": ota.previous_slot,
+            "BENCH_SLOT_AFTER": ota.booted_slot,
         }
+        suite_exc = None
         try:
             self._run_suite(config.target_suite, target_env, ["--lg-env", lg_env, *pytest_args])
-        finally:
+        except Exception as exc:
+            suite_exc = exc
+        try:
             ota.rollback()
+        except Exception as rollback_exc:
+            if suite_exc is not None:
+                raise suite_exc from rollback_exc
+            raise
+        if suite_exc is not None:
+            raise suite_exc
 
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.

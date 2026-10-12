@@ -16,12 +16,12 @@ DEFAULT_RESULT_DIR = "records"
 # sets it from, when that fact is known. BENCH_SHA/TREE/SET are set for every hook and suite;
 # BENCH_BUNDLE_SHA256/SLOT_BEFORE/SLOT_AFTER only for the target suite, once install() has run.
 BENCH_FIELDS = {
-    "commit": "BENCH_SHA",
+    "image_commit": "BENCH_SHA",
     "tree": "BENCH_TREE",
     "set": "BENCH_SET",
     "bundle_sha256": "BENCH_BUNDLE_SHA256",
-    "slot_before": "BENCH_SLOT_BEFORE",
-    "slot_after": "BENCH_SLOT_AFTER",
+    "booted_slot_before": "BENCH_SLOT_BEFORE",
+    "booted_slot_after": "BENCH_SLOT_AFTER",
 }
 
 

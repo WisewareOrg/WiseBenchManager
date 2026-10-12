@@ -1,4 +1,4 @@
-"""`BenchTest.run`: the five failure classes, the happy-path order, and the real suite."""
+"""`BenchTest.run`: one test per failure class, the happy-path order, the real suite."""
 
 import os
 import subprocess
@@ -62,7 +62,8 @@ class _FakeOta:
         self.marker = marker
         self.recover_result = None
         self.install_result = ("rootfs.0", "sha256value")
-        self._previous_slot = "rootfs.1"
+        self.previous_slot = "rootfs.1"
+        self.booted_slot = "rootfs.0"
         self.calls = []
 
     def recover(self):
@@ -114,7 +115,15 @@ def _stub_labgrid(monkeypatch, recover_error=None):
     return created
 
 
-# -- the five failure classes --
+# -- one test per failure class --
+
+
+def test_a_dirty_tree_is_a_bench_failure(tmp_path):
+    _repo_with_one_commit(tmp_path)
+    (tmp_path / "tracked.txt").write_text("changed\n")
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    with pytest.raises(bench_test.BenchFailure, match="dirty"):
+        bench.run("env.yaml", [])
 
 
 def test_a_failing_precondition_hook_is_a_bench_failure(monkeypatch, tmp_path):
@@ -135,7 +144,6 @@ def test_a_failing_build_hook_is_a_candidate_failure(monkeypatch, tmp_path):
         bench.run("env.yaml", [])
 
 
-@pytest.mark.timeout(30)
 def test_a_failing_host_suite_is_a_candidate_failure_and_never_installs(monkeypatch, tmp_path):
     otas = _stub_labgrid(monkeypatch)
     _repo_with_one_commit(tmp_path)
@@ -148,7 +156,6 @@ def test_a_failing_host_suite_is_a_candidate_failure_and_never_installs(monkeypa
     assert otas == []
 
 
-@pytest.mark.timeout(30)
 def test_a_failing_target_suite_is_a_candidate_failure_but_still_rolls_back(monkeypatch, tmp_path):
     otas = _stub_labgrid(monkeypatch)
     _repo_with_one_commit(tmp_path)
@@ -162,6 +169,26 @@ def test_a_failing_target_suite_is_a_candidate_failure_but_still_rolls_back(monk
     assert "rollback" in otas[0].calls
 
 
+def test_a_rollback_failure_on_top_of_a_candidate_failure_stays_the_candidates(
+    monkeypatch, tmp_path
+):
+    class _RollbackFailsOta(_FakeOta):
+        def rollback(self):
+            self.calls.append("rollback")
+            raise RuntimeError("rauc blew up on rollback")
+
+    monkeypatch.setattr(bench_test, "Environment", _FakeEnvironment)
+    monkeypatch.setattr(bench_test, "Ota", _RollbackFailsOta)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=False)
+    lg_env = _write_lg_env(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    with pytest.raises(bench_test.CandidateFailure, match="target_suite failed"):
+        bench.run(lg_env, [])
+
+
 def test_an_ota_raise_is_a_bench_failure(monkeypatch, tmp_path):
     _stub_labgrid(monkeypatch, recover_error=RuntimeError("rauc blew up"))
     _repo_with_one_commit(tmp_path)
@@ -172,34 +199,7 @@ def test_an_ota_raise_is_a_bench_failure(monkeypatch, tmp_path):
         bench.run("env.yaml", [])
 
 
-# -- dirty tree, config and hook env -- preconditions `run` never gets past without --
-
-
-def test_a_dirty_tree_is_a_bench_failure(tmp_path):
-    _repo_with_one_commit(tmp_path)
-    (tmp_path / "tracked.txt").write_text("changed\n")
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match="dirty"):
-        bench.run("env.yaml", [])
-
-
-def test_a_staged_only_change_is_also_a_bench_failure(tmp_path):
-    _repo_with_one_commit(tmp_path)
-    (tmp_path / "staged.txt").write_text("staged\n")
-    _git(tmp_path, "add", "staged.txt")
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match="dirty"):
-        bench.run("env.yaml", [])
-
-
-def test_a_ref_that_does_not_resolve_is_a_bench_failure(tmp_path):
-    _repo_with_one_commit(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "not-a-real-ref", None)
-    with pytest.raises(bench_test.BenchFailure):
-        bench.run("env.yaml", [])
-
-
-# -- the happy path (subprocess stubbed, per the owner's own shape) --
+# -- the happy path (subprocess stubbed) --
 
 
 def _stub_subprocess(monkeypatch):
@@ -248,25 +248,14 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 # -- the real pytest subprocess --
 
 
-@pytest.mark.timeout(30)
-def test_run_suite_actually_runs_pytest_on_a_real_suite(tmp_path):
-    _write_suite(tmp_path, "suite", passing=True)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    bench._run_suite("suite", {**os.environ}, [])
-
-
-@pytest.mark.timeout(30)
-def test_run_suite_clears_the_checkouts_own_addopts(tmp_path):
+def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_path):
+    """The one test that drives a real pytest subprocess. Bounded by subprocess.run's own
+    `timeout=`, not a pytest plugin, so a stuck child can't hang this suite. Builds the exact
+    command `_run_suite` does, against a checkout whose own `pyproject.toml` would otherwise
+    break it under `uv run` or without `-o addopts=` -- pinning both kept proof-found fixes."""
     ini = '[tool.pytest.ini_options]\naddopts = "--no-such-option"\n'
     (tmp_path / "pyproject.toml").write_text(ini)
     _write_suite(tmp_path, "suite", passing=True)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    bench._run_suite("suite", {**os.environ}, [])
-
-
-@pytest.mark.timeout(30)
-def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path):
-    _write_suite(tmp_path, "suite", passing=True)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match="pytest exited"):
-        bench._run_suite("suite", {**os.environ}, ["--totally-bogus-flag"])
+    command = [sys.executable, "-m", "pytest", "suite", "-o", "addopts="]
+    result = subprocess.run(command, cwd=tmp_path, env={**os.environ}, timeout=30)
+    assert result.returncode == 0

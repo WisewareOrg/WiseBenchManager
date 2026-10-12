@@ -21,7 +21,8 @@ class Ota:
     boot into, and writes the marker (the candidate's name) before rebooting; `rollback` and
     `recover` each remove the marker once the board is back on a known-good slot. `recover`,
     built fresh after a crash, reads the marker's own content for the candidate it never
-    recorded locally.
+    recorded locally. `previous_slot`/`booted_slot` read back what `install` recorded, for a
+    caller that wants those facts without reaching into this instance's own state.
     """
 
     def __init__(self, driver, marker, timeout=_WAIT_TIMEOUT, interval=_WAIT_INTERVAL):
@@ -39,6 +40,16 @@ class Ota:
         self._interval = interval
         self._previous_slot = None
         self._candidate_slot = None
+
+    @property
+    def previous_slot(self):
+        """str | None: The slot that was booted before `install` ran, or None before it has."""
+        return self._previous_slot
+
+    @property
+    def booted_slot(self):
+        """str | None: The slot `install` booted into, or None before `install` has run."""
+        return self._candidate_slot
 
     def _slots(self):
         """Read the board's slots and name the booted one and the other.
