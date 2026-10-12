@@ -1,17 +1,23 @@
 """`bench` command line: argument parsing for `bench test`/`bench run` and their exit mapping."""
 
 import argparse
+import contextlib
 import os
 import sys
 from pathlib import Path
 
 from wisebench.bench_run import BenchRun
-from wisebench.bench_test import BenchTest, CandidateFailure
+from wisebench.bench_test import BenchFailure, BenchTest, CandidateFailure
 from wisebench.config import Config
+from wisebench.lock import Lock
+from wisebench.plugin import BENCH_RESULT_DIR, DEFAULT_RESULT_DIR
 
 
 def main(argv=None):
     """Parse arguments and run one `bench test` or `bench run` invocation end to end.
+
+    Holds the `Lock` shared between the two commands for the whole of whichever one runs, so
+    neither `BenchTest` nor `BenchRun` needs to know about it.
 
     Args:
         argv (list[str] | None): Arguments to parse, defaulting to `sys.argv[1:]`.
@@ -40,19 +46,28 @@ def main(argv=None):
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
         return 2
 
+    directory = Path.cwd() / os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
+
     if args.command == "run":
         config = Config.load(Path.cwd() / "bench.toml")
         bench_run = BenchRun(Path.cwd(), config)
-        try:
-            bench_run.run(lg_env)
-        except Exception as exc:
-            print(f"BENCH ERROR: {exc}", file=sys.stderr)
-            return 2
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(Lock(directory))
+            except BenchFailure:
+                print("bench run: another run holds the lock")
+                return 0
+            try:
+                bench_run.run(lg_env)
+            except Exception as exc:
+                print(f"BENCH ERROR: {exc}", file=sys.stderr)
+                return 2
         return 0
 
     bench = BenchTest(Path.cwd(), args.ref, args.set_name)
     try:
-        bench.run(lg_env, pytest_args)
+        with Lock(directory):
+            bench.run(lg_env, pytest_args)
     except CandidateFailure as exc:
         print(f"FAIL: {exc}")
         return 1

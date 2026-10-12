@@ -1,6 +1,5 @@
 """`BenchTest.run`: one test per failure class, the happy-path order, the real suite."""
 
-import fcntl
 import functools
 import os
 import subprocess
@@ -112,33 +111,6 @@ def _stub_labgrid(monkeypatch, install_error=None, calls=None):
 
     monkeypatch.setattr(bench_test, "Ota", factory)
     return created
-
-
-# -- the lock shared with `bench run` --
-
-
-def test_run_raises_bench_failure_when_another_run_holds_the_lock(monkeypatch, tmp_path):
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
-    _repo_with_one_commit(tmp_path)
-    _write_bench_toml(tmp_path)
-    lock_dir = tmp_path / "records"
-    lock_dir.mkdir()
-    with open(lock_dir / "lock", "w") as held:
-        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-            with pytest.raises(bench_test.BenchFailure, match="another run holds the lock"):
-                bench.run("env.yaml", [])
-        finally:
-            fcntl.flock(held, fcntl.LOCK_UN)
-
-
-def test_lock_releases_so_a_second_run_can_take_it_afterwards(tmp_path):
-    lock_dir = tmp_path / "records"
-    with bench_test.lock(lock_dir):
-        pass
-    with bench_test.lock(lock_dir):
-        pass
 
 
 # -- one test per failure class --

@@ -1,6 +1,4 @@
-"""`BenchRun.run`: the lock, `DISABLED`, the queue head, and the posted verdict."""
-
-import fcntl
+"""`BenchRun.run`: `DISABLED`, the queue head, and the posted verdict."""
 
 import pytest
 
@@ -117,27 +115,6 @@ def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
     run = bench_run.BenchRun(tmp_path, _config())
     run.run("env.yaml")
     assert "disabled" in capsys.readouterr().out
-    assert calls == []
-    assert _FakeBenchTest.instances == []
-
-
-def test_run_exits_quietly_when_the_lock_is_already_held(made, monkeypatch, tmp_path, capsys):
-    calls = _stub_subprocess(monkeypatch)
-    lock_dir = tmp_path / "records"
-    lock_dir.mkdir()
-    with open(lock_dir / "lock", "w") as held:
-        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            _FakeQueue.result = (
-                "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
-                "cafef00d",
-                14,
-            )
-            run = bench_run.BenchRun(tmp_path, _config())
-            run.run("env.yaml")
-        finally:
-            fcntl.flock(held, fcntl.LOCK_UN)
-    assert "another run holds the lock" in capsys.readouterr().out
     assert calls == []
     assert _FakeBenchTest.instances == []
 

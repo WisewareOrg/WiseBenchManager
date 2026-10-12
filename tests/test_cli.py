@@ -1,5 +1,8 @@
 """`main`'s exit-code mapping, against a scripted fake `BenchTest`/`BenchRun`."""
 
+import contextlib
+import fcntl
+
 import pytest
 
 from wisebench import bench_test, cli
@@ -81,6 +84,27 @@ def test_main_passes_set_name_and_pytest_args_through(made, monkeypatch, tmp_pat
     assert made[0].run_calls == [("unused.yaml", ["-k", "x"])]
 
 
+@contextlib.contextmanager
+def _hold_lock(tmp_path):
+    """Hold the lock `main` will try to take at `tmp_path/records/lock`, on a second fd."""
+    directory = tmp_path / "records"
+    directory.mkdir()
+    with open(directory / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+
+
+def test_main_test_returns_2_when_the_lock_is_already_held(made, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    with _hold_lock(tmp_path):
+        assert cli.main(["test", "HEAD"]) == 2
+    assert made[0].run_calls == []
+
+
 # -- `bench run` --
 
 
@@ -156,3 +180,12 @@ def test_main_run_returns_2_when_lg_env_is_not_set(monkeypatch, tmp_path):
     monkeypatch.delenv("LG_ENV", raising=False)
     monkeypatch.chdir(tmp_path)
     assert cli.main(["run"]) == 2
+
+
+def test_main_run_returns_0_when_the_lock_is_already_held(made_run, monkeypatch, tmp_path):
+    _write_bench_toml(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchRun", _FakeBenchRun)
+    with _hold_lock(tmp_path):
+        assert cli.main(["run"]) == 0
+    assert made_run[0].run_calls == []

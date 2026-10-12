@@ -5,7 +5,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 
-from wisebench.bench_test import BenchTest, CandidateFailure, lock
+from wisebench.bench_test import BenchTest, CandidateFailure
 from wisebench.check import Check
 from wisebench.plugin import BENCH_RESULT_DIR, DEFAULT_RESULT_DIR
 from wisebench.queue import Queue
@@ -15,11 +15,8 @@ class BenchRun:
     """One `bench run` cycle: the queue head, through `BenchTest` in-process, to one check run.
 
     Holds the checkout and the loaded `Config`; `run` takes the labgrid env file, since that is
-    a fact of one invocation rather than this run's identity. Takes the lock shared with `bench
-    test` only long enough to read the `DISABLED` marker and the queue head, releasing it before
-    calling `BenchTest.run`, which takes the same lock again for the job itself -- so a hand
-    `bench test` cannot start during either phase, and the two acquisitions in this one process
-    never contend with each other.
+    a fact of one invocation rather than this run's identity. Knows nothing about the lock
+    shared with `bench test` -- the CLI holds that for this call's whole duration.
     """
 
     def __init__(self, checkout, config):
@@ -55,19 +52,14 @@ class BenchRun:
         result_dir = self.checkout / os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         disabled_path = result_dir / "DISABLED"
 
-        try:
-            with lock(result_dir):
-                if disabled_path.exists():
-                    print("bench run: disabled, see DISABLED")
-                    return
-                head = Queue(self.checkout).head()
-                if head is None:
-                    print("bench run: no job")
-                    return
-                ref, sha, _pr_number = head
-        except BlockingIOError:
-            print("bench run: another run holds the lock")
+        if disabled_path.exists():
+            print("bench run: disabled, see DISABLED")
             return
+        head = Queue(self.checkout).head()
+        if head is None:
+            print("bench run: no job")
+            return
+        ref, sha, _pr_number = head
 
         subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
 

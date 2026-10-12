@@ -1,7 +1,5 @@
 """BenchTest: one `bench test <ref>` run, as a single `run()` straight through."""
 
-import contextlib
-import fcntl
 import os
 import subprocess
 import sys
@@ -28,30 +26,6 @@ class CandidateFailure(Exception):
     """A failure that is the candidate's: a `build`/`bundle` hook, or a test suite."""
 
 
-@contextlib.contextmanager
-def lock(directory):
-    """Take the exclusive, non-blocking lock `bench test` and `bench run` share.
-
-    Args:
-        directory (pathlib.Path): The directory the lock file (`lock`) sits in; created if it
-            does not exist.
-
-    Yields:
-        None.
-
-    Raises:
-        BlockingIOError: Another process already holds the lock.
-        OSError: The lock file could not be opened.
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    with open(directory / "lock", "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            yield
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-
-
 class BenchTest:
     """One `bench test <ref>` run: resolve, checkout, hooks, both suites, OTA, in order.
 
@@ -66,8 +40,7 @@ class BenchTest:
     is does not matter, since rauc always installs to whichever slot is inactive.
     `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
     `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
-    writes a `run.json` itself. `run` holds the lock shared with `bench run` for its whole
-    duration, refusing to start while another run (hand or scheduled) already holds it.
+    writes a `run.json` itself.
     """
 
     def __init__(self, checkout, ref, set_name):
@@ -90,43 +63,36 @@ class BenchTest:
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
 
         Raises:
-            BenchFailure: A precondition hook, or pytest itself (exit 2-5), faulted; or another
-                run already holds the lock shared with `bench run`.
+            BenchFailure: A precondition hook, or pytest itself (exit 2-5), faulted.
             CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed.
             Exception: Any other step raised (a dirty tree, `Ota`, git itself) -- propagated
                 as-is, not wrapped; the CLI treats anything but `CandidateFailure` as the
                 bench's own.
         """
+        commit = self._checkout_commit()
+        config = Config.load(self.checkout / "bench.toml")
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
-        try:
-            with lock(self.checkout / result_dir):
-                commit = self._checkout_commit()
-                config = Config.load(self.checkout / "bench.toml")
-                env = {
-                    **os.environ,
-                    BENCH_SHA: commit,
-                    BENCH_TREE: str(self.checkout),
-                    BENCH_SET: self.set_name,
-                    BENCH_RESULT_DIR: result_dir,
-                }
+        env = {
+            **os.environ,
+            BENCH_SHA: commit,
+            BENCH_TREE: str(self.checkout),
+            BENCH_SET: self.set_name,
+            BENCH_RESULT_DIR: result_dir,
+        }
 
-                self._run_hook(config.hooks["precondition"], env, BenchFailure, "precondition")
-                self._run_hook(config.hooks["build"], env, CandidateFailure, "build")
-                self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle")
+        self._run_hook(config.hooks["precondition"], env, BenchFailure, "precondition")
+        self._run_hook(config.hooks["build"], env, CandidateFailure, "build")
+        self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle")
 
-                self._run_suite(config.host_suite, env, [])
+        self._run_suite(config.host_suite, env, [])
 
-                target = Environment(config_file=lg_env).get_target("main")
-                driver = target.get_driver("SSHDriver")
-                ota = Ota(driver)
-                bundle_sha256 = ota.install(
-                    self.checkout / config.bundle_path, config.bundle_destination
-                )
+        target = Environment(config_file=lg_env).get_target("main")
+        driver = target.get_driver("SSHDriver")
+        ota = Ota(driver)
+        bundle_sha256 = ota.install(self.checkout / config.bundle_path, config.bundle_destination)
 
-                target_env = {**env, BENCH_BUNDLE_SHA256: bundle_sha256}
-                self._run_suite(config.target_suite, target_env, ["--lg-env", lg_env, *pytest_args])
-        except BlockingIOError as exc:
-            raise BenchFailure("another run holds the lock") from exc
+        target_env = {**env, BENCH_BUNDLE_SHA256: bundle_sha256}
+        self._run_suite(config.target_suite, target_env, ["--lg-env", lg_env, *pytest_args])
 
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.
