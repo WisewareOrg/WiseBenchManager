@@ -41,3 +41,33 @@ def test_run_json_has_the_named_fields(pytester, monkeypatch, body, expected_exi
 def test_reportlog_lands_under_the_results_dir(pytester, monkeypatch):
     run_dir = _run_one_passing_test(pytester, monkeypatch)
     assert (run_dir / "report.jsonl").is_file()
+
+
+def test_run_json_carries_whichever_bench_fields_are_set(pytester, monkeypatch):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.setenv("BENCH_SHA", "deadbeef")
+    monkeypatch.setenv("BENCH_TREE", "/checkout")
+    monkeypatch.setenv("BENCH_SET", "scratch-set")
+    monkeypatch.delenv("BENCH_BUNDLE_SHA256", raising=False)
+    monkeypatch.delenv("BENCH_SLOT_BEFORE", raising=False)
+    monkeypatch.delenv("BENCH_SLOT_AFTER", raising=False)
+    run_dir = _run_one_passing_test(pytester, monkeypatch)
+    data = json.loads((run_dir / "run.json").read_text())
+    assert data["commit"] == "deadbeef"
+    assert data["tree"] == "/checkout"
+    assert data["set"] == "scratch-set"
+    assert "bundle_sha256" not in data
+    assert "slot_before" not in data
+    assert "slot_after" not in data
+
+
+def test_run_json_carries_the_bundle_and_slot_fields_when_set(pytester, monkeypatch):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.setenv("BENCH_BUNDLE_SHA256", "sha256value")
+    monkeypatch.setenv("BENCH_SLOT_BEFORE", "rootfs.1")
+    monkeypatch.setenv("BENCH_SLOT_AFTER", "rootfs.0")
+    run_dir = _run_one_passing_test(pytester, monkeypatch)
+    data = json.loads((run_dir / "run.json").read_text())
+    assert data["bundle_sha256"] == "sha256value"
+    assert data["slot_before"] == "rootfs.1"
+    assert data["slot_after"] == "rootfs.0"

@@ -24,21 +24,23 @@ whatever a layer's own tests recorded against them, and the exact command line.
 
 ## The job
 
-1. `precondition` hook — the bench is in a known state. One `ota.Ota(driver, marker)` is
-   constructed per run; `Ota.recover()` checks the marker a prior `install` wrote before dying
-   mid-OTA: if the board is still booted on the candidate slot the marker names, it marks that
-   slot bad and reboots off it; either way it removes the marker before continuing.
+1. `precondition` hook — the bench is in a known state; the layer's own command, run before the
+   `Ota` is even built.
 2. `build` and `bundle` hooks — the layer's own commands, run in the checkout of the ref under test.
 3. `host_suite` — pytest on the pipeline host against the built artefacts, before anything is installed.
-4. Install and boot — `Ota.install(bundle, destination)`: reads the board's slots, records the
+4. Only now is one `ota.Ota(driver, marker)` constructed — a hook can run for hours, and holding
+   labgrid's ssh master open across it risks inheriting a dead connection. `Ota.recover()` checks
+   the marker a prior `install` wrote before dying mid-OTA: if the board is still booted on the
+   candidate slot the marker names, it marks that slot bad and reboots off it; either way it
+   removes the marker before continuing.
+5. Install and boot — `Ota.install(bundle, destination)`: reads the board's slots, records the
    booted and candidate slots, writes the marker, then labgrid's `put`, `rauc install`, reboot,
    wait for ssh to answer again; returns the booted slot and the bundle's sha256.
-5. `target_suite` — pytest against the booted board, with labgrid's own env file and
-   `--report-log`.
-6. Roll back — `Ota.rollback()`, called whether the tests passed or not: `rauc status mark-bad`
+6. `target_suite` — pytest against the booted board, with labgrid's own env file.
+7. Roll back — `Ota.rollback()`, called whether the tests passed or not: `rauc status mark-bad`
    on the candidate `install` recorded, reboot, wait, raise `OtaError` if the previous slot is
    not booted, otherwise clear the marker and return the booted slot.
-7. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
+8. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
    the terminal (`bench test`).
 
 The same `Ota` instance's sequence is `recover()`, `install(...)`, `rollback()` — `recover`
@@ -51,14 +53,15 @@ marker is written, the timer is stopped, nothing is posted.
 ## What a layer provides
 
 The runner is pointed at a checkout and reads `bench.toml` from it. Board identity is never in it —
-see "Running it":
+see "Running it". `destination` is the layer's own choice of where on the board to stage the
+bundle before `rauc install`; the runner never picks one.
 
 ```toml
 schema = 1
 
 [bundle]
 path        = "build/.../update-bundle-<machine>.raucb"
-destination = "/data/update.raucb"
+destination = "/path/on/the/board/update.raucb"  # the layer's own choice; the runner never picks one
 
 [hooks]
 precondition = "just bench-precondition"
@@ -73,9 +76,9 @@ target_suite = "tests/target_suite"
 check_name = "bench"
 ```
 
-A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
-`BENCH_RESULT_DIR` and `BENCH_SET` in its environment; its exit status is pass or fail and its output
-is the log. The suites are ordinary pytest directories, run under the runner's own interpreter, so a
+A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`
+and `BENCH_SET` in its environment, output inherited straight to the terminal; its exit status is
+pass or fail. The suites are ordinary pytest directories, run under the runner's own interpreter, so a
 layer's test helpers may import only labgrid, pytest, pytest-reportlog, tenacity, the standard
 library and whatever the layer's own `pythonpath` adds. The checkout's own `pyproject.toml`
 `addopts` never reach that run; its `testpaths`, `pythonpath` and markers still do.
@@ -102,9 +105,13 @@ time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: e
 with whatever a layer attaches through `record_property`. Beside it the runner writes one file per
 run, `run.json`, written at session end so a run that fails halfway still leaves everything up to
 that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
-line, the start and end times, and the exit status. OTA adds the bundle's hash and the booted slot
-before and after; `bench test` adds the ref, its commit and the replay set name; `bench run` adds the
-verdict. A per-item credit map is not built.
+line, the start and end times, and the exit status. `bench test` feeds the commit, the checkout
+path and the replay set name in through `BENCH_SHA`/`BENCH_TREE`/`BENCH_SET`, present for every
+hook and suite; the bundle's sha256 and the booted slot before and after install come in through
+`BENCH_BUNDLE_SHA256`/`BENCH_SLOT_BEFORE`/`BENCH_SLOT_AFTER`, set only for the target suite, once
+`install` has run. The plugin reads whichever of these are present and writes them into that
+run's own `run.json`; `bench test` itself never opens one. `bench run` adds the verdict. A
+per-item credit map is not built.
 
 ## Running it
 
