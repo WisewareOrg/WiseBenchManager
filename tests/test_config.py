@@ -5,7 +5,7 @@ import pytest
 from wisebench import config
 
 
-def test_config_load_reads_hooks_bundle_suites_and_github(tmp_path):
+def test_config_load_reads_hooks_bundle_and_suites(tmp_path):
     (tmp_path / "bench.toml").write_text(
         """
         [hooks]
@@ -20,9 +20,6 @@ def test_config_load_reads_hooks_bundle_suites_and_github(tmp_path):
         [tests]
         host_suite = "tests/host_suite"
         target_suite = "tests/target_suite"
-
-        [github]
-        check_name = "bench"
         """
     )
     loaded = config.Config.load(tmp_path / "bench.toml")
@@ -31,7 +28,6 @@ def test_config_load_reads_hooks_bundle_suites_and_github(tmp_path):
     assert loaded.bundle_destination == "/data/update.raucb"
     assert loaded.host_suite == "tests/host_suite"
     assert loaded.target_suite == "tests/target_suite"
-    assert loaded.github == {"check_name": "bench"}
 
 
 def test_config_load_raises_keyerror_on_a_missing_table(tmp_path):

@@ -74,13 +74,13 @@ def test_slots_raises_ota_error_on_nonzero_exit(tmp_path):
         bench._slots()
 
 
-def test_previous_slot_and_booted_slot_are_none_before_install(tmp_path):
+def test_previous_slot_and_candidate_slot_are_none_before_install(tmp_path):
     bench = ota.Ota(FakeDriver([]), tmp_path / "mid-ota")
     assert bench.previous_slot is None
-    assert bench.booted_slot is None
+    assert bench.candidate_slot is None
 
 
-def test_previous_slot_and_booted_slot_read_back_what_install_recorded(tmp_path):
+def test_previous_slot_and_candidate_slot_read_back_what_install_recorded(tmp_path):
     marker = tmp_path / "mid-ota"
     bundle = tmp_path / "bundle.raucb"
     bundle.write_bytes(b"x")
@@ -96,7 +96,7 @@ def test_previous_slot_and_booted_slot_read_back_what_install_recorded(tmp_path)
     bench = ota.Ota(driver, marker)
     bench.install(bundle, "/data/update.raucb")
     assert bench.previous_slot == "rootfs.1"
-    assert bench.booted_slot == "rootfs.0"
+    assert bench.candidate_slot == "rootfs.0"
 
 
 def test_install_records_previous_and_candidate_and_writes_the_marker(tmp_path):

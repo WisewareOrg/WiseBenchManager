@@ -33,7 +33,8 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
   fixture or the precondition is the bench's: DISABLED, timer stopped, nothing posted. Never invent a
   third class, and never post on the bench's failure.
 - **Mid-OTA failure recovers by itself.** A run that dies between install and rollback leaves a marker;
-  the next run's precondition recovers the board and continues. A hand step is a defect.
+  the next run recovers the board (`Ota.recover`) after the hooks and before installing. A hand step is
+  a defect.
 
 ## How decisions are made
 

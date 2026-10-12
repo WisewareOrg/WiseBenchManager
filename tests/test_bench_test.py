@@ -63,7 +63,7 @@ class _FakeOta:
         self.recover_result = None
         self.install_result = ("rootfs.0", "sha256value")
         self.previous_slot = "rootfs.1"
-        self.booted_slot = "rootfs.0"
+        self.candidate_slot = "rootfs.0"
         self.calls = []
 
     def recover(self):
@@ -95,8 +95,13 @@ class _FakeEnvironment:
         return _FakeTarget()
 
 
-def _stub_labgrid(monkeypatch, recover_error=None):
+def _stub_labgrid(monkeypatch, recover_error=None, calls=None):
     """Replace `Environment`/`Ota` so a test never needs a real board.
+
+    Args:
+        calls (list | None): When given, an `("Ota", None)` marker is appended to it at the
+            moment `Ota` is constructed, so a test sharing this list with `_stub_subprocess`
+            can assert exactly where in the sequence that happens.
 
     Returns:
         list[_FakeOta]: Each `Ota` this run constructs, in order.
@@ -105,6 +110,8 @@ def _stub_labgrid(monkeypatch, recover_error=None):
     created = []
 
     def factory(*a, **kw):
+        if calls is not None:
+            calls.append(("Ota", None))
         ota = _FakeOta(*a, **kw)
         if recover_error is not None:
             ota.recover_result = recover_error
@@ -203,16 +210,19 @@ def test_an_ota_raise_is_a_bench_failure(monkeypatch, tmp_path):
 
 
 def _stub_subprocess(monkeypatch):
-    """Stub `bench_test.subprocess.run`, recording every command and always succeeding.
+    """Stub `bench_test.subprocess.run`, recording every call's command and environment.
 
     Returns:
-        list: Each command run, in order (the shell string for a hook, the arg list for
-        git/pytest).
+        list[tuple]: One `(command, env)` pair per call, in order -- `command` is the shell
+        string for a hook or the arg list for git/pytest; `env` is the `env=` kwarg passed
+        (`None` if omitted). `_stub_labgrid`, given this same list, appends an `("Ota", None)`
+        marker when `Ota` is constructed.
     """
     calls = []
 
     def fake_run(command, **kwargs):
-        calls.append(command if isinstance(command, str) else list(command))
+        recorded = command if isinstance(command, str) else list(command)
+        calls.append((recorded, kwargs.get("env")))
         if isinstance(command, list) and command[:2] == ["git", "rev-parse"]:
             return subprocess.CompletedProcess(command, 0, stdout="deadbeef\n")
         if isinstance(command, list) and command[:2] == ["git", "status"]:
@@ -224,25 +234,36 @@ def _stub_subprocess(monkeypatch):
 
 
 def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
-    _stub_labgrid(monkeypatch)
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     calls = _stub_subprocess(monkeypatch)
+    _stub_labgrid(monkeypatch, calls=calls)
     _write_bench_toml(tmp_path)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
 
     bench.run("env.yaml", ["-k", "x"])
 
-    assert calls[0][:2] == ["git", "rev-parse"]
-    assert calls[1][:2] == ["git", "status"]
-    assert calls[2][:2] == ["git", "checkout"]
-    assert calls[3] == "true"  # precondition
-    assert calls[4] == "true"  # build
-    assert calls[5] == "true"  # bundle
-    assert calls[6][:4] == [sys.executable, "-m", "pytest", "host_suite"]
-    assert "--lg-env" not in calls[6]
-    assert "-k" not in calls[6]
-    assert calls[7][:4] == [sys.executable, "-m", "pytest", "target_suite"]
-    assert calls[7][calls[7].index("--lg-env") + 1] == "env.yaml"
-    assert calls[7][-2:] == ["-k", "x"]
+    commands = [command for command, _ in calls]
+    assert commands[0][:2] == ["git", "rev-parse"]
+    assert commands[1][:2] == ["git", "status"]
+    assert commands[2][:2] == ["git", "checkout"]
+    assert commands[3] == "true"  # precondition
+    assert commands[4] == "true"  # build
+    assert commands[5] == "true"  # bundle
+    assert commands[6][:4] == [sys.executable, "-m", "pytest", "host_suite"]
+    assert "--lg-env" not in commands[6]
+    assert "-k" not in commands[6]
+    assert commands[7] == "Ota"  # built only after the hooks and the host suite
+    assert commands[8][:4] == [sys.executable, "-m", "pytest", "target_suite"]
+    assert commands[8][commands[8].index("--lg-env") + 1] == "env.yaml"
+    assert commands[8][-2:] == ["-k", "x"]
+
+    precondition_env = calls[3][1]
+    assert precondition_env[bench_test.BENCH_RESULT_DIR] == "records"
+
+    target_env = calls[8][1]
+    assert target_env[bench_test.BENCH_BUNDLE_SHA256] == "sha256value"
+    assert target_env[bench_test.BENCH_SLOT_BEFORE] == "rootfs.1"
+    assert target_env[bench_test.BENCH_SLOT_AFTER] == "rootfs.0"
 
 
 # -- the real pytest subprocess --
@@ -259,3 +280,20 @@ def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_p
     command = [sys.executable, "-m", "pytest", "suite", "-o", "addopts="]
     result = subprocess.run(command, cwd=tmp_path, env={**os.environ}, timeout=30)
     assert result.returncode == 0
+
+
+# -- agreement with plugin.py --
+
+
+def test_bench_test_and_plugin_agree_on_the_bench_env_var_names():
+    """`bench_test` imports these names from `plugin` rather than carrying its own copies, so
+    this mostly guards against a later edit shadowing or redefining one of them."""
+    from wisebench import plugin
+
+    assert bench_test.BENCH_RESULT_DIR == plugin.BENCH_RESULT_DIR
+    assert bench_test.BENCH_SHA == plugin.BENCH_SHA
+    assert bench_test.BENCH_TREE == plugin.BENCH_TREE
+    assert bench_test.BENCH_SET == plugin.BENCH_SET
+    assert bench_test.BENCH_BUNDLE_SHA256 == plugin.BENCH_BUNDLE_SHA256
+    assert bench_test.BENCH_SLOT_BEFORE == plugin.BENCH_SLOT_BEFORE
+    assert bench_test.BENCH_SLOT_AFTER == plugin.BENCH_SLOT_AFTER

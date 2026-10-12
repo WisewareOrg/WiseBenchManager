@@ -9,30 +9,40 @@ from pathlib import Path
 
 import pytest
 
-TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+_TIMESTAMP = "%Y%m%dT%H%M%SZ"
 DEFAULT_RESULT_DIR = "records"
 
-# run.json field name -> the environment variable a caller (bench_test.py's BenchTest.run)
-# sets it from, when that fact is known. BENCH_SHA/TREE/SET are set for every hook and suite;
-# BENCH_BUNDLE_SHA256/SLOT_BEFORE/SLOT_AFTER only for the target suite, once install() has run.
+# Environment variable names a caller (bench_test.py's BenchTest.run) and this plugin both use,
+# defined once here so neither side carries its own copy of the literal string.
+BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
+BENCH_SHA = "BENCH_SHA"
+BENCH_TREE = "BENCH_TREE"
+BENCH_SET = "BENCH_SET"
+BENCH_BUNDLE_SHA256 = "BENCH_BUNDLE_SHA256"
+BENCH_SLOT_BEFORE = "BENCH_SLOT_BEFORE"
+BENCH_SLOT_AFTER = "BENCH_SLOT_AFTER"
+
+# run.json field name -> the environment variable it comes from, when that fact is known.
+# BENCH_SHA/SET are set for every hook and suite; BENCH_BUNDLE_SHA256/SLOT_BEFORE/SLOT_AFTER
+# only for the target suite, once install() has run. BENCH_TREE is a hook variable only -- it
+# never reaches run.json.
 BENCH_FIELDS = {
-    "image_commit": "BENCH_SHA",
-    "tree": "BENCH_TREE",
-    "set": "BENCH_SET",
-    "bundle_sha256": "BENCH_BUNDLE_SHA256",
-    "booted_slot_before": "BENCH_SLOT_BEFORE",
-    "booted_slot_after": "BENCH_SLOT_AFTER",
+    "image_commit": BENCH_SHA,
+    "set": BENCH_SET,
+    "bundle_sha256": BENCH_BUNDLE_SHA256,
+    "previous_slot": BENCH_SLOT_BEFORE,
+    "candidate_slot": BENCH_SLOT_AFTER,
 }
 
 
 def _run_dir(config):
-    base = Path(environ.get("BENCH_RESULT_DIR", DEFAULT_RESULT_DIR))
+    base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
-    config._wisebench_timestamp = datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
+    config._wisebench_timestamp = datetime.now(UTC).strftime(_TIMESTAMP)
     config._wisebench_start = datetime.now(UTC)
     config.option.report_log = str(_run_dir(config) / "report.jsonl")
 

@@ -9,7 +9,16 @@ from labgrid import Environment
 
 from wisebench.config import Config
 from wisebench.ota import Ota
-from wisebench.plugin import DEFAULT_RESULT_DIR
+from wisebench.plugin import (
+    BENCH_BUNDLE_SHA256,
+    BENCH_RESULT_DIR,
+    BENCH_SET,
+    BENCH_SHA,
+    BENCH_SLOT_AFTER,
+    BENCH_SLOT_BEFORE,
+    BENCH_TREE,
+    DEFAULT_RESULT_DIR,
+)
 
 
 class BenchFailure(Exception):
@@ -72,11 +81,13 @@ class BenchTest:
         """The job itself, before `run`'s blanket exception mapping. See `run`."""
         commit = self._checkout_commit()
         config = Config.load(self.checkout / "bench.toml")
+        result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         env = {
             **os.environ,
-            "BENCH_SHA": commit,
-            "BENCH_TREE": str(self.checkout),
-            "BENCH_SET": self.set_name,
+            BENCH_SHA: commit,
+            BENCH_TREE: str(self.checkout),
+            BENCH_SET: self.set_name,
+            BENCH_RESULT_DIR: result_dir,
         }
 
         self._run_hook(config.hooks["precondition"], env, BenchFailure, "precondition")
@@ -87,7 +98,7 @@ class BenchTest:
 
         target = Environment(config_file=lg_env).get_target("main")
         driver = target.get_driver("SSHDriver")
-        marker = Path(os.environ.get("BENCH_RESULT_DIR", DEFAULT_RESULT_DIR)) / "mid-ota"
+        marker = Path(result_dir) / "mid-ota"
         ota = Ota(driver, marker)
         ota.recover()
         _, bundle_sha256 = ota.install(
@@ -96,9 +107,9 @@ class BenchTest:
 
         target_env = {
             **env,
-            "BENCH_BUNDLE_SHA256": bundle_sha256,
-            "BENCH_SLOT_BEFORE": ota.previous_slot,
-            "BENCH_SLOT_AFTER": ota.booted_slot,
+            BENCH_BUNDLE_SHA256: bundle_sha256,
+            BENCH_SLOT_BEFORE: ota.previous_slot,
+            BENCH_SLOT_AFTER: ota.candidate_slot,
         }
         suite_exc = None
         try:

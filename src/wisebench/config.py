@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
-    """`bench.toml`, read once: the three hooks, the bundle, the two suites, github.
+    """`bench.toml`, read once: the three hooks, the bundle, the two suites.
 
     Args:
         hooks (dict[str, str]): Command line for "precondition", "build" and "bundle".
@@ -15,7 +15,6 @@ class Config:
             install`; the layer's own fact, never this runner's.
         host_suite (str): Path to the host-side pytest suite, relative to the checkout.
         target_suite (str): Path to the target-side pytest suite, relative to the checkout.
-        github (dict): The `[github]` table, unread here and carried for a later command.
     """
 
     hooks: dict
@@ -23,7 +22,6 @@ class Config:
     bundle_destination: str
     host_suite: str
     target_suite: str
-    github: dict
 
     @classmethod
     def load(cls, path):
@@ -50,5 +48,4 @@ class Config:
             bundle_destination=raw["bundle"]["destination"],
             host_suite=raw["tests"]["host_suite"],
             target_suite=raw["tests"]["target_suite"],
-            github=raw.get("github", {}),
         )

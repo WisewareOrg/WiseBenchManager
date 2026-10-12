@@ -46,7 +46,6 @@ def test_reportlog_lands_under_the_results_dir(pytester, monkeypatch):
 def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.setenv("BENCH_SHA", "deadbeef")
-    monkeypatch.setenv("BENCH_TREE", "/checkout")
     monkeypatch.setenv("BENCH_SET", "scratch-set")
     monkeypatch.setenv("BENCH_BUNDLE_SHA256", "sha256value")
     monkeypatch.setenv("BENCH_SLOT_BEFORE", "rootfs.1")
@@ -54,8 +53,8 @@ def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
     run_dir = _run_one_passing_test(pytester, monkeypatch)
     data = json.loads((run_dir / "run.json").read_text())
     assert data["image_commit"] == "deadbeef"
-    assert data["tree"] == "/checkout"
+    assert "tree" not in data
     assert data["set"] == "scratch-set"
     assert data["bundle_sha256"] == "sha256value"
-    assert data["booted_slot_before"] == "rootfs.1"
-    assert data["booted_slot_after"] == "rootfs.0"
+    assert data["previous_slot"] == "rootfs.1"
+    assert data["candidate_slot"] == "rootfs.0"
