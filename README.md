@@ -107,7 +107,9 @@ field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `bundle_sha
 `BENCH_BUNDLE_SHA256` — the last one only once `install` has run, for the target suite.
 `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
-A per-item credit map is not built.
+A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
+`record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
+stderr to `proxy-<node id>.log` beside that run's `report.jsonl`.
 
 ## Running it
 
@@ -149,5 +151,16 @@ running exits without touching the board; it asks a queue adapter for the head e
 merge queue, via `gh api graphql`) and posts a commit status and PR comment with the verdict.
 `bench status --watch`, on `rich`, reads `run.json`, `report.jsonl` and the hook logs: the queue
 head, the timer and lock state, the current phase and its elapsed time, the build's progress tail,
-the test running now, and recent verdicts. Replay recordings are made by hand with
-`bench record <har-path>`, the only time the proxy reaches a real upstream.
+the test running now, and recent verdicts.
+
+Replay recordings are made by hand, the only time a proxy reaches a real upstream:
+
+```sh
+mitmdump --listen-host 127.0.0.1 --listen-port <port> --set hardump=<path>.har
+```
+
+Point a client at the running `mitmdump` as its HTTP(S) proxy and exercise whatever the set
+should hold; what a recording keeps or drops is decided then, by whoever is recording, not by
+this runner. mitmproxy generates its own CA at `~/.mitmproxy/mitmproxy-ca-cert.pem` on first
+start; installing that CA on the board, so it is trusted by the `proxy` fixture's own `mitmdump`
+in turn, is the layer's precondition, not something this runner does.
