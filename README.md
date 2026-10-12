@@ -57,7 +57,8 @@ see "Running it":
 schema = 1
 
 [bundle]
-path = "build/.../update-bundle-<machine>.raucb"
+path        = "build/.../update-bundle-<machine>.raucb"
+destination = "/data/update.raucb"
 
 [hooks]
 precondition = "just bench-precondition"

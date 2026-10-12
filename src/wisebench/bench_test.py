@@ -167,6 +167,11 @@ class BenchTest:
     def run_pytest(self, suite, *, lg_env=False):
         """Run pytest on one suite directory and locate the `run.json` it wrote.
 
+        Runs under this process's own interpreter (`sys.executable -m pytest`, not `uv run`,
+        since the checkout at `self.checkout` may hold its own project) with `-o addopts=""`,
+        clearing whatever ini-file `addopts` that checkout's own `pyproject.toml` carries for
+        this invocation (e.g. a coverage plugin this runner never installs).
+
         Args:
             suite (str): The suite's path, relative to the checkout.
             lg_env (bool): Whether to pass `--lg-env` and `--report-log` (the target suite).
@@ -174,12 +179,12 @@ class BenchTest:
         Returns:
             tuple[int, pathlib.Path | None]: pytest's exit status, and the directory its
             `run.json` landed in (None if exactly one new directory did not appear).
+
+        Raises:
+            OSError: `self.result_base` could not be listed, or the pytest subprocess could
+                not be started.
         """
         before = set(self.result_base.iterdir()) if self.result_base.exists() else set()
-        # This process's own interpreter, not `uv run`: the checkout's cwd may hold its own
-        # pyproject.toml, and pytest must run where wisebench's plugin and labgrid are
-        # installed. `-o addopts=""` clears whatever that pyproject.toml's own addopts
-        # carries (e.g. a coverage plugin this runner never installs) for this invocation.
         command = [sys.executable, "-m", "pytest", suite, "-o", "addopts="]
         if lg_env:
             command += [
