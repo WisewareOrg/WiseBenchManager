@@ -36,8 +36,9 @@ whatever a layer's own tests recorded against them, and the exact command line.
 5. `target_suite` — pytest against the booted board, with labgrid's own env file and
    `--report-log`.
 6. Roll back — `Ota.rollback()`, called whether the tests passed or not: `rauc status mark-bad`
-   on the candidate `install` recorded, reboot, wait, assert the board is back on the slot
-   `install` recorded as booted, clear the marker, and return the booted slot.
+   on the candidate `install` recorded, reboot, wait, confirm (raising `OtaError` if not) the
+   board is back on the slot `install` recorded as booted, clear the marker, and return the
+   booted slot.
 7. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
    the terminal (`bench test`).
 
