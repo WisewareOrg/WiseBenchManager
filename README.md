@@ -35,8 +35,8 @@ whatever a layer's own tests recorded against them, and the exact command line.
    verifies the board booted the candidate (raising on a rauc fallback); returns the bundle's
    sha256.
 6. `target_suite` — pytest against the booted board, with labgrid's own env file.
-7. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
-   the terminal (`bench test`).
+7. Verdict — one GitHub check run via `Check.post`, naming the verdict and the report path
+   (`bench run`), or the terminal (`bench test`).
 
 `install` is a plain method the `bench test` script calls directly; it is not a pytest fixture.
 A failing hook or test is the candidate's failure and is posted. An error in a bench step — the
@@ -169,7 +169,7 @@ That env file, and everything else naming this board, lives in the layer, not he
 The runner is cloned on the pipeline host and run from its checkout at a tag; the record names the
 tag. `bench run` is started by a systemd user timer under `flock`, so a second start while a job is
 running exits without touching the board; it asks a queue adapter for the head entry (the GitHub
-merge queue, via `gh api graphql`) and posts a commit status and PR comment with the verdict.
+merge queue, via `gh api graphql`) and posts the verdict as a GitHub check run (`Check.post`).
 `bench status --watch`, on `rich`, reads `run.json`, `report.jsonl` and the hook logs: the queue
 head, the timer and lock state, the current phase and its elapsed time, the build's progress tail,
 the test running now, and recent verdicts.

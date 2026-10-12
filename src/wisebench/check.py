@@ -22,9 +22,11 @@ class Check:
             check (str): The check run's name, as the layer's ruleset lists it.
 
         Raises:
+            ValueError: `repo` is not exactly one "/"-separated owner and name.
             OSError: `private_key` could not be read.
+            AssertionError: `private_key`'s contents are empty.
         """
-        self._repo = repo
+        self._owner, self._name = repo.split("/")
         self._check = check
         with open(private_key) as f:
             self._auth = Auth.AppAuth(app_id, f.read())
@@ -32,8 +34,8 @@ class Check:
     def post(self, sha, conclusion, title, summary):
         """Create one completed check run on a commit.
 
-        Authenticates as the App's installation on `repo`, then creates the check run under
-        that installation's token.
+        Authenticates as the App's installation on the repository, then creates the check run
+        under that installation's token.
 
         Args:
             sha (str): The commit's full sha the check run is posted against.
@@ -44,14 +46,14 @@ class Check:
         Raises:
             ValueError: `conclusion` is neither "success" nor "failure".
             github.GithubException: PyGithub's own call failed.
+            jwt.exceptions.InvalidKeyError: the App's private key is malformed.
         """
         if conclusion not in _CONCLUSIONS:
             raise ValueError(f"conclusion must be 'success' or 'failure', got {conclusion!r}")
         integration = GithubIntegration(auth=self._auth)
-        owner, name = self._repo.split("/")
-        installation = integration.get_repo_installation(owner, name)
-        gh = integration.get_github_for_installation(installation.id)
-        gh.get_repo(self._repo).create_check_run(
+        installation = integration.get_repo_installation(self._owner, self._name)
+        gh = installation.get_github_for_installation()
+        gh.get_repo(f"{self._owner}/{self._name}").create_check_run(
             name=self._check,
             head_sha=sha,
             status="completed",
