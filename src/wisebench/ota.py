@@ -18,7 +18,8 @@ class Ota:
 
     Holds the driver, the mid-OTA marker's path, and the ssh-wait bound; calls the driver,
     never re-exposing it. `install` records the booted slot and the candidate it is about to
-    boot into, and writes the marker (the candidate's name) before rebooting; `rollback` and
+    boot into, writes the marker (the candidate's name) before rebooting, and raises if the
+    board comes back on any other slot (a rauc fallback); `rollback` and
     `recover` each remove the marker once the board is back on a known-good slot. `recover`,
     built fresh after a crash, reads the marker's own content for the candidate it never
     recorded locally. `previous_slot`/`candidate_slot` read back what `install` recorded, for a
@@ -137,13 +138,14 @@ class Ota:
             destination (str): Path on the board to copy the bundle to before installing it.
 
         Returns:
-            tuple[str, str]: The booted slot's name (e.g. `rootfs.0`) after the reboot, and
-            the bundle file's sha256 hex digest.
+            tuple[str, str]: The candidate slot's name (e.g. `rootfs.0`), verified booted
+            after the reboot, and the bundle file's sha256 hex digest.
 
         Raises:
             OSError: `bundle` could not be opened to compute its sha256, or the marker file
                 could not be written.
-            OtaError: `rauc install` or a slot-status read exited nonzero.
+            OtaError: `rauc install` or a slot-status read exited nonzero, or the board came
+                back on a slot other than the candidate (a rauc fallback).
             Exception: ssh did not answer again within the wait bound after rebooting.
         """
         self._previous_slot, self._candidate_slot = self._slots()
@@ -158,6 +160,8 @@ class Ota:
         self._driver.run("reboot")
         self._wait_for_ssh()
         booted, _ = self._slots()
+        if booted != self._candidate_slot:
+            raise OtaError(f"expected {self._candidate_slot} booted after install, found {booted}")
         return booted, sha256
 
     def rollback(self):

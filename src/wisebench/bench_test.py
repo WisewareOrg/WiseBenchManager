@@ -40,7 +40,10 @@ class BenchTest:
     the candidate's), run the host suite, build the `Ota` only now -- after the hooks, so a
     build that runs for hours never holds labgrid's ssh master open across it -- recover a
     mid-OTA crash, install, run the target suite, roll back -- always, even if the target
-    suite itself raised, preserving that raise rather than letting a rollback failure mask it.
+    suite itself raised. If the target suite failed and rolling back then also fails, the
+    rollback failure is this runner's own (`BenchFailure`), chained onto the target suite's
+    original failure rather than silently replacing it; if the target suite passed and only
+    the rollback fails, that alone is `BenchFailure` too.
     `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
     `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
     writes a `run.json` itself.
@@ -66,9 +69,10 @@ class BenchTest:
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
 
         Raises:
-            BenchFailure: A precondition hook, `Ota`, or pytest itself (exit 2-5) faulted, or
-                any other step raised.
-            CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed.
+            BenchFailure: A precondition hook, `Ota`, or pytest itself (exit 2-5) faulted, a
+                rollback failed, or any other step raised.
+            CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed
+                and the following rollback succeeded.
         """
         try:
             self._run(lg_env, pytest_args)
@@ -120,8 +124,8 @@ class BenchTest:
             ota.rollback()
         except Exception as rollback_exc:
             if suite_exc is not None:
-                raise suite_exc from rollback_exc
-            raise
+                raise BenchFailure(f"rollback failed after {suite_exc!r}") from suite_exc
+            raise BenchFailure(str(rollback_exc)) from rollback_exc
         if suite_exc is not None:
             raise suite_exc
 

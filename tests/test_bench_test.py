@@ -1,5 +1,6 @@
 """`BenchTest.run`: one test per failure class, the happy-path order, the real suite."""
 
+import concurrent.futures
 import os
 import subprocess
 import sys
@@ -127,9 +128,10 @@ def _stub_labgrid(monkeypatch, recover_error=None, calls=None):
 
 def test_a_dirty_tree_is_a_bench_failure(tmp_path):
     _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
     (tmp_path / "tracked.txt").write_text("changed\n")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match="dirty"):
+    with pytest.raises(bench_test.BenchFailure, match=r"tree is dirty: \["):
         bench.run("env.yaml", [])
 
 
@@ -176,9 +178,7 @@ def test_a_failing_target_suite_is_a_candidate_failure_but_still_rolls_back(monk
     assert "rollback" in otas[0].calls
 
 
-def test_a_rollback_failure_on_top_of_a_candidate_failure_stays_the_candidates(
-    monkeypatch, tmp_path
-):
+def test_a_rollback_failure_on_top_of_a_candidate_failure_is_the_benchs(monkeypatch, tmp_path):
     class _RollbackFailsOta(_FakeOta):
         def rollback(self):
             self.calls.append("rollback")
@@ -192,7 +192,25 @@ def test_a_rollback_failure_on_top_of_a_candidate_failure_stays_the_candidates(
     _write_suite(tmp_path, "target_suite", passing=False)
     lg_env = _write_lg_env(tmp_path)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.CandidateFailure, match="target_suite failed"):
+    with pytest.raises(bench_test.BenchFailure, match="rollback failed after"):
+        bench.run(lg_env, [])
+
+
+def test_a_rollback_failure_after_a_passing_target_suite_is_the_benchs(monkeypatch, tmp_path):
+    class _RollbackFailsOta(_FakeOta):
+        def rollback(self):
+            self.calls.append("rollback")
+            raise RuntimeError("rauc blew up on rollback")
+
+    monkeypatch.setattr(bench_test, "Environment", _FakeEnvironment)
+    monkeypatch.setattr(bench_test, "Ota", _RollbackFailsOta)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=True)
+    lg_env = _write_lg_env(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    with pytest.raises(bench_test.BenchFailure, match="rauc blew up on rollback"):
         bench.run(lg_env, [])
 
 
@@ -270,16 +288,19 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 
 
 def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_path):
-    """The one test that drives a real pytest subprocess. Bounded by subprocess.run's own
-    `timeout=`, not a pytest plugin, so a stuck child can't hang this suite. Builds the exact
-    command `_run_suite` does, against a checkout whose own `pyproject.toml` would otherwise
-    break it under `uv run` or without `-o addopts=` -- pinning both kept proof-found fixes."""
+    """The one test that drives a real pytest subprocess -- calls the method under test
+    directly, so dropping `sys.executable` or `-o addopts=` from `_run_suite` goes red.
+    Bounded by a thread-level timeout, not a pytest plugin and not a change to `_run_suite`
+    itself, so a stuck child can't hang this suite. The checkout's own `pyproject.toml` would
+    break this under `uv run` or without `-o addopts=` -- pinning both kept proof-found
+    fixes."""
     ini = '[tool.pytest.ini_options]\naddopts = "--no-such-option"\n'
     (tmp_path / "pyproject.toml").write_text(ini)
     _write_suite(tmp_path, "suite", passing=True)
-    command = [sys.executable, "-m", "pytest", "suite", "-o", "addopts="]
-    result = subprocess.run(command, cwd=tmp_path, env={**os.environ}, timeout=30)
-    assert result.returncode == 0
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(bench._run_suite, "suite", {**os.environ}, [])
+        future.result(timeout=30)  # _run_suite returns None; a raise here means the suite failed
 
 
 # -- agreement with plugin.py --

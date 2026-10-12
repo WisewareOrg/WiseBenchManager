@@ -121,6 +121,24 @@ def test_install_records_previous_and_candidate_and_writes_the_marker(tmp_path):
     assert sha256 == hashlib.sha256(b"x").hexdigest()
 
 
+def test_install_raises_ota_error_when_the_board_falls_back_to_the_previous_slot(tmp_path):
+    marker = tmp_path / "mid-ota"
+    bundle = tmp_path / "bundle.raucb"
+    bundle.write_bytes(b"x")
+    driver = FakeDriver(
+        [
+            RAUC_STATUS_OK,  # previous=rootfs.1, candidate=rootfs.0
+            ([], [], 0),  # rauc install
+            ([], [], 0),  # reboot
+            ([], [], 0),  # _wait_for_ssh's probe
+            RAUC_STATUS_OK,  # fallback: still booted on rootfs.1, never reached the candidate
+        ]
+    )
+    bench = ota.Ota(driver, marker)
+    with pytest.raises(ota.OtaError, match="expected rootfs.0 booted"):
+        bench.install(bundle, "/data/update.raucb")
+
+
 def test_install_raises_ota_error_on_nonzero_rauc_install(tmp_path):
     bundle = tmp_path / "bundle.raucb"
     bundle.write_bytes(b"x")
