@@ -1,7 +1,7 @@
 """`Check.post`: one completed check run through PyGithub's app authentication."""
 
 import pytest
-from github import Github, GithubIntegration, Repository
+from github import Auth, Github, GithubIntegration, Repository
 from github.Installation import Installation
 
 from wisebench import check
@@ -63,6 +63,7 @@ def private_key_path(tmp_path):
 
 
 def test_pygithub_app_auth_chain_exists_on_the_installed_version():
+    assert hasattr(Auth, "AppAuth")
     assert hasattr(GithubIntegration, "get_repo_installation")
     assert hasattr(GithubIntegration, "get_github_for_installation")
     assert hasattr(Installation, "id")
@@ -78,7 +79,7 @@ def test_init_raises_oserror_when_the_private_key_path_is_missing(tmp_path):
 def test_post_creates_one_completed_check_run(monkeypatch, private_key_path):
     FakeGithubIntegration.instances = []
     monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
-    one = check.Check("acme/layer", 1, private_key_path, "bench")
+    one = check.Check("acme/layer", 1, private_key_path, "a-different-check-name")
     one.post("deadbeef", "success", "PASS", "records/run")
 
     integration = FakeGithubIntegration.instances[0]
@@ -86,7 +87,7 @@ def test_post_creates_one_completed_check_run(monkeypatch, private_key_path):
     assert integration.get_github_for_installation_calls == [4242]
     assert integration.repository.calls == [
         {
-            "name": "bench",
+            "name": "a-different-check-name",
             "head_sha": "deadbeef",
             "status": "completed",
             "conclusion": "success",
