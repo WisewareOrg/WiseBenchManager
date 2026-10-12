@@ -10,8 +10,6 @@ from wisebench.config import Config
 from wisebench.ota import Ota
 from wisebench.plugin import (
     BENCH_BUNDLE_SHA256,
-    BENCH_CANDIDATE_SLOT,
-    BENCH_PREVIOUS_SLOT,
     BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
@@ -37,14 +35,9 @@ class BenchTest:
     through: resolve the ref and refuse a dirty tree, check it out, read `bench.toml`, run the
     three hooks (a nonzero `precondition` is this runner's own failure; `build`/`bundle` are
     the candidate's), run the host suite, build the `Ota` only now -- after the hooks, so a
-    build that runs for hours never holds labgrid's ssh master open across it -- install, run
-    the target suite, roll back in a `finally` -- always, even if the target suite itself
-    raised. If the target suite failed and rolling back then also fails, the rollback failure
-    is this runner's own (`BenchFailure`), chained onto the target suite's original failure
-    rather than silently replacing it; if the target suite passed and only the rollback fails,
-    that alone is `BenchFailure` too. A run killed outright leaves the board booted on its
-    candidate slot, which the next run's own install overwrites; which slot the board rests on
-    between runs is not a concern.
+    build that runs for hours never holds labgrid's ssh master open across it -- install, then
+    run the target suite. `install` leaves the board booted on its candidate; which slot that
+    is does not matter, since rauc always installs to whichever slot is inactive.
     `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
     `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
     writes a `run.json` itself.
@@ -70,10 +63,9 @@ class BenchTest:
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
 
         Raises:
-            BenchFailure: A precondition hook, `Ota`, or pytest itself (exit 2-5) faulted, a
-                rollback failed, or any other step raised.
-            CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed
-                and the following rollback succeeded.
+            BenchFailure: A precondition hook, `Ota`, or pytest itself (exit 2-5) faulted, or
+                any other step raised.
+            CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed.
         """
         try:
             self._run(lg_env, pytest_args)
@@ -104,29 +96,10 @@ class BenchTest:
         target = Environment(config_file=lg_env).get_target("main")
         driver = target.get_driver("SSHDriver")
         ota = Ota(driver)
-        _, bundle_sha256 = ota.install(
-            self.checkout / config.bundle_path, config.bundle_destination
-        )
+        bundle_sha256 = ota.install(self.checkout / config.bundle_path, config.bundle_destination)
 
-        target_env = {
-            **env,
-            BENCH_BUNDLE_SHA256: bundle_sha256,
-            BENCH_PREVIOUS_SLOT: ota.previous_slot,
-            BENCH_CANDIDATE_SLOT: ota.candidate_slot,
-        }
-        suite_exc = None
-        try:
-            self._run_suite(config.target_suite, target_env, ["--lg-env", lg_env, *pytest_args])
-        except Exception as exc:
-            suite_exc = exc
-            raise
-        finally:
-            try:
-                ota.rollback()
-            except Exception as rollback_exc:
-                if suite_exc is not None:
-                    raise BenchFailure(f"rollback failed after {suite_exc!r}") from suite_exc
-                raise BenchFailure(str(rollback_exc)) from rollback_exc
+        target_env = {**env, BENCH_BUNDLE_SHA256: bundle_sha256}
+        self._run_suite(config.target_suite, target_env, ["--lg-env", lg_env, *pytest_args])
 
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.

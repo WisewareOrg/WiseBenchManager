@@ -1,13 +1,13 @@
 # 0001 — Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay
 
 **Status:** accepted
-**Decided:** 2026-10-11 (meta-wisekiosk#223 generic Yocto test runner: survey, plan and the resulting decisions; rev 2: WiseBenchManager#2 core, minimal scope; rev 3: WiseBenchManager#4 `bench test`, the OTA recovery step is removed)
+**Decided:** 2026-10-11 (meta-wisekiosk#223 generic Yocto test runner: survey, plan and the resulting decisions; rev 2: WiseBenchManager#2 core, minimal scope; rev 3: WiseBenchManager#4 `bench test`, the rollback and the recovery step are removed)
 **Rev:** 3
 
 ## Revisions
-- **rev 3** — 2026-10-11 — decision 6's recovery step (the mid-OTA marker, `Ota.recover`) is
-  removed: which slot the board rests on between runs is not a concern, since a killed run
-  leaves the board on its candidate and the next run's own install overwrites it
+- **rev 3** — 2026-10-11 — decision 6's recovery step (the mid-OTA marker, `Ota.recover`) and
+  its rollback are both removed: rauc always installs to whichever slot is inactive, so which
+  slot the board rests on is not a concern, either before or after a run
   (WisewareOrg/WiseBenchManager#4).
 - **rev 2** — 2026-10-11 — the board is labgrid's own pytest plugin and env file, with no fixture of
   the runner's own (decision 2); the record is pytest-reportlog's report, with one run-level file
@@ -30,7 +30,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 3. Replay uses mitmproxy: server replay from a recorded HAR file, a miss kills the connection, upstream certificates are never fetched, mitmproxy generates the replay CA and one accept step installs it on the board. An addon of about eighty lines writes the `SERVE`/`HIT`/`MISS` lines the record keys on and strips a configurable header list when recording. The sets (config, expected page state, recording) are the layer's data; the runner never sees a set directory, only the one HAR path a layer fixture hands it.
 4. The layer (meta-wisekiosk) keeps only what is the appliance's: the host suite (artefact checks before install) and the target suite (checks on the booted board) with their parsing helpers, a config file naming its hooks and the two suites, the replay sets as data, the requirement items, `kiosk-preflight` and the OTA recipes for hand use. The oeqa framework, the shell driver, the bespoke proxy, the driver's self-test and the log viewer are deleted at the cut-over.
 5. pytest-reportlog's JSON-lines report is the record: every test report, with whatever a layer's fixtures and tests attach through `record_property`. The runner adds one file beside it per run — its own version, the pytest command line, start and end times, the exit status — and nothing else; a verdict posted as a GitHub check run so a merge queue (Mergify) can require it is a later ticket.
-6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing. The rollback runs in a finally. A run killed outright leaves the board booted on its candidate, which the next run installs over; which slot the board rests on is not a concern.
+6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing. A run installs its candidate and leaves the board on it; which slot the board rests on is not a concern.
 7. Scheduling stays with well-supported tools: a systemd user timer and `flock`. Queue-head selection is a small adapter, swapped when the organisation moves the merge queue to Mergify.
 8. The operator's view is `bench status --watch`, about 150 lines on a maintained terminal library reading the runner's own event stream, keeping the functionality of the existing TUI and no more.
 9. Provenance is structural, not recorded on trust: `bench test <ref>` has no way to skip the build or supply an artefact. It resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what it built, and the first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. A run therefore cannot test something it did not build from a ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.

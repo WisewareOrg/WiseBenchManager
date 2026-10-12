@@ -60,10 +60,8 @@ class _FakeOta:
 
     def __init__(self, driver):
         self.driver = driver
-        self.install_result = ("rootfs.0", "sha256value")
+        self.install_result = "sha256value"
         self.install_error = None
-        self.previous_slot = "rootfs.1"
-        self.candidate_slot = "rootfs.0"
         self.calls = []
 
     def install(self, bundle, destination):
@@ -71,10 +69,6 @@ class _FakeOta:
         if self.install_error is not None:
             raise self.install_error
         return self.install_result
-
-    def rollback(self):
-        self.calls.append("rollback")
-        return "rootfs.1"
 
 
 class _FakeTarget:
@@ -161,8 +155,8 @@ def test_a_failing_host_suite_is_a_candidate_failure_and_never_installs(monkeypa
     assert otas == []
 
 
-def test_a_failing_target_suite_is_a_candidate_failure_but_still_rolls_back(monkeypatch, tmp_path):
-    otas = _stub_labgrid(monkeypatch)
+def test_a_failing_target_suite_is_a_candidate_failure(monkeypatch, tmp_path):
+    _stub_labgrid(monkeypatch)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=True)
@@ -170,43 +164,6 @@ def test_a_failing_target_suite_is_a_candidate_failure_but_still_rolls_back(monk
     lg_env = _write_lg_env(tmp_path)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     with pytest.raises(bench_test.CandidateFailure, match="target_suite failed"):
-        bench.run(lg_env, [])
-    assert "rollback" in otas[0].calls
-
-
-def test_a_rollback_failure_on_top_of_a_candidate_failure_is_the_benchs(monkeypatch, tmp_path):
-    class _RollbackFailsOta(_FakeOta):
-        def rollback(self):
-            self.calls.append("rollback")
-            raise RuntimeError("rauc blew up on rollback")
-
-    monkeypatch.setattr(bench_test, "Environment", _FakeEnvironment)
-    monkeypatch.setattr(bench_test, "Ota", _RollbackFailsOta)
-    _repo_with_one_commit(tmp_path)
-    _write_bench_toml(tmp_path)
-    _write_suite(tmp_path, "host_suite", passing=True)
-    _write_suite(tmp_path, "target_suite", passing=False)
-    lg_env = _write_lg_env(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match="rollback failed after"):
-        bench.run(lg_env, [])
-
-
-def test_a_rollback_failure_after_a_passing_target_suite_is_the_benchs(monkeypatch, tmp_path):
-    class _RollbackFailsOta(_FakeOta):
-        def rollback(self):
-            self.calls.append("rollback")
-            raise RuntimeError("rauc blew up on rollback")
-
-    monkeypatch.setattr(bench_test, "Environment", _FakeEnvironment)
-    monkeypatch.setattr(bench_test, "Ota", _RollbackFailsOta)
-    _repo_with_one_commit(tmp_path)
-    _write_bench_toml(tmp_path)
-    _write_suite(tmp_path, "host_suite", passing=True)
-    _write_suite(tmp_path, "target_suite", passing=True)
-    lg_env = _write_lg_env(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(bench_test.BenchFailure, match="rauc blew up on rollback"):
         bench.run(lg_env, [])
 
 
@@ -276,8 +233,6 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 
     target_env = calls[8][1]
     assert target_env["BENCH_BUNDLE_SHA256"] == "sha256value"
-    assert target_env["BENCH_PREVIOUS_SLOT"] == "rootfs.1"
-    assert target_env["BENCH_CANDIDATE_SLOT"] == "rootfs.0"
 
 
 # -- the real pytest subprocess --

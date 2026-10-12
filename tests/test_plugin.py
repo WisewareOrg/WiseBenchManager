@@ -48,13 +48,9 @@ def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
     monkeypatch.setenv("BENCH_SHA", "deadbeef")
     monkeypatch.setenv("BENCH_SET", "scratch-set")
     monkeypatch.setenv("BENCH_BUNDLE_SHA256", "sha256value")
-    monkeypatch.setenv("BENCH_PREVIOUS_SLOT", "rootfs.1")
-    monkeypatch.setenv("BENCH_CANDIDATE_SLOT", "rootfs.0")
     run_dir = _run_one_passing_test(pytester, monkeypatch)
     data = json.loads((run_dir / "run.json").read_text())
     assert data["image_commit"] == "deadbeef"
     assert "tree" not in data
     assert data["set"] == "scratch-set"
     assert data["bundle_sha256"] == "sha256value"
-    assert data["previous_slot"] == "rootfs.1"
-    assert data["candidate_slot"] == "rootfs.0"

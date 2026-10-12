@@ -1,4 +1,4 @@
-"""OTA install and rollback over labgrid's SSHDriver and rauc."""
+"""OTA install over labgrid's SSHDriver and rauc."""
 
 import hashlib
 import json
@@ -14,15 +14,13 @@ class OtaError(Exception):
 
 
 class Ota:
-    """Install, rollback and read back the previous/candidate slot, for one board over one
-    labgrid SSHDriver.
+    """Install a bundle on one board, over one labgrid SSHDriver.
 
     Holds the driver and the ssh-wait bound; calls the driver, never re-exposing it. `install`
-    records the booted slot and the candidate it is about to boot into, and raises if the board
-    comes back on any other slot (a rauc fallback). `rollback` marks the candidate bad and
-    reboots back onto the previous slot, raising if the board does not come back on it.
-    `previous_slot`/`candidate_slot` read back what `install` recorded, for a caller that wants
-    those facts without reaching into this instance's own state.
+    reads the candidate slot (the board's other slot) before installing, and raises if the
+    board comes back on any slot but that one (a rauc fallback). rauc always installs to
+    whichever slot is inactive, so which slot the board rests on before a run is not a
+    concern.
     """
 
     def __init__(self, driver, timeout=_WAIT_TIMEOUT, interval=_WAIT_INTERVAL):
@@ -36,18 +34,6 @@ class Ota:
         self._driver = driver
         self._timeout = timeout
         self._interval = interval
-        self._previous_slot = None
-        self._candidate_slot = None
-
-    @property
-    def previous_slot(self):
-        """str | None: The slot that was booted before `install` ran, or None before it has."""
-        return self._previous_slot
-
-    @property
-    def candidate_slot(self):
-        """str | None: The slot `install` booted into, or None before `install` has run."""
-        return self._candidate_slot
 
     def _slots(self):
         """Read the board's slots and name the booted one and the other.
@@ -97,18 +83,17 @@ class Ota:
     def install(self, bundle, destination):
         """Put a bundle on the board, install it with rauc, and reboot into it.
 
-        Records the booted slot and the candidate slot (the board's other slot) before
-        installing. `reboot`'s own exit status is not checked: it is unreliable once the board
-        goes down. Verifies the board actually booted the candidate slot once it comes back,
-        raising if a rauc fallback left it on the previous slot instead.
+        Reads the candidate slot (the board's other slot) before installing. `reboot`'s own
+        exit status is not checked: it is unreliable once the board goes down. Verifies the
+        board actually booted the candidate slot once it comes back, raising if a rauc
+        fallback left it on the previous slot instead.
 
         Args:
             bundle (str | os.PathLike): Path to the local `.raucb` bundle file.
             destination (str): Path on the board to copy the bundle to before installing it.
 
         Returns:
-            tuple[str, str]: The candidate slot's name (e.g. `rootfs.0`), verified booted
-            after the reboot, and the bundle file's sha256 hex digest.
+            str: The bundle file's sha256 hex digest.
 
         Raises:
             OSError: `bundle` could not be opened to compute its sha256.
@@ -116,7 +101,7 @@ class Ota:
                 back on a slot other than the candidate (a rauc fallback).
             Exception: ssh did not answer again within the wait bound after rebooting.
         """
-        self._previous_slot, self._candidate_slot = self._slots()
+        _, candidate = self._slots()
 
         with open(bundle, "rb") as f:
             sha256 = hashlib.file_digest(f, "sha256").hexdigest()
@@ -127,36 +112,6 @@ class Ota:
         self._driver.run("reboot")
         self._wait_for_ssh()
         booted, _ = self._slots()
-        if booted != self._candidate_slot:
-            raise OtaError(f"expected {self._candidate_slot} booted after install, found {booted}")
-        return booted, sha256
-
-    def rollback(self):
-        """Mark the candidate slot bad and reboot back onto the previous slot.
-
-        Uses the candidate and previous slots `install` recorded. `reboot`'s own exit status
-        is not checked: it is unreliable once the board goes down.
-
-        Returns:
-            str: The booted slot's name after the reboot.
-
-        Raises:
-            RuntimeError: `install` has not recorded a candidate on this instance.
-            OtaError: `rauc status mark-bad` or a slot-status read exited nonzero, or the
-                board did not come back on the previous slot.
-            Exception: ssh did not answer again within the wait bound after rebooting.
-        """
-        if self._candidate_slot is None:
-            raise RuntimeError("install() has not run")
-        _, stderr, returncode = self._driver.run(f"rauc status mark-bad {self._candidate_slot}")
-        if returncode != 0:
-            raise OtaError(f"rauc status mark-bad exited {returncode}: {stderr}")
-        self._driver.run("reboot")
-        self._wait_for_ssh()
-        booted, _ = self._slots()
-        if booted != self._previous_slot:
-            raise OtaError(
-                f"expected {self._previous_slot} booted after mark-bad "
-                f"{self._candidate_slot}, found {booted}"
-            )
-        return booted
+        if booted != candidate:
+            raise OtaError(f"expected {candidate} booted after install, found {booted}")
+        return sha256

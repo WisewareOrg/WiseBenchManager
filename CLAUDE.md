@@ -32,9 +32,8 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
 - **Outcomes are two things only.** A failing hook or test is the candidate's and is posted. An error in a
   fixture or the precondition is the bench's: DISABLED, timer stopped, nothing posted. Never invent a
   third class, and never post on the bench's failure.
-- **A killed run leaves the board on its candidate slot.** The rollback runs in a `finally`; a run
-  killed outright leaves nothing undone, and the next run's own install overwrites whatever is there.
-  Which slot the board rests on between runs is not a concern.
+- **A run installs its candidate and leaves the board on it.** rauc always installs to whichever
+  slot is inactive, so which slot the board rests on is not a concern, either before or after a run.
 
 ## How decisions are made
 
