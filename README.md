@@ -28,27 +28,25 @@ whatever a layer's own tests recorded against them, and the exact command line.
    `Ota` is even built.
 2. `build` and `bundle` hooks — the layer's own commands, run in the checkout of the ref under test.
 3. `host_suite` — pytest on the pipeline host against the built artefacts, before anything is installed.
-4. Only now is one `ota.Ota(driver, marker)` constructed — a hook can run for hours, and holding
-   labgrid's ssh master open across it risks inheriting a dead connection. `Ota.recover()` checks
-   the marker a prior `install` wrote before dying mid-OTA: if the board is still booted on the
-   candidate slot the marker names, it marks that slot bad and reboots off it; either way it
-   removes the marker before continuing.
+4. Only now is one `ota.Ota(driver)` constructed — a hook can run for hours, and holding
+   labgrid's ssh master open across it risks inheriting a dead connection.
 5. Install and boot — `Ota.install(bundle, destination)`: reads the board's slots, records the
-   booted and candidate slots, writes the marker, then labgrid's `put`, `rauc install`, reboot,
-   wait for ssh to answer again; returns the booted slot and the bundle's sha256.
+   booted and candidate slots, labgrid's `put`, `rauc install`, reboot, wait for ssh to answer
+   again, then verifies the board booted the candidate (raising on a rauc fallback); returns
+   the booted slot and the bundle's sha256.
 6. `target_suite` — pytest against the booted board, with labgrid's own env file.
-7. Roll back — `Ota.rollback()`, called whether the tests passed or not: `rauc status mark-bad`
-   on the candidate `install` recorded, reboot, wait, raise `OtaError` if the previous slot is
-   not booted, otherwise clear the marker and return the booted slot.
+7. Roll back — `Ota.rollback()`, called in a `finally` whether the tests passed or not: `rauc
+   status mark-bad` on the candidate `install` recorded, reboot, wait, raise `OtaError` if the
+   previous slot is not booted, otherwise return the booted slot.
 8. Verdict — a commit status and PR comment naming the verdict and the report path (`bench run`), or
    the terminal (`bench test`).
 
-The same `Ota` instance's sequence is `recover()`, `install(...)`, `rollback()` — `recover`
-first, so a run that died mid-OTA last time is undone before this run installs anything new.
 `install` and `rollback` are plain methods the `bench test` script calls directly; neither is a
 pytest fixture. A failing hook or test is the candidate's failure and is posted. An error in a
 bench step — the precondition, an install or a rollback — is the bench's failure: a `DISABLED`
-marker is written, the timer is stopped, nothing is posted.
+marker is written, the timer is stopped, nothing is posted. A run killed outright leaves the
+board booted on its candidate slot, which the next run's own install overwrites; which slot the
+board rests on between runs is not a concern.
 
 ## What a layer provides
 

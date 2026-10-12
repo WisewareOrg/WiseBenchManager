@@ -11,8 +11,8 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
   tree is a defect.
 - **No reference to a consumer.** No pin, import, URL or path to a layer repository. The runner is handed
   a checkout and a `bench.toml` at run time; that file and the suites in it are the whole contract.
-- **No state between runs.** Nothing is carried from one run to the next except the mid-OTA marker and
-  the DISABLED marker, both of which exist to make the next run safe.
+- **No state between runs.** Nothing is carried from one run to the next except the DISABLED
+  marker, which exists to make the next run safe.
 
 ## How it is built
 
@@ -32,9 +32,9 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
 - **Outcomes are two things only.** A failing hook or test is the candidate's and is posted. An error in a
   fixture or the precondition is the bench's: DISABLED, timer stopped, nothing posted. Never invent a
   third class, and never post on the bench's failure.
-- **Mid-OTA failure recovers by itself.** A run that dies between install and rollback leaves a marker;
-  the next run recovers the board (`Ota.recover`) after the hooks and before installing. A hand step is
-  a defect.
+- **A killed run leaves the board on its candidate slot.** The rollback runs in a `finally`; a run
+  killed outright leaves nothing undone, and the next run's own install overwrites whatever is there.
+  Which slot the board rests on between runs is not a concern.
 
 ## How decisions are made
 

@@ -3,7 +3,6 @@
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 from labgrid import Environment
 
@@ -38,12 +37,14 @@ class BenchTest:
     through: resolve the ref and refuse a dirty tree, check it out, read `bench.toml`, run the
     three hooks (a nonzero `precondition` is this runner's own failure; `build`/`bundle` are
     the candidate's), run the host suite, build the `Ota` only now -- after the hooks, so a
-    build that runs for hours never holds labgrid's ssh master open across it -- recover a
-    mid-OTA crash, install, run the target suite, roll back -- always, even if the target
-    suite itself raised. If the target suite failed and rolling back then also fails, the
-    rollback failure is this runner's own (`BenchFailure`), chained onto the target suite's
-    original failure rather than silently replacing it; if the target suite passed and only
-    the rollback fails, that alone is `BenchFailure` too.
+    build that runs for hours never holds labgrid's ssh master open across it -- install, run
+    the target suite, roll back in a `finally` -- always, even if the target suite itself
+    raised. If the target suite failed and rolling back then also fails, the rollback failure
+    is this runner's own (`BenchFailure`), chained onto the target suite's original failure
+    rather than silently replacing it; if the target suite passed and only the rollback fails,
+    that alone is `BenchFailure` too. A run killed outright leaves the board booted on its
+    candidate slot, which the next run's own install overwrites; which slot the board rests on
+    between runs is not a concern.
     `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
     `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
     writes a `run.json` itself.
@@ -102,9 +103,7 @@ class BenchTest:
 
         target = Environment(config_file=lg_env).get_target("main")
         driver = target.get_driver("SSHDriver")
-        marker = Path(result_dir) / "mid-ota"
-        ota = Ota(driver, marker)
-        ota.recover()
+        ota = Ota(driver)
         _, bundle_sha256 = ota.install(
             self.checkout / config.bundle_path, config.bundle_destination
         )
@@ -120,14 +119,14 @@ class BenchTest:
             self._run_suite(config.target_suite, target_env, ["--lg-env", lg_env, *pytest_args])
         except Exception as exc:
             suite_exc = exc
-        try:
-            ota.rollback()
-        except Exception as rollback_exc:
-            if suite_exc is not None:
-                raise BenchFailure(f"rollback failed after {suite_exc!r}") from suite_exc
-            raise BenchFailure(str(rollback_exc)) from rollback_exc
-        if suite_exc is not None:
-            raise suite_exc
+            raise
+        finally:
+            try:
+                ota.rollback()
+            except Exception as rollback_exc:
+                if suite_exc is not None:
+                    raise BenchFailure(f"rollback failed after {suite_exc!r}") from suite_exc
+                raise BenchFailure(str(rollback_exc)) from rollback_exc
 
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.
