@@ -59,6 +59,14 @@ def test_main_returns_2_on_a_bench_failure(made, monkeypatch, tmp_path):
     assert cli.main(["test", "HEAD"]) == 2
 
 
+def test_main_returns_2_on_a_raw_exception_run_never_wraps(made, monkeypatch, tmp_path):
+    """`run()` no longer wraps a step's own exception into `BenchFailure` -- a raw `OtaError`
+    or the dirty-tree `RuntimeError` reaches `main` as itself, and `main` still exits 2."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(RuntimeError("tree is dirty: [' M x']")))
+    assert cli.main(["test", "HEAD"]) == 2
+
+
 def test_main_returns_2_when_lg_env_is_not_set(monkeypatch, tmp_path):
     monkeypatch.delenv("LG_ENV", raising=False)
     monkeypatch.chdir(tmp_path)
