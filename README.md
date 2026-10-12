@@ -66,10 +66,30 @@ bundle       = "just bundle"
 [tests]
 host_suite   = "tests/host_suite"
 target_suite = "tests/target_suite"
+
+[github]
+repo        = "owner/name"
+app_id      = 123456
+private_key = "/path/outside/the/tree/app.pem"
+check       = "bench"
 ```
 
-A `[github]` table (the check name to post a verdict under) arrives with issue #6; `Config.load`
-does not read one yet.
+`[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
+layer's own repository, `app_id` the App's id, `private_key` a filesystem path to the App's
+PEM-encoded private key outside any tree, `check` the check run's name, exactly as the layer's
+ruleset lists it as a required check.
+
+Setting the App up is a one-time, by-hand step: create a GitHub App with the "Checks" permission
+set to read and write, install it on the layer's repository, download its private key to a path
+outside any tree, and add `check`'s name to the repository's branch protection or merge-queue
+ruleset as a required check. `bench run` then calls:
+
+```python
+Check(repo, app_id, private_key, check).post(sha, conclusion, title, summary)
+```
+
+creating one completed check run on `sha` with `conclusion` `"success"` or `"failure"`, `title`
+the one-line verdict and `summary` the report directory path.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output inherited straight to the terminal;
