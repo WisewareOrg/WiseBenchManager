@@ -3,7 +3,7 @@
 A generic pytest hardware-in-the-loop runner for over-the-air updated boards. It takes a git ref of a
 Yocto layer through build, OTA install, boot, tests on the booted board, and a verdict, and
 it knows nothing about the application the board runs. Design decisions are in
-[`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 3.
+[`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 4.
 
 ## Two commands
 
