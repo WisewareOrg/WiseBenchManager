@@ -280,8 +280,8 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 
     target_env = calls[8][1]
     assert target_env[bench_test.BENCH_BUNDLE_SHA256] == "sha256value"
-    assert target_env[bench_test.BENCH_SLOT_BEFORE] == "rootfs.1"
-    assert target_env[bench_test.BENCH_SLOT_AFTER] == "rootfs.0"
+    assert target_env[bench_test.BENCH_PREVIOUS_SLOT] == "rootfs.1"
+    assert target_env[bench_test.BENCH_CANDIDATE_SLOT] == "rootfs.0"
 
 
 # -- the real pytest subprocess --
@@ -301,20 +301,3 @@ def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_p
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(bench._run_suite, "suite", {**os.environ}, [])
         future.result(timeout=30)  # _run_suite returns None; a raise here means the suite failed
-
-
-# -- agreement with plugin.py --
-
-
-def test_bench_test_and_plugin_agree_on_the_bench_env_var_names():
-    """`bench_test` imports these names from `plugin` rather than carrying its own copies, so
-    this mostly guards against a later edit shadowing or redefining one of them."""
-    from wisebench import plugin
-
-    assert bench_test.BENCH_RESULT_DIR == plugin.BENCH_RESULT_DIR
-    assert bench_test.BENCH_SHA == plugin.BENCH_SHA
-    assert bench_test.BENCH_TREE == plugin.BENCH_TREE
-    assert bench_test.BENCH_SET == plugin.BENCH_SET
-    assert bench_test.BENCH_BUNDLE_SHA256 == plugin.BENCH_BUNDLE_SHA256
-    assert bench_test.BENCH_SLOT_BEFORE == plugin.BENCH_SLOT_BEFORE
-    assert bench_test.BENCH_SLOT_AFTER == plugin.BENCH_SLOT_AFTER

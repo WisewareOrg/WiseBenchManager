@@ -3,7 +3,7 @@
 A generic pytest hardware-in-the-loop runner for over-the-air updated boards. It takes a git ref of a
 Yocto layer through build, OTA install, boot, tests on the booted board, rollback and a verdict, and
 it knows nothing about the application the board runs. Design decisions are in
-[`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 2.
+[`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 3.
 
 ## Two commands
 
@@ -71,17 +71,18 @@ bundle       = "just bundle"
 [tests]
 host_suite   = "tests/host_suite"
 target_suite = "tests/target_suite"
-
-[github]
-check_name = "bench"
 ```
 
-A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`
-and `BENCH_SET` in its environment, output inherited straight to the terminal; its exit status is
-pass or fail. The suites are ordinary pytest directories, run under the runner's own interpreter, so a
-layer's test helpers may import only labgrid, pytest, pytest-reportlog, tenacity, the standard
-library and whatever the layer's own `pythonpath` adds. The checkout's own `pyproject.toml`
-`addopts` never reach that run; its `testpaths`, `pythonpath` and markers still do.
+A `[github]` table (the check name to post a verdict under) arrives with issue #6; `Config.load`
+does not read one yet.
+
+A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
+`BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output inherited straight to the terminal;
+its exit status is pass or fail. The suites are ordinary pytest directories, run under the
+runner's own interpreter, so a layer's test helpers may import only labgrid, pytest,
+pytest-reportlog, tenacity, the standard library and whatever the layer's own `pythonpath` adds.
+The checkout's own `pyproject.toml` `addopts` never reach that run; its `testpaths`, `pythonpath`
+and markers still do.
 
 The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
 `NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
@@ -105,13 +106,14 @@ time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: e
 with whatever a layer attaches through `record_property`. Beside it the runner writes one file per
 run, `run.json`, written at session end so a run that fails halfway still leaves everything up to
 that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
-line, the start and end times, and the exit status. `bench test` feeds the commit, the checkout
-path and the replay set name in through `BENCH_SHA`/`BENCH_TREE`/`BENCH_SET`, present for every
-hook and suite; the bundle's sha256 and the booted slot before and after install come in through
-`BENCH_BUNDLE_SHA256`/`BENCH_SLOT_BEFORE`/`BENCH_SLOT_AFTER`, set only for the target suite, once
-`install` has run. The plugin reads whichever of these are present and writes them into that
-run's own `run.json`; `bench test` itself never opens one. `bench run` adds the verdict. A
-per-item credit map is not built.
+line, the start and end times, and the exit status. The plugin reads whichever of a set of
+`BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
+field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `bundle_sha256` from
+`BENCH_BUNDLE_SHA256`, `previous_slot` from `BENCH_PREVIOUS_SLOT`, `candidate_slot` from
+`BENCH_CANDIDATE_SLOT` — the last three only once `install` has run, for the target suite.
+`BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
+it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
+A per-item credit map is not built.
 
 ## Running it
 

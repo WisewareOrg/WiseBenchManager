@@ -11,11 +11,11 @@ from wisebench.config import Config
 from wisebench.ota import Ota
 from wisebench.plugin import (
     BENCH_BUNDLE_SHA256,
+    BENCH_CANDIDATE_SLOT,
+    BENCH_PREVIOUS_SLOT,
     BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
-    BENCH_SLOT_AFTER,
-    BENCH_SLOT_BEFORE,
     BENCH_TREE,
     DEFAULT_RESULT_DIR,
 )
@@ -112,8 +112,8 @@ class BenchTest:
         target_env = {
             **env,
             BENCH_BUNDLE_SHA256: bundle_sha256,
-            BENCH_SLOT_BEFORE: ota.previous_slot,
-            BENCH_SLOT_AFTER: ota.candidate_slot,
+            BENCH_PREVIOUS_SLOT: ota.previous_slot,
+            BENCH_CANDIDATE_SLOT: ota.candidate_slot,
         }
         suite_exc = None
         try:

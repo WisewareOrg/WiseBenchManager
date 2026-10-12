@@ -19,19 +19,19 @@ BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
 BENCH_BUNDLE_SHA256 = "BENCH_BUNDLE_SHA256"
-BENCH_SLOT_BEFORE = "BENCH_SLOT_BEFORE"
-BENCH_SLOT_AFTER = "BENCH_SLOT_AFTER"
+BENCH_PREVIOUS_SLOT = "BENCH_PREVIOUS_SLOT"
+BENCH_CANDIDATE_SLOT = "BENCH_CANDIDATE_SLOT"
 
 # run.json field name -> the environment variable it comes from, when that fact is known.
-# BENCH_SHA/SET are set for every hook and suite; BENCH_BUNDLE_SHA256/SLOT_BEFORE/SLOT_AFTER
-# only for the target suite, once install() has run. BENCH_TREE is a hook variable only -- it
-# never reaches run.json.
+# BENCH_SHA/SET are set for every hook and suite; BENCH_BUNDLE_SHA256/PREVIOUS_SLOT/
+# CANDIDATE_SLOT only for the target suite, once install() has run. BENCH_TREE is a hook
+# variable only -- it never reaches run.json.
 BENCH_FIELDS = {
     "image_commit": BENCH_SHA,
     "set": BENCH_SET,
     "bundle_sha256": BENCH_BUNDLE_SHA256,
-    "previous_slot": BENCH_SLOT_BEFORE,
-    "candidate_slot": BENCH_SLOT_AFTER,
+    "previous_slot": BENCH_PREVIOUS_SLOT,
+    "candidate_slot": BENCH_CANDIDATE_SLOT,
 }
 
 
