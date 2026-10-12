@@ -110,7 +110,7 @@ field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `bundle_sha
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
-stderr to `proxy-<counter>.log` beside that run's `report.jsonl`, one file per fixture use.
+stderr to `proxy-<test>-<n>.log` beside that run's `report.jsonl`, one file per fixture use.
 
 ## Running it
 

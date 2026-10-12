@@ -1,10 +1,14 @@
 # 0001 — Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay
 
 **Status:** accepted
-**Decided:** 2026-10-11 (meta-wisekiosk#223 generic Yocto test runner: survey, plan and the resulting decisions; rev 2: WiseBenchManager#2 core, minimal scope; rev 3: WiseBenchManager#4 `bench test`, the rollback and the recovery step are removed)
-**Rev:** 3
+**Decided:** 2026-10-12 (meta-wisekiosk#223 generic Yocto test runner: survey, plan and the resulting decisions; rev 2: WiseBenchManager#2 core, minimal scope; rev 3: WiseBenchManager#4 `bench test`, the rollback and the recovery step are removed; rev 4: WiseBenchManager#5 replay has no addon, mitmproxy's own output is the record)
+**Rev:** 4
 
 ## Revisions
+- **rev 4** — 2026-10-12 — decision 3's addon (writing `SERVE`/`HIT`/`MISS` lines and stripping a
+  configured header list when recording) is removed: mitmproxy's own output is the record of
+  what it served, and what a recording keeps or drops is the recorder's own call at recording
+  time, by the documented command (WisewareOrg/WiseBenchManager#5).
 - **rev 3** — 2026-10-11 — decision 6's recovery step (the mid-OTA marker, `Ota.recover`) and
   its rollback are both removed: rauc always installs to whichever slot is inactive, so which
   slot the board rests on is not a concern, either before or after a run
@@ -27,7 +31,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 
 1. The bench runner, WiseBenchManager, is a generic pytest hardware-in-the-loop runner: a Python package in its own WisewareOrg repository, cloned on the pipeline host and run from its checkout at a tag, pointed at a meta-wisekiosk checkout and a small config (board address and hostname, bundle path, hooks, GitHub target) at run time. Neither repository pins or imports the other; every run record names the runner's version. The split is deliberate and the runner is meant to be hard to change once right.
 2. Every test is pytest, in two suites the config names: `host_suite` runs on the pipeline host against the built artefacts before anything is installed; `target_suite` runs against the booted board. Setup and teardown are fixtures. labgrid's own pytest plugin provides the board: an env file in the layer names the board's address, templated from the environment, and the layer points pytest at it with `--lg-env`; the runner adds no fixture of its own. Everything that names this appliance — its env file, its units, its config, its page state, its probe, its buildinfo stamp — lives in the layer's own `conftest.py` and tests.
-3. Replay uses mitmproxy: server replay from a recorded HAR file, a miss kills the connection, upstream certificates are never fetched, mitmproxy generates the replay CA and one accept step installs it on the board. An addon of about eighty lines writes the `SERVE`/`HIT`/`MISS` lines the record keys on and strips a configurable header list when recording. The sets (config, expected page state, recording) are the layer's data; the runner never sees a set directory, only the one HAR path a layer fixture hands it.
+3. Replay uses mitmproxy: server replay from a recorded HAR file, a miss kills the connection and voids the run as the bench's failure, upstream certificates are never fetched, connections are made lazily so replay needs no reachable upstream, and mitmproxy generates the replay CA with one accept step installing it on the board. mitmproxy's own output — one line per flow, tagged when replayed, and a warning naming a killed non-replay request — is the record of what it served; no addon of this runner's own parses or rewrites it. What a recording keeps or drops is decided at recording time, by the command the runner's README documents. The sets (config, expected page state, recording) are the layer's data; the runner never sees a set directory, only the one HAR path a layer fixture hands it.
 4. The layer (meta-wisekiosk) keeps only what is the appliance's: the host suite (artefact checks before install) and the target suite (checks on the booted board) with their parsing helpers, a config file naming its hooks and the two suites, the replay sets as data, the requirement items, `kiosk-preflight` and the OTA recipes for hand use. The oeqa framework, the shell driver, the bespoke proxy, the driver's self-test and the log viewer are deleted at the cut-over.
 5. pytest-reportlog's JSON-lines report is the record: every test report, with whatever a layer's fixtures and tests attach through `record_property`. The runner adds one file beside it per run — its own version, the pytest command line, start and end times, the exit status — and nothing else; a verdict posted as a GitHub check run so a merge queue (Mergify) can require it is a later ticket.
 6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing. A run installs its candidate and leaves the board on it; which slot the board rests on is not a concern.
