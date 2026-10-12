@@ -58,12 +58,8 @@ class Ota:
         if returncode != 0:
             raise OtaError(f"rauc status exited {returncode}: {stderr}")
         slots = json.loads(stdout[0])["slots"]
-        booted = next(
-            name for slot in slots for name, info in slot.items() if info["state"] == "booted"
-        )
-        other = next(
-            name for slot in slots for name, info in slot.items() if info["state"] != "booted"
-        )
+        booted = next(n for slot in slots for n, info in slot.items() if info["state"] == "booted")
+        other = next(n for slot in slots for n, info in slot.items() if info["state"] != "booted")
         return booted, other
 
     def _wait_for_ssh(self):
