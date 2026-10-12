@@ -26,8 +26,7 @@ class BenchRun:
                 fetches the job's ref into, and tests.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
                 names the systemd unit this run disables on the bench's own failure.
-            result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value, so
-                it always agrees with the lock's directory.
+            result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value.
 
         Raises:
             ValueError: `config.run_unit` is None (`bench.toml` has no `[run] unit`).

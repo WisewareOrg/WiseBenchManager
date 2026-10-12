@@ -300,3 +300,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
     disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
     assert "TimeoutStartSec" in disabled[1]
     assert calls[-1] == ["systemctl", "--user", "disable", "--now", "bench-run.timer"]
+
+    # The lock was released on this path too -- a second acquisition succeeds.
+    with Lock(tmp_path / "records"):
+        pass
