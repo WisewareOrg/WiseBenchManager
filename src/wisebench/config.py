@@ -23,6 +23,9 @@ class Config:
             the checkout; None under the same condition.
         github_check (str | None): The check run's name, as the layer's ruleset lists it; None
             under the same condition.
+        run_unit (str | None): The systemd unit base name (`[run] unit`) `bench run` disables
+            on the bench's own failure; None when `bench.toml` has no `[run]` table, which is
+            fine for `bench test` and a failure only `bench run` itself hits.
     """
 
     hooks: dict
@@ -34,6 +37,7 @@ class Config:
     github_app_id: int | None = None
     github_private_key: str | None = None
     github_check: str | None = None
+    run_unit: str | None = None
 
     @classmethod
     def load(cls, path):
@@ -65,4 +69,5 @@ class Config:
             github_app_id=github.get("app_id"),
             github_private_key=github.get("private_key"),
             github_check=github.get("check"),
+            run_unit=raw.get("run", {}).get("unit"),
         )

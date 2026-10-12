@@ -1,4 +1,4 @@
-"""`main`'s exit-code mapping, against a scripted fake `BenchTest`."""
+"""`main`'s exit-code mapping, against a scripted fake `BenchTest`/`BenchRun`."""
 
 import pytest
 
@@ -79,3 +79,80 @@ def test_main_passes_set_name_and_pytest_args_through(made, monkeypatch, tmp_pat
     assert cli.main(["test", "HEAD", "--set", "scratch-set", "--", "-k", "x"]) == 0
     assert made[0].set_name == "scratch-set"
     assert made[0].run_calls == [("unused.yaml", ["-k", "x"])]
+
+
+# -- `bench run` --
+
+
+def _write_bench_toml(repo):
+    (repo / "bench.toml").write_text("""
+[hooks]
+precondition = "true"
+build = "true"
+bundle = "true"
+
+[bundle]
+path = "build/x.raucb"
+destination = "/data/x.raucb"
+
+[tests]
+host_suite = "host_suite"
+target_suite = "target_suite"
+
+[github]
+repo = "acme/layer"
+app_id = 1
+private_key = "/outside/the/tree/app.pem"
+check = "bench"
+
+[run]
+unit = "bench-run"
+""")
+
+
+class _FakeBenchRun:
+    """Scripted stand-in for `wisebench.bench_run.BenchRun`."""
+
+    instances = []
+    outcome = None
+
+    def __init__(self, checkout, config):
+        self.checkout = checkout
+        self.config = config
+        self.run_calls = []
+        _FakeBenchRun.instances.append(self)
+
+    def run(self, lg_env):
+        self.run_calls.append(lg_env)
+        if isinstance(_FakeBenchRun.outcome, Exception):
+            raise _FakeBenchRun.outcome
+
+
+@pytest.fixture
+def made_run(monkeypatch):
+    monkeypatch.setenv("LG_ENV", "unused.yaml")
+    _FakeBenchRun.instances = []
+    _FakeBenchRun.outcome = None
+    yield _FakeBenchRun.instances
+
+
+def test_main_run_returns_0_on_a_clean_cycle(made_run, monkeypatch, tmp_path):
+    _write_bench_toml(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchRun", _FakeBenchRun)
+    assert cli.main(["run"]) == 0
+    assert made_run[0].run_calls == ["unused.yaml"]
+
+
+def test_main_run_returns_2_on_any_exception(made_run, monkeypatch, tmp_path):
+    _write_bench_toml(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchRun", _FakeBenchRun)
+    _FakeBenchRun.outcome = bench_test.BenchFailure("precondition exited 9")
+    assert cli.main(["run"]) == 2
+
+
+def test_main_run_returns_2_when_lg_env_is_not_set(monkeypatch, tmp_path):
+    monkeypatch.delenv("LG_ENV", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["run"]) == 2
