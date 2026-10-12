@@ -1,6 +1,6 @@
 """`BenchTest.run`: one test per failure class, the happy-path order, the real suite."""
 
-import concurrent.futures
+import functools
 import os
 import subprocess
 import sys
@@ -287,17 +287,18 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 # -- the real pytest subprocess --
 
 
-def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_path):
+def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_path, monkeypatch):
     """The one test that drives a real pytest subprocess -- calls the method under test
     directly, so dropping `sys.executable` or `-o addopts=` from `_run_suite` goes red.
-    Bounded by a thread-level timeout, not a pytest plugin and not a change to `_run_suite`
-    itself, so a stuck child can't hang this suite. The checkout's own `pyproject.toml` would
-    break this under `uv run` or without `-o addopts=` -- pinning both kept proof-found
-    fixes."""
+    Bounded by patching the `subprocess.run` `_run_suite` calls to always pass `timeout=30`,
+    not a pytest plugin and not a change to `_run_suite` itself, so a stuck child is killed by
+    `subprocess.run` itself rather than hanging this suite -- a thread-pool timeout does not
+    do this, since the pool's own shutdown still waits for the stuck worker. The checkout's own
+    `pyproject.toml` would break this under `uv run` or without `-o addopts=` -- pinning both
+    kept proof-found fixes."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     ini = '[tool.pytest.ini_options]\naddopts = "--no-such-option"\n'
     (tmp_path / "pyproject.toml").write_text(ini)
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(bench._run_suite, "suite", {**os.environ}, [])
-        future.result(timeout=30)  # _run_suite returns None; a raise here means the suite failed
+    bench._run_suite("suite", {**os.environ}, [])  # returns None; a raise means the suite failed
