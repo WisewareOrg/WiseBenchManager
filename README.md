@@ -3,7 +3,7 @@
 A generic pytest hardware-in-the-loop runner for over-the-air updated boards. It takes a git ref of a
 Yocto layer through build, OTA install, boot, tests on the booted board, and a verdict, and
 it knows nothing about the application the board runs. Design decisions are in
-[`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 3.
+[`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 4.
 
 ## Two commands
 
@@ -75,7 +75,8 @@ A hook is a command run with the checkout as its working directory and `BENCH_SH
 `BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output inherited straight to the terminal;
 its exit status is pass or fail. The suites are ordinary pytest directories, run under the
 runner's own interpreter, so a layer's test helpers may import only labgrid, pytest,
-pytest-reportlog, tenacity, the standard library and whatever the layer's own `pythonpath` adds.
+pytest-reportlog, tenacity, mitmproxy, the standard library and whatever the layer's own
+`pythonpath` adds.
 The checkout's own `pyproject.toml` `addopts` never reach that run; its `testpaths`, `pythonpath`
 and markers still do.
 
@@ -107,7 +108,9 @@ field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `bundle_sha
 `BENCH_BUNDLE_SHA256` — the last one only once `install` has run, for the target suite.
 `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
-A per-item credit map is not built.
+A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
+`record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
+stderr to `proxy-<test>-<n>.log` beside that run's `report.jsonl`, one file per fixture use.
 
 ## Running it
 
@@ -149,5 +152,16 @@ running exits without touching the board; it asks a queue adapter for the head e
 merge queue, via `gh api graphql`) and posts a commit status and PR comment with the verdict.
 `bench status --watch`, on `rich`, reads `run.json`, `report.jsonl` and the hook logs: the queue
 head, the timer and lock state, the current phase and its elapsed time, the build's progress tail,
-the test running now, and recent verdicts. Replay recordings are made by hand with
-`bench record <har-path>`, the only time the proxy reaches a real upstream.
+the test running now, and recent verdicts.
+
+Replay recordings are made by hand, the only time a proxy reaches a real upstream:
+
+```sh
+mitmdump --listen-host 127.0.0.1 --listen-port <port> --set hardump=<path>.har
+```
+
+Point a client at the running `mitmdump` as its HTTP(S) proxy and exercise whatever the set
+should hold; what a recording keeps or drops is decided then, by whoever is recording, not by
+this runner. mitmproxy generates its own CA at `~/.mitmproxy/mitmproxy-ca-cert.pem` on first
+start; installing that CA on the board, so the board trusts the certificates the `proxy`
+fixture's `mitmdump` presents, is the layer's precondition, not something this runner does.

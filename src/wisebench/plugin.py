@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from wisebench.proxy import proxy as proxy
+
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
 DEFAULT_RESULT_DIR = "records"
 
