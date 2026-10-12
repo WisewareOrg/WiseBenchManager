@@ -37,8 +37,8 @@ class Ota:
         self._marker = marker
         self._timeout = timeout
         self._interval = interval
-        self._previous = None
-        self._candidate = None
+        self._previous_slot = None
+        self._candidate_slot = None
 
     def _slots(self):
         """Read the board's slots and name the booted one and the other.
@@ -139,8 +139,8 @@ class Ota:
             OtaError: `rauc install` or a slot-status read exited nonzero.
             Exception: ssh did not answer again within the wait bound after rebooting.
         """
-        self._previous, self._candidate = self._slots()
-        self._marker.write_text(self._candidate)
+        self._previous_slot, self._candidate_slot = self._slots()
+        self._marker.write_text(self._candidate_slot)
 
         with open(bundle, "rb") as f:
             sha256 = hashlib.file_digest(f, "sha256").hexdigest()
@@ -163,19 +163,22 @@ class Ota:
             str: The booted slot's name after the reboot.
 
         Raises:
-            OtaError: `rauc status mark-bad` or a slot-status read exited nonzero, or the
-                board did not come back on the previous slot.
+            OtaError: `install` has not recorded a candidate on this instance, `rauc status
+                mark-bad` or a slot-status read exited nonzero, or the board did not come
+                back on the previous slot.
             Exception: ssh did not answer again within the wait bound after rebooting.
             OSError: The marker file could not be removed.
         """
-        booted = self._mark_bad_and_verify(self._candidate, self._previous)
+        if self._candidate_slot is None:
+            raise OtaError("install() has not run")
+        booted = self._mark_bad_and_verify(self._candidate_slot, self._previous_slot)
         self._marker.unlink()
         return booted
 
     def recover(self):
         """Undo a run that died between `install` and `rollback`, then remove the marker.
 
-        Reads the candidate from the marker file itself, not from `self._candidate`: a fresh
+        Reads the candidate from the marker file itself, not from `self._candidate_slot`: a fresh
         `Ota` built to recover a crashed run never had its own `install` set that state. If
         the board is still booted on that candidate, the expected slot after mark-bad is
         whichever slot is not the candidate.

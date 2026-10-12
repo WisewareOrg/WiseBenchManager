@@ -89,8 +89,8 @@ def test_install_records_previous_and_candidate_and_writes_the_marker(tmp_path):
     )
     bench = ota.Ota(driver, marker)
     slot, sha256 = bench.install(bundle, "/data/update.raucb")
-    assert bench._previous == "rootfs.1"
-    assert bench._candidate == "rootfs.0"
+    assert bench._previous_slot == "rootfs.1"
+    assert bench._candidate_slot == "rootfs.0"
     assert marker.read_text() == "rootfs.0"
     assert slot == "rootfs.0"
     assert sha256 == hashlib.sha256(b"x").hexdigest()
@@ -117,17 +117,25 @@ def test_rollback_marks_the_candidate_bad_reboots_and_clears_the_marker(tmp_path
         ]
     )
     bench = ota.Ota(driver, marker)
-    bench._previous = "rootfs.1"
-    bench._candidate = "rootfs.0"
+    bench._previous_slot = "rootfs.1"
+    bench._candidate_slot = "rootfs.0"
     slot = bench.rollback()
     assert slot == "rootfs.1"
     assert "rauc status mark-bad rootfs.0" in driver.run_calls
     assert not marker.exists()
 
 
+def test_rollback_raises_ota_error_when_install_has_not_run(tmp_path):
+    driver = FakeDriver([])
+    bench = ota.Ota(driver, tmp_path / "mid-ota")
+    with pytest.raises(ota.OtaError, match="install"):
+        bench.rollback()
+    assert driver.run_calls == []
+
+
 def test_rollback_raises_ota_error_on_nonzero_mark_bad(tmp_path):
     bench = ota.Ota(FakeDriver([([], ["boom"], 1)]), tmp_path / "mid-ota")
-    bench._candidate = "rootfs.0"
+    bench._candidate_slot = "rootfs.0"
     with pytest.raises(ota.OtaError, match="boom"):
         bench.rollback()
 
@@ -144,8 +152,8 @@ def test_rollback_raises_ota_error_when_the_previous_slot_is_not_booted(tmp_path
         ]
     )
     bench = ota.Ota(driver, marker)
-    bench._previous = "rootfs.1"
-    bench._candidate = "rootfs.0"
+    bench._previous_slot = "rootfs.1"
+    bench._candidate_slot = "rootfs.0"
     with pytest.raises(ota.OtaError, match="expected rootfs.1 booted"):
         bench.rollback()
 
