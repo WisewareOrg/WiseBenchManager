@@ -125,10 +125,10 @@ def test_rollback_marks_the_candidate_bad_reboots_and_clears_the_marker(tmp_path
     assert not marker.exists()
 
 
-def test_rollback_raises_ota_error_when_install_has_not_run(tmp_path):
+def test_rollback_raises_runtime_error_when_install_has_not_run(tmp_path):
     driver = FakeDriver([])
     bench = ota.Ota(driver, tmp_path / "mid-ota")
-    with pytest.raises(ota.OtaError, match="install"):
+    with pytest.raises(RuntimeError, match="install"):
         bench.rollback()
     assert driver.run_calls == []
 

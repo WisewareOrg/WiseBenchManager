@@ -159,14 +159,14 @@ class Ota:
             str: The booted slot's name after the reboot.
 
         Raises:
-            OtaError: `install` has not recorded a candidate on this instance, `rauc status
-                mark-bad` or a slot-status read exited nonzero, or the board did not come
-                back on the previous slot.
+            RuntimeError: `install` has not recorded a candidate on this instance.
+            OtaError: `rauc status mark-bad` or a slot-status read exited nonzero, or the
+                board did not come back on the previous slot.
             Exception: ssh did not answer again within the wait bound after rebooting.
             OSError: The marker file could not be removed.
         """
         if self._candidate_slot is None:
-            raise OtaError("install() has not run")
+            raise RuntimeError("install() has not run")
         booted = self._mark_bad_and_verify(self._candidate_slot, self._previous_slot)
         self._marker.unlink()
         return booted
