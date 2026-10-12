@@ -109,11 +109,9 @@ def proxy(request, record_property):
     layer's own choice, not this fixture's. The recording's sha256 is recorded through
     `record_property` under the key `recording_sha256`. mitmdump's combined stdout and stderr
     are written to one file per fixture use, named by an incrementing counter, beside this
-    run's `report.jsonl` -- not by the test's node id, which embeds the recording's full path
-    under indirect parametrization and can exceed the filesystem's name length. At teardown, a
-    `killed non-replay request` line in that file means the board asked for something the
-    recording does not hold, and ends the session with `pytest.exit(..., returncode=2)` so the
-    run is reported as the bench's own failure.
+    run's `report.jsonl`. At teardown, a `killed non-replay request` line in that file means the
+    board asked for something the recording does not hold, and ends the session with
+    `pytest.exit(..., returncode=2)` so the run is reported as the bench's own failure.
 
     Args:
         request (pytest.FixtureRequest): Supplies the recording path as `request.param`.
