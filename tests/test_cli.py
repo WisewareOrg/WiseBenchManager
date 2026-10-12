@@ -1,4 +1,4 @@
-"""`Config.load`, the checkout's dirty-tree refusal, hook/pytest plumbing, and `main`'s verdict."""
+"""The checkout's dirty-tree refusal, hook/pytest plumbing, run.json merge, and main's verdict."""
 
 import json
 import subprocess
@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 from wisebench import cli
+from wisebench.config import Config
 
 
 def _git(repo, *args):
@@ -33,44 +34,6 @@ def _bench(monkeypatch, repo, ref="HEAD", **kwargs):
         kwargs.pop("lg_env", "unused.yaml"),
         kwargs.pop("result_base", repo / "records"),
     )
-
-
-# -- Config.load --
-
-
-def test_config_load_reads_hooks_bundle_suites_and_github(tmp_path):
-    (tmp_path / "bench.toml").write_text(
-        """
-        [hooks]
-        precondition = "true"
-        build = "just build"
-        bundle = "just bundle"
-
-        [bundle]
-        path = "build/update.raucb"
-        destination = "/data/update.raucb"
-
-        [tests]
-        host_suite = "tests/host_suite"
-        target_suite = "tests/target_suite"
-
-        [github]
-        check_name = "bench"
-        """
-    )
-    config = cli.Config.load(tmp_path / "bench.toml")
-    assert config.hooks == {"precondition": "true", "build": "just build", "bundle": "just bundle"}
-    assert config.bundle_path == "build/update.raucb"
-    assert config.bundle_destination == "/data/update.raucb"
-    assert config.host_suite == "tests/host_suite"
-    assert config.target_suite == "tests/target_suite"
-    assert config.github == {"check_name": "bench"}
-
-
-def test_config_load_raises_keyerror_on_a_missing_table(tmp_path):
-    (tmp_path / "bench.toml").write_text('[hooks]\nprecondition = "true"\n')
-    with pytest.raises(KeyError):
-        cli.Config.load(tmp_path / "bench.toml")
 
 
 # -- BenchTest.resolve_and_checkout --
@@ -122,7 +85,7 @@ def test_run_hook_streams_output_and_returns_the_exit_status(monkeypatch, tmp_pa
     _repo_with_one_commit(repo)
     bench = _bench(monkeypatch, repo)
     bench.commit = "deadbeef"
-    bench.config = cli.Config(
+    bench.config = Config(
         hooks={"precondition": "echo hook-output; exit 3"},
         bundle_path="b",
         bundle_destination="/data/b",
@@ -144,7 +107,7 @@ def test_run_hook_passes_the_named_environment_variables(monkeypatch, tmp_path):
     bench = _bench(monkeypatch, repo, set_name="cards4-live")
     bench.commit = "deadbeef"
     hook = 'printf "%s %s %s %s" "$BENCH_SHA" "$BENCH_TREE" "$BENCH_RESULT_DIR" "$BENCH_SET"'
-    bench.config = cli.Config(
+    bench.config = Config(
         hooks={"precondition": hook},
         bundle_path="b",
         bundle_destination="/data/b",
@@ -205,7 +168,7 @@ class _FakeBenchTest:
     def __init__(self, ref, set_name, pytest_args, lg_env, result_base):
         self.ref = ref
         self.commit = "deadbeef"
-        self.config = cli.Config(
+        self.config = Config(
             hooks={},
             bundle_path="b",
             bundle_destination="/data/b",
