@@ -48,6 +48,7 @@ def test_config_load_reads_hooks_bundle_suites_and_github(tmp_path):
 
         [bundle]
         path = "build/update.raucb"
+        destination = "/data/update.raucb"
 
         [tests]
         host_suite = "tests/host_suite"
@@ -60,6 +61,7 @@ def test_config_load_reads_hooks_bundle_suites_and_github(tmp_path):
     config = cli.Config.load(tmp_path / "bench.toml")
     assert config.hooks == {"precondition": "true", "build": "just build", "bundle": "just bundle"}
     assert config.bundle_path == "build/update.raucb"
+    assert config.bundle_destination == "/data/update.raucb"
     assert config.host_suite == "tests/host_suite"
     assert config.target_suite == "tests/target_suite"
     assert config.github == {"check_name": "bench"}
@@ -123,6 +125,7 @@ def test_run_hook_streams_output_and_returns_the_exit_status(monkeypatch, tmp_pa
     bench.config = cli.Config(
         hooks={"precondition": "echo hook-output; exit 3"},
         bundle_path="b",
+        bundle_destination="/data/b",
         host_suite="h",
         target_suite="t",
         github={},
@@ -144,6 +147,7 @@ def test_run_hook_passes_the_named_environment_variables(monkeypatch, tmp_path):
     bench.config = cli.Config(
         hooks={"precondition": hook},
         bundle_path="b",
+        bundle_destination="/data/b",
         host_suite="h",
         target_suite="t",
         github={},
@@ -202,7 +206,12 @@ class _FakeBenchTest:
         self.ref = ref
         self.commit = "deadbeef"
         self.config = cli.Config(
-            hooks={}, bundle_path="b", host_suite="h", target_suite="t", github={}
+            hooks={},
+            bundle_path="b",
+            bundle_destination="/data/b",
+            host_suite="h",
+            target_suite="t",
+            github={},
         )
         self.calls = []
         self.hook_results = {}

@@ -17,18 +17,16 @@ from wisebench.ota import Ota
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
 _HOOK_NAMES = ("precondition", "build", "bundle")
 
-# A scratch path on the board for the staged bundle, ahead of `rauc install`; any RAUC target
-# needs only that it exists and has room for one bundle.
-_BUNDLE_DESTINATION = "/data/bench-update.raucb"
-
 
 @dataclass(frozen=True)
 class Config:
-    """`bench.toml`, read once: the three hooks, the bundle path, the two suites, github.
+    """`bench.toml`, read once: the three hooks, the bundle, the two suites, github.
 
     Args:
         hooks (dict[str, str]): Command line for each of "precondition", "build" and "bundle".
         bundle_path (str): Path to the built bundle, relative to the checkout.
+        bundle_destination (str): Path on the board to stage the bundle at before `rauc
+            install`; the layer's own fact, never this runner's.
         host_suite (str): Path to the host-side pytest suite, relative to the checkout.
         target_suite (str): Path to the target-side pytest suite, relative to the checkout.
         github (dict): The `[github]` table, unread here and carried for a later command.
@@ -36,6 +34,7 @@ class Config:
 
     hooks: dict
     bundle_path: str
+    bundle_destination: str
     host_suite: str
     target_suite: str
     github: dict
@@ -60,6 +59,7 @@ class Config:
         return cls(
             hooks=raw["hooks"],
             bundle_path=raw["bundle"]["path"],
+            bundle_destination=raw["bundle"]["destination"],
             host_suite=raw["tests"]["host_suite"],
             target_suite=raw["tests"]["target_suite"],
             github=raw.get("github", {}),
@@ -72,7 +72,10 @@ class BenchTest:
     Holds what this run's steps share -- the checkout root, the resolved ref and commit, the
     config `load_config` reads, the result directory and its own timestamp, and the `Ota`
     instance `recover` builds and `install`/`rollback` reuse -- so each step method reads and
-    writes only this state instead of re-deriving it.
+    writes only this state instead of re-deriving it. Call order: `resolve_and_checkout`,
+    `load_config`, `recover`, `run_hook` for each of "precondition"/"build"/"bundle",
+    `run_pytest` on the host suite, `install`, `run_pytest` on the target suite, `rollback`;
+    `record` may follow either `run_pytest` call once that call's own `run.json` exists.
     """
 
     def __init__(self, ref, set_name, pytest_args, lg_env, result_base):
@@ -107,29 +110,32 @@ class BenchTest:
             RuntimeError: The tree has modified or staged tracked files.
             subprocess.CalledProcessError: The ref did not resolve, or the checkout failed.
         """
-        self.commit = self._git("rev-parse", "--verify", f"{self.ref}^{{commit}}").strip()
-        status = self._git("status", "--porcelain").splitlines()
-        dirty = [line for line in status if not line.startswith("??")]
+        rev_parse = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{self.ref}^{{commit}}"],
+            cwd=self.checkout,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.commit = rev_parse.stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=self.checkout,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        dirty = [line for line in status.stdout.splitlines() if not line.startswith("??")]
         if dirty:
             raise RuntimeError(f"tree is dirty: {dirty}")
-        self._git("checkout", self.commit)
+        subprocess.run(
+            ["git", "checkout", self.commit],
+            cwd=self.checkout,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         return self.commit
-
-    def _git(self, *args):
-        """Run one git subcommand in the checkout and return its stdout.
-
-        Args:
-            *args: The git subcommand and its arguments.
-
-        Returns:
-            str: Standard output.
-
-        Raises:
-            subprocess.CalledProcessError: git exited nonzero.
-        """
-        return subprocess.run(
-            ["git", *args], cwd=self.checkout, capture_output=True, text=True, check=True
-        ).stdout
 
     def load_config(self):
         """Read `bench.toml` from the checkout root.
@@ -249,7 +255,7 @@ class BenchTest:
             Exception: ssh did not answer again within the wait bound.
         """
         bundle = self.checkout / self.config.bundle_path
-        return self._ota.install(bundle, _BUNDLE_DESTINATION)
+        return self._ota.install(bundle, self.config.bundle_destination)
 
     def rollback(self):
         """Roll back to the previous slot.
