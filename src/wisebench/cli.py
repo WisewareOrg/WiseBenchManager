@@ -228,8 +228,10 @@ class BenchTest:
         """
         before = set(self.result_base.iterdir()) if self.result_base.exists() else set()
         # This process's own interpreter, not `uv run`: the checkout's cwd may hold its own
-        # pyproject.toml, and pytest must run where wisebench's plugin and labgrid are installed.
-        command = [sys.executable, "-m", "pytest", suite]
+        # pyproject.toml, and pytest must run where wisebench's plugin and labgrid are
+        # installed. `-o addopts=""` clears whatever that pyproject.toml's own addopts
+        # carries (e.g. a coverage plugin this runner never installs) for this invocation.
+        command = [sys.executable, "-m", "pytest", suite, "-o", "addopts="]
         if lg_env:
             command += [
                 "--lg-env",
