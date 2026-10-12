@@ -10,6 +10,7 @@ dependencies = [
     "labgrid>=26.0",
     "pytest>=9.1.1",
     "pytest-reportlog>=1.0",
+    "tenacity>=9.0",
 ]
 
 [project.entry-points.pytest11]
