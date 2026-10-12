@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -58,8 +59,7 @@ def _fetch(port, url):
     return opener.open(url, timeout=5)
 
 
-def test_start_serves_the_recorded_response(har, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_start_serves_the_recorded_response(har, tmp_path):
     server = proxy.Proxy(har, tmp_path / "proxy.log")
     server.start()
     try:
@@ -68,8 +68,7 @@ def test_start_serves_the_recorded_response(har, tmp_path, monkeypatch):
         server.stop()
 
 
-def test_a_recorded_request_replays_every_time_it_is_repeated(har, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_a_recorded_request_replays_every_time_it_is_repeated(har, tmp_path):
     server = proxy.Proxy(har, tmp_path / "proxy.log")
     server.start()
     try:
@@ -79,8 +78,7 @@ def test_a_recorded_request_replays_every_time_it_is_repeated(har, tmp_path, mon
         server.stop()
 
 
-def test_stop_raises_on_a_request_outside_the_recording(har, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_stop_raises_on_a_request_outside_the_recording(har, tmp_path):
     server = proxy.Proxy(har, tmp_path / "proxy.log")
     server.start()
     with pytest.raises((urllib.error.URLError, ConnectionError)):
@@ -89,8 +87,7 @@ def test_stop_raises_on_a_request_outside_the_recording(har, tmp_path, monkeypat
         server.stop()
 
 
-def test_https_replay_needs_no_reachable_upstream(https_har, tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_https_replay_needs_no_reachable_upstream(https_har, tmp_path):
     server = proxy.Proxy(https_har, tmp_path / "proxy.log")
     server.start()
     try:
@@ -113,16 +110,47 @@ def test_https_replay_needs_no_reachable_upstream(https_har, tmp_path, monkeypat
             server.stop()
 
 
-def test_start_raises_and_logs_mitmdumps_own_error_on_an_unreadable_recording(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_start_raises_and_logs_mitmdumps_own_error_on_an_unreadable_recording(tmp_path):
     bad_har = tmp_path / "not_a_har_file"
     bad_har.write_text("not a har file")
     server = proxy.Proxy(bad_har, tmp_path / "proxy.log")
     with pytest.raises(OSError, match="mitmdump exited"):
         server.start()
     assert (tmp_path / "proxy.log").read_text().strip()
+
+
+class _NeverListens:
+    """A `Popen` stand-in that never exits and never accepts a connection."""
+
+    def __init__(self):
+        self.killed = False
+        self.waited = False
+
+    def poll(self):
+        return None
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        self.waited = True
+
+
+def test_start_kills_a_process_that_never_starts_listening(har, tmp_path, monkeypatch):
+    stand_in = _NeverListens()
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: stand_in)
+    monkeypatch.setattr(proxy, "_LISTEN_TIMEOUT", 0.3)
+    monkeypatch.setattr(proxy, "_LISTEN_INTERVAL", 0.05)
+
+    server = proxy.Proxy(har, tmp_path / "proxy.log")
+    started = time.monotonic()
+    with pytest.raises(OSError):
+        server.start()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2
+    assert stand_in.killed
+    assert stand_in.waited
 
 
 def test_proxy_fixture_yields_a_port_and_records_the_recordings_sha256(pytester, monkeypatch, har):

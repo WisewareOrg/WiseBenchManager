@@ -45,6 +45,9 @@ class Proxy:
     def start(self):
         """Pick a free loopback port, start mitmdump on it, and wait until it is listening.
 
+        Kills mitmdump before raising if it never started listening, so a caller never has to
+        track whether a failed `start` left a process running.
+
         Raises:
             OSError: mitmdump exited before it started listening, or never accepted a
                 connection within the wait bound.
@@ -76,7 +79,12 @@ class Proxy:
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
-        self._wait_until_listening()
+        try:
+            self._wait_until_listening()
+        except Exception:
+            self._process.kill()
+            self._process.wait()
+            raise
 
     def stop(self):
         """Terminate mitmdump and raise if its log names a killed non-replay request.
