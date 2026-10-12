@@ -3,13 +3,15 @@
 import tomllib
 from dataclasses import dataclass
 
+HOOK_NAMES = ("precondition", "build", "bundle")
+
 
 @dataclass(frozen=True)
 class Config:
     """`bench.toml`, read once: the three hooks, the bundle, the two suites, github.
 
     Args:
-        hooks (dict[str, str]): Command line for each of "precondition", "build" and "bundle".
+        hooks (dict[str, str]): Command line for each name in `HOOK_NAMES`.
         bundle_path (str): Path to the built bundle, relative to the checkout.
         bundle_destination (str): Path on the board to stage the bundle at before `rauc
             install`; the layer's own fact, never this runner's.
@@ -29,6 +31,9 @@ class Config:
     def load(cls, path):
         """Read and parse `bench.toml`.
 
+        Each of `HOOK_NAMES` is read by its own key, so a missing hook fails here rather
+        than later, when `run_hook` would otherwise raise the same `KeyError` mid-job.
+
         Args:
             path (pathlib.Path): Path to `bench.toml` in the checkout.
 
@@ -43,7 +48,7 @@ class Config:
         with open(path, "rb") as f:
             raw = tomllib.load(f)
         return cls(
-            hooks=raw["hooks"],
+            hooks={name: raw["hooks"][name] for name in HOOK_NAMES},
             bundle_path=raw["bundle"]["path"],
             bundle_destination=raw["bundle"]["destination"],
             host_suite=raw["tests"]["host_suite"],

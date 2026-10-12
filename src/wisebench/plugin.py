@@ -9,17 +9,18 @@ from pathlib import Path
 
 import pytest
 
-_TIMESTAMP = "%Y%m%dT%H%M%SZ"
+TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+DEFAULT_RESULT_DIR = "records"
 
 
 def _run_dir(config):
-    base = Path(environ.get("BENCH_RESULT_DIR", "records"))
+    base = Path(environ.get("BENCH_RESULT_DIR", DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
-    config._wisebench_timestamp = datetime.now(UTC).strftime(_TIMESTAMP)
+    config._wisebench_timestamp = datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
     config._wisebench_start = datetime.now(UTC)
     config.option.report_log = str(_run_dir(config) / "report.jsonl")
 
