@@ -98,9 +98,6 @@ class Proxy:
         """Retry a loopback connect to `self.port` until it succeeds, mitmdump exits, or the
         wait bound elapses.
 
-        Checking `self._process.poll()` outside the retried block, rather than inside it,
-        fails at once on a dead process instead of retrying it for the full wait bound.
-
         Raises:
             OSError: mitmdump exited, or no connection succeeded within the wait bound.
         """
