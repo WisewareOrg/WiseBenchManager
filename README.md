@@ -76,13 +76,12 @@ check       = "bench"
 
 `[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
 layer's own repository, `app_id` the App's id, `private_key` a filesystem path to the App's
-PEM-encoded private key outside any tree, `check` the check run's name, exactly as the layer's
-ruleset lists it as a required check.
+PEM-encoded private key outside any tree (`~` is expanded), `check` the check run's name,
+exactly as the layer's ruleset lists it as a required check. `bench test` does not read
+`[github]`; a `bench.toml` without the table is fine for it. `Check`, built only by `bench run`,
+raises if any of the four is missing.
 
-Setting the App up is a one-time, by-hand step: create a GitHub App with the "Checks" permission
-set to read and write, install it on the layer's repository, download its private key to a path
-outside any tree, and add `check`'s name to the repository's branch protection or merge-queue
-ruleset as a required check. `bench run` then calls:
+`bench run` calls:
 
 ```python
 Check(repo, app_id, private_key, check).post(sha, conclusion, title, summary)
@@ -90,6 +89,22 @@ Check(repo, app_id, private_key, check).post(sha, conclusion, title, summary)
 
 creating one completed check run on `sha` with `conclusion` `"success"` or `"failure"`, `title`
 the one-line verdict and `summary` the report directory path.
+
+### Setting the GitHub App up
+
+A one-time, by-hand step, before `[github]` can be filled in:
+
+1. Organization Settings → Developer settings → GitHub Apps → New GitHub App. Name it. Homepage
+   URL: the runner's repository. Webhook: untick Active.
+2. Repository permissions: Checks = Read and write. Nothing else (Metadata read is automatic).
+3. Where can this app be installed: Only on this account. Create.
+4. General page: note the App ID. Generate a private key. Move the downloaded PEM to a path
+   outside any tree, e.g. `~/.config/wisebench/app.pem`, mode 600.
+5. Install the App on the organization: Only select repositories, the layer's repository.
+6. In the layer's repository: Settings → Rules → Rulesets → the main ruleset → Require status
+   checks to pass → add the check's name. After the first check run has been posted, edit that
+   entry and set its source to the App, so only the App can satisfy it.
+7. Write `[github]` `repo`, `app_id`, `private_key` and `check` into `bench.toml`.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output inherited straight to the terminal;

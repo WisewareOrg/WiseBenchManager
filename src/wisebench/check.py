@@ -1,5 +1,7 @@
 """Check: posts a run's verdict as a GitHub check run, authenticated as a GitHub App."""
 
+from pathlib import Path
+
 from github import Auth, GithubIntegration
 
 _CONCLUSIONS = ("success", "failure")
@@ -19,17 +21,28 @@ class Check:
         Args:
             repo (str): The repository the verdict is posted against, as "owner/name".
             app_id (int): The GitHub App's id.
-            private_key (str | os.PathLike): Path to the App's PEM-encoded private key.
+            private_key (str | os.PathLike): Path to the App's PEM-encoded private key; `~` is
+                expanded.
             check (str): The check run's name, as the layer's ruleset lists it.
 
         Raises:
-            ValueError: `repo` is not exactly one "/"-separated owner and name.
+            ValueError: `repo`, `app_id`, `private_key` or `check` is `None` (the `[github]`
+                table was absent from `bench.toml`), or `repo` is not exactly one
+                "/"-separated owner and name.
             OSError: `private_key` could not be read.
             AssertionError: `private_key`'s contents are empty.
         """
+        for name, value in (
+            ("repo", repo),
+            ("app_id", app_id),
+            ("private_key", private_key),
+            ("check", check),
+        ):
+            if value is None:
+                raise ValueError(f"[github] {name} is required")
         self._owner, self._name = repo.split("/")
         self._check = check
-        with open(private_key) as f:
+        with Path(private_key).expanduser().open() as f:
             self._auth = Auth.AppAuth(app_id, f.read())
 
     def post(self, sha, conclusion, title, summary):

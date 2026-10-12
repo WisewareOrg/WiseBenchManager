@@ -37,12 +37,6 @@ destination = "/data/x.raucb"
 [tests]
 host_suite = "host_suite"
 target_suite = "target_suite"
-
-[github]
-repo = "acme/layer"
-app_id = 1
-private_key = "/outside/the/tree/app.pem"
-check = "bench"
 """)
 
 

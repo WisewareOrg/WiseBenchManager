@@ -77,6 +77,27 @@ def test_init_raises_oserror_when_the_private_key_path_is_missing(tmp_path):
         check.Check("acme/layer", 1, tmp_path / "missing.pem", "bench")
 
 
+def test_init_expands_a_leading_tilde_in_the_private_key_path(tmp_path):
+    (tmp_path / "app.pem").write_text("not-a-real-key")
+    check.Check("acme/layer", 1, "~/app.pem", "bench")
+
+
+@pytest.mark.parametrize(
+    ("repo", "app_id", "private_key", "check_name", "missing"),
+    [
+        (None, 1, "key", "bench", "repo"),
+        ("acme/layer", None, "key", "bench", "app_id"),
+        ("acme/layer", 1, None, "bench", "private_key"),
+        ("acme/layer", 1, "key", None, "check"),
+    ],
+)
+def test_init_raises_valueerror_naming_a_none_argument(
+    repo, app_id, private_key, check_name, missing
+):
+    with pytest.raises(ValueError, match=f"\\[github\\] {missing} is required"):
+        check.Check(repo, app_id, private_key, check_name)
+
+
 @pytest.mark.parametrize(
     ("repo", "match"),
     [
