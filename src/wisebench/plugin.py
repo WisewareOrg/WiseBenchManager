@@ -20,21 +20,36 @@ BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
-BENCH_BUNDLE_SHA256 = "BENCH_BUNDLE_SHA256"
+
+# The command-line option name bench_test.py's BenchTest.run and this plugin both use to pass
+# the bench_candidate fixture's value, defined once here for the same reason.
+BENCH_CANDIDATE_OPTION = "--bench-candidate"
 
 # run.json field name -> the environment variable it comes from, when that fact is known.
-# BENCH_SHA/SET are set for every hook and suite; BENCH_BUNDLE_SHA256 only for the target
-# suite, once install() has run.
+# BENCH_SHA/SET are set for every hook and suite.
 BENCH_FIELDS = {
     "image_commit": BENCH_SHA,
     "set": BENCH_SET,
-    "bundle_sha256": BENCH_BUNDLE_SHA256,
 }
 
 
 def _run_dir(config):
     base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
+
+
+def pytest_addoption(parser):
+    parser.addoption(BENCH_CANDIDATE_OPTION, default=None)
+
+
+@pytest.fixture(scope="session")
+def bench_candidate(request):
+    """The commit this run built, or `None` without one.
+
+    A layer's own session fixture reads this to install the candidate on the board through its
+    own update procedure; the runner never touches the board itself.
+    """
+    return request.config.getoption(BENCH_CANDIDATE_OPTION)
 
 
 @pytest.hookimpl(tryfirst=True)

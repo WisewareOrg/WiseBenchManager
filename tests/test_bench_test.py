@@ -30,10 +30,6 @@ precondition = "{precondition}"
 build = "{build}"
 bundle = "{bundle}"
 
-[bundle]
-path = "build/x.raucb"
-destination = "/data/x.raucb"
-
 [tests]
 host_suite = "host_suite"
 target_suite = "target_suite"
@@ -55,64 +51,6 @@ def _write_suite(repo, name, *, passing=True):
     (suite / "test_one.py").write_text(f"def test_one():\n    {body}\n")
 
 
-class _FakeOta:
-    """Scripted stand-in for `wisebench.ota.Ota`."""
-
-    def __init__(self, driver):
-        self.driver = driver
-        self.install_result = "sha256value"
-        self.install_error = None
-        self.calls = []
-
-    def install(self, bundle, destination):
-        self.calls.append(("install", bundle, destination))
-        if self.install_error is not None:
-            raise self.install_error
-        return self.install_result
-
-
-class _FakeTarget:
-    def get_driver(self, name):
-        assert name == "SSHDriver"
-        return f"driver:{name}"
-
-
-class _FakeEnvironment:
-    def __init__(self, config_file):
-        self.config_file = config_file
-
-    def get_target(self, name):
-        assert name == "main"
-        return _FakeTarget()
-
-
-def _stub_labgrid(monkeypatch, install_error=None, calls=None):
-    """Replace `Environment`/`Ota` so a test never needs a real board.
-
-    Args:
-        calls (list | None): When given, an `("Ota", None)` marker is appended to it at the
-            moment `Ota` is constructed, so a test sharing this list with `_stub_subprocess`
-            can assert exactly where in the sequence that happens.
-
-    Returns:
-        list[_FakeOta]: Each `Ota` this run constructs, in order.
-    """
-    monkeypatch.setattr(bench_test, "Environment", _FakeEnvironment)
-    created = []
-
-    def factory(*a, **kw):
-        if calls is not None:
-            calls.append(("Ota", None))
-        ota = _FakeOta(*a, **kw)
-        if install_error is not None:
-            ota.install_error = install_error
-        created.append(ota)
-        return ota
-
-    monkeypatch.setattr(bench_test, "Ota", factory)
-    return created
-
-
 # -- one test per failure class --
 
 
@@ -125,8 +63,7 @@ def test_a_dirty_tree_raises_runtime_error(tmp_path):
         bench.run("env.yaml", [])
 
 
-def test_a_failing_precondition_hook_is_a_bench_failure(monkeypatch, tmp_path):
-    _stub_labgrid(monkeypatch)
+def test_a_failing_precondition_hook_is_a_bench_failure(tmp_path):
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path, precondition="exit 9")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
@@ -134,8 +71,7 @@ def test_a_failing_precondition_hook_is_a_bench_failure(monkeypatch, tmp_path):
         bench.run("env.yaml", [])
 
 
-def test_a_failing_build_hook_is_a_candidate_failure(monkeypatch, tmp_path):
-    _stub_labgrid(monkeypatch)
+def test_a_failing_build_hook_is_a_candidate_failure(tmp_path):
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path, build="exit 3")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
@@ -143,20 +79,16 @@ def test_a_failing_build_hook_is_a_candidate_failure(monkeypatch, tmp_path):
         bench.run("env.yaml", [])
 
 
-def test_a_failing_host_suite_is_a_candidate_failure_and_never_installs(monkeypatch, tmp_path):
-    otas = _stub_labgrid(monkeypatch)
+def test_a_failing_host_suite_is_a_candidate_failure(tmp_path):
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=False)
-    _write_suite(tmp_path, "target_suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     with pytest.raises(bench_test.CandidateFailure, match="host_suite failed"):
         bench.run("env.yaml", [])
-    assert otas == []
 
 
-def test_a_failing_target_suite_is_a_candidate_failure(monkeypatch, tmp_path):
-    _stub_labgrid(monkeypatch)
+def test_a_failing_target_suite_is_a_candidate_failure(tmp_path):
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=True)
@@ -165,16 +97,6 @@ def test_a_failing_target_suite_is_a_candidate_failure(monkeypatch, tmp_path):
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     with pytest.raises(bench_test.CandidateFailure, match="target_suite failed"):
         bench.run(lg_env, [])
-
-
-def test_an_ota_raise_propagates_as_is(monkeypatch, tmp_path):
-    _stub_labgrid(monkeypatch, install_error=RuntimeError("rauc blew up"))
-    _repo_with_one_commit(tmp_path)
-    _write_bench_toml(tmp_path)
-    _write_suite(tmp_path, "host_suite", passing=True)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    with pytest.raises(RuntimeError, match="rauc blew up"):
-        bench.run("env.yaml", [])
 
 
 # -- the happy path (subprocess stubbed) --
@@ -186,8 +108,7 @@ def _stub_subprocess(monkeypatch):
     Returns:
         list[tuple]: One `(command, env)` pair per call, in order -- `command` is the shell
         string for a hook or the arg list for git/pytest; `env` is the `env=` kwarg passed
-        (`None` if omitted). `_stub_labgrid`, given this same list, appends an `("Ota", None)`
-        marker when `Ota` is constructed.
+        (`None` if omitted).
     """
     calls = []
 
@@ -207,7 +128,6 @@ def _stub_subprocess(monkeypatch):
 def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     calls = _stub_subprocess(monkeypatch)
-    _stub_labgrid(monkeypatch, calls=calls)
     _write_bench_toml(tmp_path)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
 
@@ -223,16 +143,16 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     assert commands[6][:4] == [sys.executable, "-m", "pytest", "host_suite"]
     assert "--lg-env" not in commands[6]
     assert "-k" not in commands[6]
-    assert commands[7] == "Ota"  # built only after the hooks and the host suite
-    assert commands[8][:4] == [sys.executable, "-m", "pytest", "target_suite"]
-    assert commands[8][commands[8].index("--lg-env") + 1] == "env.yaml"
-    assert commands[8][-2:] == ["-k", "x"]
+    assert commands[7][:4] == [sys.executable, "-m", "pytest", "target_suite"]  # straight after
+    assert commands[7][commands[7].index("--lg-env") + 1] == "env.yaml"
+    assert commands[7][commands[7].index("--bench-candidate") + 1] == "deadbeef"
+    assert commands[7][-2:] == ["-k", "x"]
 
     precondition_env = calls[3][1]
     assert precondition_env["BENCH_RESULT_DIR"] == "records"
 
-    target_env = calls[8][1]
-    assert target_env["BENCH_BUNDLE_SHA256"] == "sha256value"
+    target_env = calls[7][1]
+    assert target_env["BENCH_SHA"] == "deadbeef"
 
 
 # -- the real pytest subprocess --

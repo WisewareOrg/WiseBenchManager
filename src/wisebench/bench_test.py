@@ -4,12 +4,9 @@ import os
 import subprocess
 import sys
 
-from labgrid import Environment
-
 from wisebench.config import Config
-from wisebench.ota import Ota
 from wisebench.plugin import (
-    BENCH_BUNDLE_SHA256,
+    BENCH_CANDIDATE_OPTION,
     BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
@@ -27,17 +24,17 @@ class CandidateFailure(Exception):
 
 
 class BenchTest:
-    """One `bench test <ref>` run: resolve, checkout, hooks, both suites, OTA, in order.
+    """One `bench test <ref>` run: resolve, checkout, hooks, both suites, in order.
 
     Holds only what identifies this run -- the checkout, the ref and the replay set name.
     `run` takes the labgrid env file and the trailing pytest arguments, since those are facts
     of one invocation rather than this run's identity, and executes the whole job straight
     through: resolve the ref and refuse a dirty tree, check it out, read `bench.toml`, run the
     three hooks (a nonzero `precondition` is this runner's own failure; `build`/`bundle` are
-    the candidate's), run the host suite, build the `Ota` only now -- after the hooks, so a
-    build that runs for hours never holds labgrid's ssh master open across it -- install, then
-    run the target suite. `install` leaves the board booted on its candidate; which slot that
-    is does not matter, since rauc always installs to whichever slot is inactive.
+    the candidate's), run the host suite, then the target suite with the built commit passed
+    through as the `bench_candidate` fixture's value. Installing that commit on the board is
+    the layer's own target-suite fixture's job, using the layer's own update procedure; this
+    runner never touches the board.
     `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
     `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
     writes a `run.json` itself.
@@ -65,9 +62,8 @@ class BenchTest:
         Raises:
             BenchFailure: A precondition hook, or pytest itself (exit 2-5), faulted.
             CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed.
-            Exception: Any other step raised (a dirty tree, `Ota`, git itself) -- propagated
-                as-is, not wrapped; the CLI treats anything but `CandidateFailure` as the
-                bench's own.
+            Exception: Any other step raised (a dirty tree, git itself) -- propagated as-is,
+                not wrapped; the CLI treats anything but `CandidateFailure` as the bench's own.
         """
         commit = self._checkout_commit()
         config = Config.load(self.checkout / "bench.toml")
@@ -86,13 +82,8 @@ class BenchTest:
 
         self._run_suite(config.host_suite, env, [])
 
-        target = Environment(config_file=lg_env).get_target("main")
-        driver = target.get_driver("SSHDriver")
-        ota = Ota(driver)
-        bundle_sha256 = ota.install(self.checkout / config.bundle_path, config.bundle_destination)
-
-        target_env = {**env, BENCH_BUNDLE_SHA256: bundle_sha256}
-        self._run_suite(config.target_suite, target_env, ["--lg-env", lg_env, *pytest_args])
+        target_args = ["--lg-env", lg_env, BENCH_CANDIDATE_OPTION, commit, *pytest_args]
+        self._run_suite(config.target_suite, env, target_args)
 
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.

@@ -47,10 +47,28 @@ def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.setenv("BENCH_SHA", "deadbeef")
     monkeypatch.setenv("BENCH_SET", "scratch-set")
-    monkeypatch.setenv("BENCH_BUNDLE_SHA256", "sha256value")
     run_dir = _run_one_passing_test(pytester, monkeypatch)
     data = json.loads((run_dir / "run.json").read_text())
     assert data["image_commit"] == "deadbeef"
     assert "tree" not in data
     assert data["set"] == "scratch-set"
-    assert data["bundle_sha256"] == "sha256value"
+
+
+def test_bench_candidate_defaults_to_none(pytester, monkeypatch):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile("""
+        def test_candidate_is_none(bench_candidate):
+            assert bench_candidate is None
+    """)
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1)
+
+
+def test_bench_candidate_reads_the_command_line_option(pytester, monkeypatch):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile("""
+        def test_candidate_is_the_built_commit(bench_candidate):
+            assert bench_candidate == "deadbeef"
+    """)
+    result = pytester.runpytest("--bench-candidate", "deadbeef")
+    result.assert_outcomes(passed=1)

@@ -66,8 +66,8 @@ def test_main_returns_2_on_a_bench_failure(made, monkeypatch, tmp_path):
 
 
 def test_main_returns_2_on_a_raw_exception_run_never_wraps(made, monkeypatch, tmp_path):
-    """`run()` no longer wraps a step's own exception into `BenchFailure` -- a raw `OtaError`
-    or the dirty-tree `RuntimeError` reaches `main` as itself, and `main` still exits 2."""
+    """`run()` no longer wraps a step's own exception into `BenchFailure` -- a raw dirty-tree
+    `RuntimeError` reaches `main` as itself, and `main` still exits 2."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "BenchTest", _build(RuntimeError("tree is dirty: [' M x']")))
     assert cli.main(["test", "HEAD"]) == 2
@@ -117,10 +117,6 @@ def _write_bench_toml(repo):
 precondition = "true"
 build = "true"
 bundle = "true"
-
-[bundle]
-path = "build/x.raucb"
-destination = "/data/x.raucb"
 
 [tests]
 host_suite = "host_suite"
@@ -194,10 +190,6 @@ def test_main_run_returns_2_when_bench_toml_has_no_run_table(monkeypatch, tmp_pa
 precondition = "true"
 build = "true"
 bundle = "true"
-
-[bundle]
-path = "build/x.raucb"
-destination = "/data/x.raucb"
 
 [tests]
 host_suite = "host_suite"

@@ -11,8 +11,6 @@ from wisebench.config import Config
 def _config(run_unit="bench-run"):
     return Config(
         hooks={"precondition": "true", "build": "true", "bundle": "true"},
-        bundle_path="build/x.raucb",
-        bundle_destination="/data/x.raucb",
         host_suite="host_suite",
         target_suite="target_suite",
         github_repo="acme/layer",
