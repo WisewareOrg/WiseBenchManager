@@ -26,6 +26,7 @@ def _run_one_passing_test(pytester, monkeypatch):
     ],
 )
 def test_run_json_has_the_named_fields(pytester, monkeypatch, body, expected_exit_status):
+    """run.json has exactly the always-present fields, with the right exit_status."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(body)
     result = pytester.runpytest()
@@ -41,11 +42,13 @@ def test_run_json_has_the_named_fields(pytester, monkeypatch, body, expected_exi
 
 
 def test_reportlog_lands_under_the_results_dir(pytester, monkeypatch):
+    """report.jsonl lands under the results directory."""
     run_dir = _run_one_passing_test(pytester, monkeypatch)
     assert (run_dir / "report.jsonl").is_file()
 
 
 def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
+    """run.json carries test_commit and set from their env vars, and omits unset fields."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.setenv("BENCH_SHA", "deadbeef")
     monkeypatch.setenv("BENCH_SET", "scratch-set")
@@ -58,6 +61,7 @@ def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
 
 
 def test_run_json_carries_skip_build_when_set(pytester, monkeypatch):
+    """run.json carries skip_build when BENCH_SKIP_BUILD is set."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.setenv("BENCH_SKIP_BUILD", "true")
     run_dir = _run_one_passing_test(pytester, monkeypatch)
@@ -66,6 +70,7 @@ def test_run_json_carries_skip_build_when_set(pytester, monkeypatch):
 
 
 def test_a_fixture_setup_error_substitutes_the_exit_status(pytester, monkeypatch):
+    """A fixture erroring during setup substitutes SETUP_ERROR_EXIT_STATUS for pytest's own."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("""
         import pytest
@@ -85,6 +90,7 @@ def test_a_fixture_setup_error_substitutes_the_exit_status(pytester, monkeypatch
 
 
 def test_bench_candidate_defaults_to_none(pytester, monkeypatch):
+    """bench_candidate is None without --bench-candidate."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("""
         def test_candidate_is_none(bench_candidate):
@@ -95,6 +101,7 @@ def test_bench_candidate_defaults_to_none(pytester, monkeypatch):
 
 
 def test_bench_candidate_reads_the_command_line_option(pytester, monkeypatch):
+    """bench_candidate reads --bench-candidate's value."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("""
         def test_candidate_is_the_built_commit(bench_candidate):

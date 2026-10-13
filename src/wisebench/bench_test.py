@@ -30,14 +30,14 @@ class BenchTest:
 
     Holds only what identifies this run -- the checkout, the ref, the replay set name and
     whether to skip the build. `run` takes the labgrid env file and the trailing pytest
-    arguments, since those are facts of one invocation rather than this run's identity, and
-    executes the whole job straight through: resolve the ref and refuse a dirty tree, check it
-    out, read `bench.toml`, run the `precondition` hook (a nonzero exit is this runner's own
-    failure). Unless skipping the build, it then runs `build`/`bundle` (the candidate's
-    failure), runs the host suite, and passes the built commit to the target suite as the
-    `bench_candidate` fixture's value; skipping the build skips all three and the target suite
-    gets no candidate. Installing a candidate on the board is the layer's own target-suite
-    fixture's job, using the layer's own update procedure; this runner never touches the board.
+    arguments, and executes the whole job straight through: resolve the ref and refuse a dirty
+    tree, check it out, read `bench.toml`, run the `precondition` hook (a nonzero exit is this
+    runner's own failure). Unless skipping the build, it then runs `build`/`bundle` (the
+    candidate's failure), runs the host suite, and passes the built commit to the target suite
+    as the `bench_candidate` fixture's value; skipping the build skips all three and the target
+    suite gets no candidate. Installing a candidate on the board is the layer's own
+    target-suite fixture's job, using the layer's own update procedure; this runner never
+    touches the board.
     `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
     `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
     writes a `run.json` itself.
@@ -66,8 +66,8 @@ class BenchTest:
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
 
         Raises:
-            BenchFailure: A precondition hook faulted, or pytest itself faulted -- including a
-                fixture erroring during setup or teardown, which is never the candidate's fault.
+            BenchFailure: A precondition hook faulted, or pytest itself faulted, including a
+                fixture erroring during setup or teardown.
             CandidateFailure: A `build`/`bundle` hook, or a test's own call (pytest exit 1),
                 failed.
             Exception: Any other step raised (a dirty tree, git itself) -- propagated as-is,
@@ -101,7 +101,8 @@ class BenchTest:
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.
 
-        git's own stdout and stderr are inherited, so they reach the terminal directly.
+        The `git checkout` call's output reaches the terminal directly; `rev-parse` and
+        `status` capture theirs.
 
         Returns:
             str: The resolved commit hex.
@@ -151,9 +152,9 @@ class BenchTest:
     def _run_suite(self, suite, env, extra_args):
         """Run pytest on one suite directory, its output inherited straight to the terminal.
 
-        Runs under this process's own interpreter (`sys.executable -m pytest`, not `uv run`,
-        since the checkout at `self.checkout` may hold its own project) with `-o addopts=""`,
-        clearing that checkout's own ini-file `addopts` for this invocation.
+        Runs under this process's own interpreter (`sys.executable -m pytest`, not `uv run`)
+        with `-o addopts=""`, clearing that checkout's own ini-file `addopts` for this
+        invocation.
 
         Args:
             suite (str): The suite's path, relative to the checkout.
@@ -161,11 +162,10 @@ class BenchTest:
             extra_args (list[str]): Extra pytest arguments, appended last.
 
         Raises:
-            CandidateFailure: pytest exited 1 because a test's own call failed.
+            CandidateFailure: pytest exited 1 -- a test's own call failed.
             BenchFailure: pytest exited anything else nonzero -- interrupted, internal error,
                 usage error, no tests collected, or a fixture erroring during setup or teardown
-                (`plugin.py` substitutes its own exit status for pytest's 1 in that case, since
-                pytest's own exit code does not otherwise distinguish an error from a failure).
+                (`plugin.py` substitutes its own exit status for pytest's 1 in that case).
         """
         command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
         result = subprocess.run(command, cwd=self.checkout, env=env)

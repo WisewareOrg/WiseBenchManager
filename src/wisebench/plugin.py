@@ -1,4 +1,5 @@
-"""Turns on pytest-reportlog's record, and writes the one run-level file beside it."""
+"""pytest plugin: turns on pytest-reportlog's record, writes run.json, and provides
+bench_candidate."""
 
 import json
 import shlex
@@ -14,42 +15,47 @@ from wisebench.proxy import proxy as proxy
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
 DEFAULT_RESULT_DIR = "records"
 
-# Environment variable names a caller (bench_test.py's BenchTest.run) and this plugin both use,
-# defined once here so neither side carries its own copy of the literal string.
+# Environment variable names, shared with bench_test.py's BenchTest.run.
 BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
 BENCH_SKIP_BUILD = "BENCH_SKIP_BUILD"
 
-# The command-line option name bench_test.py's BenchTest.run and this plugin both use to pass
-# the bench_candidate fixture's value, defined once here for the same reason.
+# Command-line option name, shared with bench_test.py's BenchTest.run.
 BENCH_CANDIDATE_OPTION = "--bench-candidate"
 
-# run.json field name -> the environment variable it comes from, when that fact is known.
-# BENCH_SHA/SET are set for every hook and suite; BENCH_SKIP_BUILD only for a --skip-build run,
-# so its presence is itself the record of one -- a bare None bench_candidate is not a run.json
-# field and so cannot carry that signal on its own.
+# run.json field name -> environment variable; written only when the variable is set.
 BENCH_FIELDS = {
     "test_commit": BENCH_SHA,
     "set": BENCH_SET,
     "skip_build": BENCH_SKIP_BUILD,
 }
 
-# Exit status this plugin substitutes for pytest's own 1 ("tests failed") when at least one
-# fixture's setup or teardown reported an error rather than a test's call failing. pytest's exit
-# code does not otherwise distinguish the two, and the caller (bench_test.py's _run_suite) maps
-# any exit status but 0 or 1 to the bench's own failure, so this is what makes a setup error
-# reach that branch instead of being read as the candidate's.
+# Exit status substituted for pytest's own 1 when a fixture errors during setup or teardown,
+# rather than a test's own call failing.
 SETUP_ERROR_EXIT_STATUS = 90
 
 
 def _run_dir(config):
+    """The directory this run's records go in: BENCH_RESULT_DIR, then this run's timestamp.
+
+    Args:
+        config (pytest.Config): The session's pytest configuration.
+
+    Returns:
+        pathlib.Path: The run's own record directory.
+    """
     base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
 
 
 def pytest_addoption(parser):
+    """Registers the --bench-candidate command-line option.
+
+    Args:
+        parser (pytest.Parser): pytest's own command-line parser.
+    """
     parser.addoption(BENCH_CANDIDATE_OPTION, default=None)
 
 
@@ -57,20 +63,36 @@ def pytest_addoption(parser):
 def bench_candidate(request):
     """The commit this run built, or `None` without one.
 
-    A layer's own session fixture reads this to install the candidate on the board through its
-    own update procedure; the runner never touches the board itself.
+    A layer's own session fixture reads this to install the candidate on the board.
+
+    Args:
+        request (pytest.FixtureRequest): The requesting test's fixture request.
+
+    Returns:
+        str | None: The commit this run built from, or `None` outside a built run.
     """
     return request.config.getoption(BENCH_CANDIDATE_OPTION)
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
+    """Sets this run's timestamp and points pytest-reportlog at this run's report path.
+
+    Args:
+        config (pytest.Config): The session's pytest configuration.
+    """
     config._wisebench_timestamp = datetime.now(UTC).strftime(_TIMESTAMP)
     config._wisebench_start = datetime.now(UTC)
     config.option.report_log = str(_run_dir(config) / "report.jsonl")
 
 
 def pytest_sessionfinish(session, exitstatus):
+    """Writes run.json, after substituting exitstatus for a setup or teardown error.
+
+    Args:
+        session (pytest.Session): The finished session.
+        exitstatus (int | pytest.ExitCode): pytest's own exit status for the session.
+    """
     config = session.config
     terminalreporter = config.pluginmanager.get_plugin("terminalreporter")
     if terminalreporter is not None and terminalreporter.stats.get("error"):

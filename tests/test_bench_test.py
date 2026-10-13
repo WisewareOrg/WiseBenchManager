@@ -37,8 +37,7 @@ target_suite = "target_suite"
 
 
 def _write_lg_env(repo):
-    """Write a minimal, valid labgrid env file -- no target named `main`, which is fine since
-    nothing in these tests requests the `target` fixture."""
+    """Write a minimal, valid labgrid env file; no target named `main`."""
     path = repo / "env.yaml"
     path.write_text("targets: {}\n")
     return str(path)
@@ -55,6 +54,7 @@ def _write_suite(repo, name, *, passing=True):
 
 
 def test_a_dirty_tree_raises_runtime_error(tmp_path):
+    """A dirty tree raises RuntimeError."""
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     (tmp_path / "tracked.txt").write_text("changed\n")
@@ -64,6 +64,7 @@ def test_a_dirty_tree_raises_runtime_error(tmp_path):
 
 
 def test_a_failing_precondition_hook_is_a_bench_failure(tmp_path):
+    """A failing precondition hook is a bench failure."""
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path, precondition="exit 9")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
@@ -72,6 +73,7 @@ def test_a_failing_precondition_hook_is_a_bench_failure(tmp_path):
 
 
 def test_a_failing_build_hook_is_a_candidate_failure(tmp_path):
+    """A failing build hook is a candidate failure."""
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path, build="exit 3")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
@@ -80,6 +82,7 @@ def test_a_failing_build_hook_is_a_candidate_failure(tmp_path):
 
 
 def test_a_failing_host_suite_is_a_candidate_failure(tmp_path):
+    """A failing host_suite is a candidate failure."""
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=False)
@@ -89,6 +92,7 @@ def test_a_failing_host_suite_is_a_candidate_failure(tmp_path):
 
 
 def test_a_failing_target_suite_is_a_candidate_failure(tmp_path):
+    """A failing target_suite is a candidate failure."""
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=True)
@@ -126,6 +130,7 @@ def _stub_subprocess(monkeypatch):
 
 
 def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
+    """A normal run calls the hooks, both suites and --bench-candidate, in order."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     calls = _stub_subprocess(monkeypatch)
     _write_bench_toml(tmp_path)
@@ -157,6 +162,7 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 
 
 def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path):
+    """skip_build skips build, bundle and the host suite, and passes no --bench-candidate."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     calls = _stub_subprocess(monkeypatch)
     _write_bench_toml(tmp_path)
@@ -182,25 +188,17 @@ def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path)
 
 
 def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_path, monkeypatch):
-    """The one test that drives a real pytest subprocess -- calls the method under test
-    directly, so dropping `sys.executable` or `-o addopts=` from `_run_suite` goes red.
-    Bounded by patching the `subprocess.run` `_run_suite` calls to always pass `timeout=30`,
-    not a pytest plugin and not a change to `_run_suite` itself, so a stuck child is killed by
-    `subprocess.run` itself rather than hanging this suite -- a thread-pool timeout does not
-    do this, since the pool's own shutdown still waits for the stuck worker. The checkout's own
-    `pyproject.toml` would break this under `uv run` or without `-o addopts=` -- pinning both
-    kept proof-found fixes."""
+    """_run_suite runs a real suite under this process's own interpreter, with addopts cleared."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     ini = '[tool.pytest.ini_options]\naddopts = "--no-such-option"\n'
     (tmp_path / "pyproject.toml").write_text(ini)
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    bench._run_suite("suite", {**os.environ}, [])  # returns None; a raise means the suite failed
+    bench._run_suite("suite", {**os.environ}, [])  # no raise means the suite passed
 
 
 def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monkeypatch):
-    """pytest exiting nonzero for a reason other than a failing test (a usage error, here) is
-    `BenchFailure`, not `CandidateFailure` -- the bench's own fault, not the candidate's."""
+    """pytest exiting nonzero for a usage error is BenchFailure, not CandidateFailure."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
@@ -209,8 +207,7 @@ def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monk
 
 
 def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_path, monkeypatch):
-    """A fixture raising during setup is pytest's own error, not a failing test -- the board
-    could not be put into state, which is the bench's own fault, not the candidate's."""
+    """A fixture raising during setup is a bench failure, not a candidate failure."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     suite = tmp_path / "suite"
     suite.mkdir()

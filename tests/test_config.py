@@ -6,6 +6,7 @@ from wisebench import config
 
 
 def test_config_load_reads_hooks_and_suites(tmp_path):
+    """Config.load reads the hooks dict and both suite paths."""
     (tmp_path / "bench.toml").write_text(
         """
         [hooks]
@@ -36,6 +37,7 @@ def test_config_load_reads_hooks_and_suites(tmp_path):
 
 
 def test_config_load_reads_the_run_unit_when_present(tmp_path):
+    """Config.load reads [run] unit when the table is present."""
     (tmp_path / "bench.toml").write_text(
         """
         [hooks]
@@ -62,6 +64,7 @@ def test_config_load_reads_the_run_unit_when_present(tmp_path):
 
 
 def test_config_load_leaves_github_fields_none_when_the_table_is_absent(tmp_path):
+    """Config.load leaves every github field None when [github] is absent."""
     (tmp_path / "bench.toml").write_text(
         """
         [hooks]
@@ -82,12 +85,14 @@ def test_config_load_leaves_github_fields_none_when_the_table_is_absent(tmp_path
 
 
 def test_config_load_raises_keyerror_on_a_missing_table(tmp_path):
+    """Config.load raises KeyError when a required table is missing."""
     (tmp_path / "bench.toml").write_text('[hooks]\nprecondition = "true"\n')
     with pytest.raises(KeyError):
         config.Config.load(tmp_path / "bench.toml")
 
 
 def test_config_load_raises_keyerror_on_a_missing_target_suite(tmp_path):
+    """Config.load raises KeyError when [tests] target_suite is missing."""
     (tmp_path / "bench.toml").write_text(
         """
         [hooks]

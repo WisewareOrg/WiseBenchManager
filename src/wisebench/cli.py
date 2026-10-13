@@ -30,8 +30,7 @@ def _raise_on_sigterm(signum, frame):
 def main(argv=None):
     """Parse arguments and run one `bench test` or `bench run` invocation end to end.
 
-    Holds the `Lock` shared between the two commands for the whole of whichever one runs, so
-    neither `BenchTest` nor `BenchRun` needs to know about it.
+    Holds the `Lock` shared between the two commands for the whole of whichever one runs.
 
     Args:
         argv (list[str] | None): Arguments to parse, defaulting to `sys.argv[1:]`.
