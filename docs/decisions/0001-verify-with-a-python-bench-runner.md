@@ -72,7 +72,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 - A new check is a test file and, at most, a fixture beside it; the runner does not change when a test's needs change.
 - The runner owns no device procedure of its own; a layer with a different update mechanism needs only its own `bench_candidate`-reading fixture, not a runner change. The run record and the environment carry the commit only, not a bundle hash.
 - meta-wisekiosk loses on the order of seven thousand lines (the driver, its self-test, the viewer, the proxy and its tests, the oeqa framework and case shells); the runner adds on the order of a thousand lines of code plus its tests (an estimate).
-- Requirement items point at pytest functions; the record names the items discharged, the image commit, the dirty flag, the set hash and the runner version.
+- Requirement items point at pytest functions; the record names the items discharged, the test commit, the dirty flag, the set hash and the runner version.
 - The merge queue is gated on one physical board, so merges serialise at a job's length; this is accepted.
 - Reopened if a second board, power control or a serial console arrives (labgrid becomes worth adopting; the tests' shape does not change), or if the organisation's CI policy changes what may run on the build host.
 - An investigation's run is as traceable as a gate's: same command path, same record. `--skip-build` is the one named exception, marked as such in its own record; it is never evidence for a review or an investigation, both of which still need a build.

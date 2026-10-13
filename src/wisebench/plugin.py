@@ -31,7 +31,7 @@ BENCH_CANDIDATE_OPTION = "--bench-candidate"
 # so its presence is itself the record of one -- a bare None bench_candidate is not a run.json
 # field and so cannot carry that signal on its own.
 BENCH_FIELDS = {
-    "image_commit": BENCH_SHA,
+    "test_commit": BENCH_SHA,
     "set": BENCH_SET,
     "skip_build": BENCH_SKIP_BUILD,
 }

@@ -139,7 +139,7 @@ run, `run.json`, written at session end so a run that fails halfway still leaves
 that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
 line, the start and end times, and the exit status. The plugin reads whichever of a set of
 `BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
-field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
+field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
 `BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
 one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
