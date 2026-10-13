@@ -17,11 +17,12 @@ from wisebench.plugin import (
 
 
 class BenchFailure(Exception):
-    """A failure that is this runner's own: a precondition hook, or pytest faulting."""
+    """A failure that is this runner's own: a precondition hook, pytest faulting, or a fixture
+    erroring during setup or teardown."""
 
 
 class CandidateFailure(Exception):
-    """A failure that is the candidate's: a `build`/`bundle` hook, or a test suite."""
+    """A failure that is the candidate's: a `build`/`bundle` hook, or a test's own call failing."""
 
 
 class BenchTest:
@@ -65,8 +66,10 @@ class BenchTest:
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
 
         Raises:
-            BenchFailure: A precondition hook, or pytest itself (exit 2-5), faulted.
-            CandidateFailure: A `build`/`bundle` hook, or a test suite (pytest exit 1), failed.
+            BenchFailure: A precondition hook faulted, or pytest itself faulted -- including a
+                fixture erroring during setup or teardown, which is never the candidate's fault.
+            CandidateFailure: A `build`/`bundle` hook, or a test's own call (pytest exit 1),
+                failed.
             Exception: Any other step raised (a dirty tree, git itself) -- propagated as-is,
                 not wrapped; the CLI treats anything but `CandidateFailure` as the bench's own.
         """
@@ -158,9 +161,11 @@ class BenchTest:
             extra_args (list[str]): Extra pytest arguments, appended last.
 
         Raises:
-            CandidateFailure: pytest exited 1 (the suite's own tests failed).
-            BenchFailure: pytest exited anything else nonzero (interrupted, internal error,
-                usage error, no tests collected).
+            CandidateFailure: pytest exited 1 because a test's own call failed.
+            BenchFailure: pytest exited anything else nonzero -- interrupted, internal error,
+                usage error, no tests collected, or a fixture erroring during setup or teardown
+                (`plugin.py` substitutes its own exit status for pytest's 1 in that case, since
+                pytest's own exit code does not otherwise distinguish an error from a failure).
         """
         command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
         result = subprocess.run(command, cwd=self.checkout, env=env)

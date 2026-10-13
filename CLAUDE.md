@@ -25,13 +25,15 @@ this repository, which is a generic pytest hardware-in-the-loop runner and nothi
 - **Every check is a test that has been watched failing.** A fixture or runner step is proven on a fake
   board (scripted answers) with a test that fails when the check is removed, and once on the real board.
   A check that cannot fail has measured nothing.
-- **Provenance is structural, within what the runner is still responsible for.** `bench test <ref>`
-  refuses a dirty tree and builds from the resolved commit; `bench_candidate` is the only channel a
-  layer's own fixture gets that commit through, so nothing reaches the board from outside that build.
-  `bench test <ref> --skip-build` is the one named exception: it installs nothing and runs the target
-  suite against the board as it is, its record says so explicitly, and such a run is never evidence for
-  a review or an investigation, which need a build. `bench run` never skips the build. Do not add
-  another bypass, for any reason, including "the build takes a while".
+- **Provenance is structural where the runner controls it, checked where it does not.** `bench test
+  <ref>` refuses a dirty tree and builds from the resolved commit; the runner names that commit to the
+  layer through `bench_candidate`, the only channel it uses, so a build is never swapped for an artefact
+  from outside. The layer's own target-suite setup installs what that build produced, and the first
+  target-suite test checks that the booted board names that commit -- checked, not structurally
+  guaranteed. `bench test <ref> --skip-build` is the one named exception: it installs nothing and runs
+  the target suite against the board as it is, its record says so explicitly, and such a run is never
+  evidence for a review or an investigation, which need a build. `bench run` never skips the build. Do
+  not add another bypass, for any reason, including "the build takes a while".
 - **Outcomes are two things only.** A failing hook or test is the candidate's and is posted. An error in a
   fixture or the precondition is the bench's: DISABLED, timer stopped, nothing posted. Never invent a
   third class, and never post on the bench's failure.

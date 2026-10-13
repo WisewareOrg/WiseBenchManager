@@ -206,3 +206,22 @@ def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monk
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     with pytest.raises(bench_test.BenchFailure, match="pytest exited"):
         bench._run_suite("suite", {**os.environ}, ["--no-such-flag"])
+
+
+def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_path, monkeypatch):
+    """A fixture raising during setup is pytest's own error, not a failing test -- the board
+    could not be put into state, which is the bench's own fault, not the candidate's."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_one.py").write_text(
+        "import pytest\n\n"
+        "@pytest.fixture\n"
+        "def broken():\n"
+        "    raise RuntimeError('board unreachable')\n\n"
+        "def test_one(broken):\n"
+        "    pass\n"
+    )
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    with pytest.raises(bench_test.BenchFailure, match="pytest exited"):
+        bench._run_suite("suite", {**os.environ}, [])

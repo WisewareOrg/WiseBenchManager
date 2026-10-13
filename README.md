@@ -41,9 +41,10 @@ layer's own tests recorded against them, and the exact command line.
 
 `--skip-build` skips steps 2 and 3 entirely; step 4 then gets `bench_candidate` `None`.
 
-A failing hook or test is the candidate's failure and is posted. An error in a bench step — the
-precondition, or pytest itself — is the bench's failure: a `DISABLED` marker is written, the timer
-is stopped, nothing is posted.
+A failing hook or test is the candidate's failure and is posted. An error in a fixture or the
+precondition is the bench's failure: a `DISABLED` marker is written, the timer is stopped,
+nothing is posted. pytest's own setup/call distinction is what tells the two apart: a fixture
+erroring during setup or teardown is never read as the candidate's test failing.
 
 ## What a layer provides
 

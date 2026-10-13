@@ -36,6 +36,13 @@ BENCH_FIELDS = {
     "skip_build": BENCH_SKIP_BUILD,
 }
 
+# Exit status this plugin substitutes for pytest's own 1 ("tests failed") when at least one
+# fixture's setup or teardown reported an error rather than a test's call failing. pytest's exit
+# code does not otherwise distinguish the two, and the caller (bench_test.py's _run_suite) maps
+# any exit status but 0 or 1 to the bench's own failure, so this is what makes a setup error
+# reach that branch instead of being read as the candidate's.
+SETUP_ERROR_EXIT_STATUS = 90
+
 
 def _run_dir(config):
     base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
@@ -65,6 +72,9 @@ def pytest_configure(config):
 
 def pytest_sessionfinish(session, exitstatus):
     config = session.config
+    terminalreporter = config.pluginmanager.get_plugin("terminalreporter")
+    if terminalreporter is not None and terminalreporter.stats.get("error"):
+        session.exitstatus = SETUP_ERROR_EXIT_STATUS
     run_dir = _run_dir(config)
     run_dir.mkdir(parents=True, exist_ok=True)
     data = {
@@ -72,7 +82,7 @@ def pytest_sessionfinish(session, exitstatus):
         "command_line": shlex.join(config.invocation_params.args),
         "start": config._wisebench_start.isoformat(),
         "end": datetime.now(UTC).isoformat(),
-        "exit_status": int(exitstatus),
+        "exit_status": int(session.exitstatus),
     }
     for field, env_name in BENCH_FIELDS.items():
         value = environ.get(env_name)

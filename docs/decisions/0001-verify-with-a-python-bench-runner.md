@@ -13,7 +13,11 @@
   `tests/test_ota.py`, the `[bundle]` table and the bundle hash in the environment and run record
   are removed. Decision 9 gains its one named exception, `bench test <ref> --skip-build`: tests on
   a running board without a build are allowed; a review or an investigation needs one, so a
-  `--skip-build` run is never evidence for either, and its record says explicitly that it was one
+  `--skip-build` run is never evidence for either, and its record says explicitly that it was one.
+  The code now matches decision 6: a fixture erroring during setup or teardown is the bench's own
+  failure, not the candidate's -- pytest's own exit code does not distinguish the two, so the
+  plugin substitutes a distinct exit status when pytest's own report categorises a report as an
+  `error` rather than a `failure`, and `_run_suite` reads that back as `BenchFailure`
   (WisewareOrg/WiseBenchManager#18).
 - **rev 4** — 2026-10-12 — decision 3's addon (writing `SERVE`/`HIT`/`MISS` lines and stripping a
   configured header list when recording) is removed: mitmproxy's own output is the record of
@@ -47,7 +51,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing.
 7. Scheduling stays with well-supported tools: a systemd user timer and `flock`. Queue-head selection is a small adapter, swapped when the organisation moves the merge queue to Mergify.
 8. The operator's view is `bench status --watch`, about 150 lines on a maintained terminal library reading the runner's own event stream, keeping the functionality of the existing TUI and no more.
-9. Provenance is structural, within what the runner still does: `bench test <ref>` refuses a dirty tree and builds from the resolved commit, and `bench_candidate` is the one channel a layer's own fixture gets that commit through, so nothing reaches the board from outside that build; a normal run's first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. `bench test <ref> --skip-build` is the one named exception: it checks out `<ref>` for its test code only, skips `build`, `bundle` and the host suite, and runs the target suite with `bench_candidate` `None` against the board as it is; its record carries an explicit `skip_build` field, since a bare `None` candidate is not itself a record field, and such a run is never evidence for a review or an investigation, which need a build. `bench run` never sets it. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
+9. Provenance is structural where the runner controls it, checked where it does not: `bench test <ref>` refuses a dirty tree and builds from the resolved commit, and the runner names that commit to the layer through `bench_candidate`, the only channel it uses, so a build is never swapped for an artefact from outside. The layer's own target-suite setup installs what that build produced, and a normal run's first target-suite test checks that `/etc/buildinfo` on the booted board names that commit -- checked, not structurally guaranteed. `bench test <ref> --skip-build` is the one named exception: it checks out `<ref>` for its test code only, skips `build`, `bundle` and the host suite, and runs the target suite with `bench_candidate` `None` against the board as it is; its record carries an explicit `skip_build` field, since a bare `None` candidate is not itself a record field, and such a run is never evidence for a review or an investigation, which need a build. `bench run` never sets it. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
 
 ## Alternatives considered
 

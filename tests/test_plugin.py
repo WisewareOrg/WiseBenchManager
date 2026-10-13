@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from wisebench.plugin import SETUP_ERROR_EXIT_STATUS
+
 
 def _run_one_passing_test(pytester, monkeypatch):
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
@@ -61,6 +63,25 @@ def test_run_json_carries_skip_build_when_set(pytester, monkeypatch):
     run_dir = _run_one_passing_test(pytester, monkeypatch)
     data = json.loads((run_dir / "run.json").read_text())
     assert data["skip_build"] == "true"
+
+
+def test_a_fixture_setup_error_substitutes_the_exit_status(pytester, monkeypatch):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile("""
+        import pytest
+
+        @pytest.fixture
+        def broken():
+            raise RuntimeError("board unreachable")
+
+        def test_one(broken):
+            pass
+    """)
+    result = pytester.runpytest()
+    assert result.ret == SETUP_ERROR_EXIT_STATUS
+    run_dirs = list(Path("records").iterdir())
+    data = json.loads((run_dirs[0] / "run.json").read_text())
+    assert data["exit_status"] == SETUP_ERROR_EXIT_STATUS
 
 
 def test_bench_candidate_defaults_to_none(pytester, monkeypatch):
