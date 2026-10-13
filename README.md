@@ -72,6 +72,9 @@ repo        = "owner/name"
 app_id      = 123456
 private_key = "/path/outside/the/tree/app.pem"
 check       = "bench"
+
+[run]
+unit        = "bench-run"  # bench run disables bench-run.timer on the bench's own failure
 ```
 
 `[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
@@ -182,12 +185,30 @@ Three facts from labgrid 26.0 are the contract between this runner and the layer
 That env file, and everything else naming this board, lives in the layer, not here.
 
 The runner is cloned on the pipeline host and run from its checkout at a tag; the record names the
-tag. `bench run` is started by a systemd user timer under `flock`, so a second start while a job is
-running exits without touching the board; it asks a queue adapter for the head entry (the GitHub
-merge queue, via `gh api graphql`) and posts the verdict as a GitHub check run (`Check.post`).
-`bench status --watch`, on `rich`, reads `run.json`, `report.jsonl` and the hook logs: the queue
-head, the timer and lock state, the current phase and its elapsed time, the build's progress tail,
-the test running now, and recent verdicts.
+tag. `bench run` is started by a systemd user timer; the lock it shares with `bench test` (a
+`fcntl.flock` on a `lock` file beside the records) means a hand `bench test` started during a job
+refuses rather than clashing with it, and `bench run` itself backs off with exit 0 if the lock is
+already held. It asks `Queue.head()` for the merge queue's head entry -- the `gh-readonly-queue`
+ref whose own base is `origin/main`'s current tip, read with `git ls-remote` -- and posts the
+verdict as a GitHub check run (`Check.post`). `bench status --watch`, on `rich`, reads `run.json`,
+`report.jsonl` and the hook logs: the queue head, the timer and lock state, the current phase and
+its elapsed time, the build's progress tail, the test running now, and recent verdicts.
+
+### Installing `bench run`
+
+In this clone, edit `contrib/bench-run.service`'s `WorkingDirectory` (the layer checkout),
+`ExecStart` (this clone's own `.venv/bin/bench`) and `TimeoutStartSec` (comfortably longer than
+one build-and-test cycle -- `RuntimeMaxSec` has no effect on a `Type=oneshot` service;
+`TimeoutStartSec` is what bounds one); rename both `contrib/bench-run.service` and
+`contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if `bench.toml`'s `[run] unit` is
+not `bench-run`. Write `LG_ENV` and `LG_BENCH_ADDRESS` into the path `EnvironmentFile` names.
+Link and start both units straight from this checkout: `systemctl --user enable --now <this
+clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
+
+A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`, writes
+`DISABLED` beside the records and disables that timer. Clearing it is a by-hand step, not
+something `bench run` does itself: read `DISABLED`, remove it, then `systemctl --user enable
+--now <unit>.timer` again.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

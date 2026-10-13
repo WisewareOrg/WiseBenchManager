@@ -1,0 +1,9 @@
+[Unit]
+Description=bench run: build the merge queue's head, OTA it to the bench board, post the verdict
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/the/layer/checkout
+EnvironmentFile=%h/.config/wisebench/env
+ExecStart=/path/to/the/venv/bin/bench run
+TimeoutStartSec=6h
