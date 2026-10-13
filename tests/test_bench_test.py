@@ -150,9 +150,32 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 
     precondition_env = calls[3][1]
     assert precondition_env["BENCH_RESULT_DIR"] == "records"
+    assert "BENCH_SKIP_BUILD" not in precondition_env
 
     target_env = calls[7][1]
     assert target_env["BENCH_SHA"] == "deadbeef"
+
+
+def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    calls = _stub_subprocess(monkeypatch)
+    _write_bench_toml(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, skip_build=True)
+
+    bench.run("env.yaml", ["-k", "x"])
+
+    commands = [command for command, _ in calls]
+    assert commands[3] == "true"  # precondition
+    assert commands[4][:4] == [sys.executable, "-m", "pytest", "target_suite"]  # straight after
+    assert "--bench-candidate" not in commands[4]
+    assert commands[4][commands[4].index("--lg-env") + 1] == "env.yaml"
+    assert commands[4][-2:] == ["-k", "x"]
+
+    precondition_env = calls[3][1]
+    assert precondition_env["BENCH_SKIP_BUILD"] == "true"
+
+    target_env = calls[4][1]
+    assert target_env["BENCH_SKIP_BUILD"] == "true"
 
 
 # -- the real pytest subprocess --

@@ -54,6 +54,14 @@ def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
     assert data["set"] == "scratch-set"
 
 
+def test_run_json_carries_skip_build_when_set(pytester, monkeypatch):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.setenv("BENCH_SKIP_BUILD", "true")
+    run_dir = _run_one_passing_test(pytester, monkeypatch)
+    data = json.loads((run_dir / "run.json").read_text())
+    assert data["skip_build"] == "true"
+
+
 def test_bench_candidate_defaults_to_none(pytester, monkeypatch):
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("""

@@ -10,6 +10,7 @@ from wisebench.plugin import (
     BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
+    BENCH_SKIP_BUILD,
     BENCH_TREE,
     DEFAULT_RESULT_DIR,
 )
@@ -26,31 +27,35 @@ class CandidateFailure(Exception):
 class BenchTest:
     """One `bench test <ref>` run: resolve, checkout, hooks, both suites, in order.
 
-    Holds only what identifies this run -- the checkout, the ref and the replay set name.
-    `run` takes the labgrid env file and the trailing pytest arguments, since those are facts
-    of one invocation rather than this run's identity, and executes the whole job straight
-    through: resolve the ref and refuse a dirty tree, check it out, read `bench.toml`, run the
-    three hooks (a nonzero `precondition` is this runner's own failure; `build`/`bundle` are
-    the candidate's), run the host suite, then the target suite with the built commit passed
-    through as the `bench_candidate` fixture's value. Installing that commit on the board is
-    the layer's own target-suite fixture's job, using the layer's own update procedure; this
-    runner never touches the board.
+    Holds only what identifies this run -- the checkout, the ref, the replay set name and
+    whether to skip the build. `run` takes the labgrid env file and the trailing pytest
+    arguments, since those are facts of one invocation rather than this run's identity, and
+    executes the whole job straight through: resolve the ref and refuse a dirty tree, check it
+    out, read `bench.toml`, run the `precondition` hook (a nonzero exit is this runner's own
+    failure). Unless skipping the build, it then runs `build`/`bundle` (the candidate's
+    failure), runs the host suite, and passes the built commit to the target suite as the
+    `bench_candidate` fixture's value; skipping the build skips all three and the target suite
+    gets no candidate. Installing a candidate on the board is the layer's own target-suite
+    fixture's job, using the layer's own update procedure; this runner never touches the board.
     `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
     `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
     writes a `run.json` itself.
     """
 
-    def __init__(self, checkout, ref, set_name):
-        """Bind one run to a checkout, a git ref and a replay set name.
+    def __init__(self, checkout, ref, set_name, skip_build=False):
+        """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
         Args:
             checkout (pathlib.Path): The layer's clone to resolve, check out and test.
             ref (str): The git ref to resolve, check out and test.
             set_name (str | None): The replay set name from `--set`, or None.
+            skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
+                with `bench_candidate` `None`, against the board as it is.
         """
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name or ""
+        self.skip_build = skip_build
 
     def run(self, lg_env, pytest_args):
         """Execute the full job.
@@ -75,14 +80,19 @@ class BenchTest:
             BENCH_SET: self.set_name,
             BENCH_RESULT_DIR: result_dir,
         }
+        if self.skip_build:
+            env[BENCH_SKIP_BUILD] = "true"
 
         self._run_hook(config.hooks["precondition"], env, BenchFailure, "precondition")
-        self._run_hook(config.hooks["build"], env, CandidateFailure, "build")
-        self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle")
 
-        self._run_suite(config.host_suite, env, [])
+        candidate_args = []
+        if not self.skip_build:
+            self._run_hook(config.hooks["build"], env, CandidateFailure, "build")
+            self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle")
+            self._run_suite(config.host_suite, env, [])
+            candidate_args = [BENCH_CANDIDATE_OPTION, commit]
 
-        target_args = ["--lg-env", lg_env, BENCH_CANDIDATE_OPTION, commit, *pytest_args]
+        target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
         self._run_suite(config.target_suite, env, target_args)
 
     def _checkout_commit(self):

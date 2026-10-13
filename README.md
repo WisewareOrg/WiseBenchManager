@@ -12,17 +12,21 @@ bench run                      # on a timer: if the merge queue has an entry, bu
                                # suites (the layer's own fixture installs it on the board), report
                                # pass or fail to GitHub; if the bench itself broke, post nothing
                                # and stop the timer
-bench test <ref> [--set <name>] [-- <pytest args>]
+bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: the same path, results on the terminal;
-                               # --set names a replay set for tests that use one
+                               # --set names a replay set for tests that use one; --skip-build tests
+                               # the board as it already is, with no build and no install
 ```
 
-`bench test` resolves the ref to a commit, refuses a dirty tree, and builds from that commit. There is
-no way to skip the build or supply an artefact: a run cannot test what it did not build from a ref it
-can name. The target suite then gets that commit as the `bench_candidate` fixture's value; a layer's
-own fixture installs it on the board, and the first target-suite test asserts the booted board's
-`/etc/buildinfo` names that commit. Arguments after `--` reach pytest unchanged; the record lists the
-tests that ran, whatever a layer's own tests recorded against them, and the exact command line.
+`bench test` resolves the ref to a commit and refuses a dirty tree, then builds from that commit --
+unless `--skip-build`, which skips the build, `bundle` and the host suite entirely. A built run's
+target suite gets that commit as the `bench_candidate` fixture's value; a layer's own fixture installs
+it on the board, and the first target-suite test asserts the booted board's `/etc/buildinfo` names that
+commit. A `--skip-build` run's target suite gets `bench_candidate` `None` instead, and runs against the
+board as it already is; its record carries an explicit `skip_build` field, and such a run is never
+evidence for a review or an investigation, both of which need a build. `bench run` never skips the
+build. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, whatever a
+layer's own tests recorded against them, and the exact command line.
 
 ## The job
 
@@ -34,6 +38,8 @@ tests that ran, whatever a layer's own tests recorded against them, and the exac
    the board, through the layer's own update procedure, before any test in the suite runs.
 5. Verdict — one GitHub check run via `Check.post`, naming the verdict and the report path
    (`bench run`), or the terminal (`bench test`).
+
+`--skip-build` skips steps 2 and 3 entirely; step 4 then gets `bench_candidate` `None`.
 
 A failing hook or test is the candidate's failure and is posted. An error in a bench step — the
 precondition, or pytest itself — is the bench's failure: a `DISABLED` marker is written, the timer
@@ -132,8 +138,9 @@ run, `run.json`, written at session end so a run that fails halfway still leaves
 that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
 line, the start and end times, and the exit status. The plugin reads whichever of a set of
 `BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
-field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`.
-`BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
+field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
+`BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
+one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and

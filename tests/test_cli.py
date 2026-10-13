@@ -16,10 +16,11 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name):
+    def __init__(self, checkout, ref, set_name, skip_build=False):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
+        self.skip_build = skip_build
         self.run_calls = []
         self.outcome = None
         _FakeBenchTest.instances.append(self)
@@ -85,6 +86,20 @@ def test_main_passes_set_name_and_pytest_args_through(made, monkeypatch, tmp_pat
     assert cli.main(["test", "HEAD", "--set", "scratch-set", "--", "-k", "x"]) == 0
     assert made[0].set_name == "scratch-set"
     assert made[0].run_calls == [("unused.yaml", ["-k", "x"])]
+
+
+def test_main_passes_skip_build_through(made, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD", "--skip-build"]) == 0
+    assert made[0].skip_build is True
+
+
+def test_main_defaults_skip_build_to_false(made, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD"]) == 0
+    assert made[0].skip_build is False
 
 
 @contextlib.contextmanager

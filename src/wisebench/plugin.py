@@ -20,16 +20,20 @@ BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
+BENCH_SKIP_BUILD = "BENCH_SKIP_BUILD"
 
 # The command-line option name bench_test.py's BenchTest.run and this plugin both use to pass
 # the bench_candidate fixture's value, defined once here for the same reason.
 BENCH_CANDIDATE_OPTION = "--bench-candidate"
 
 # run.json field name -> the environment variable it comes from, when that fact is known.
-# BENCH_SHA/SET are set for every hook and suite.
+# BENCH_SHA/SET are set for every hook and suite; BENCH_SKIP_BUILD only for a --skip-build run,
+# so its presence is itself the record of one -- a bare None bench_candidate is not a run.json
+# field and so cannot carry that signal on its own.
 BENCH_FIELDS = {
     "image_commit": BENCH_SHA,
     "set": BENCH_SET,
+    "skip_build": BENCH_SKIP_BUILD,
 }
 
 

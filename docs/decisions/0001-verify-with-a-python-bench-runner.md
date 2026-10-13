@@ -11,7 +11,10 @@
   update procedure (`kiosk-send-direct`, `tools/kiosk-install.sh`, `kiosk-reboot`), crashing twice
   on the bench board's hardware watchdog where the layer's own path never has. `ota.py`,
   `tests/test_ota.py`, the `[bundle]` table and the bundle hash in the environment and run record
-  are removed (WisewareOrg/WiseBenchManager#18).
+  are removed. Decision 9 gains its one named exception, `bench test <ref> --skip-build`: tests on
+  a running board without a build are allowed; a review or an investigation needs one, so a
+  `--skip-build` run is never evidence for either, and its record says explicitly that it was one
+  (WisewareOrg/WiseBenchManager#18).
 - **rev 4** — 2026-10-12 — decision 3's addon (writing `SERVE`/`HIT`/`MISS` lines and stripping a
   configured header list when recording) is removed: mitmproxy's own output is the record of
   what it served, and what a recording keeps or drops is the recorder's own call at recording
@@ -44,7 +47,7 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing.
 7. Scheduling stays with well-supported tools: a systemd user timer and `flock`. Queue-head selection is a small adapter, swapped when the organisation moves the merge queue to Mergify.
 8. The operator's view is `bench status --watch`, about 150 lines on a maintained terminal library reading the runner's own event stream, keeping the functionality of the existing TUI and no more.
-9. Provenance is structural, not recorded on trust: `bench test <ref>` has no way to skip the build or supply an artefact. It resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what it built, and the first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. A run therefore cannot test something it did not build from a ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
+9. Provenance is structural, within what the runner still does: `bench test <ref>` refuses a dirty tree and builds from the resolved commit, and `bench_candidate` is the one channel a layer's own fixture gets that commit through, so nothing reaches the board from outside that build; a normal run's first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. `bench test <ref> --skip-build` is the one named exception: it checks out `<ref>` for its test code only, skips `build`, `bundle` and the host suite, and runs the target suite with `bench_candidate` `None` against the board as it is; its record carries an explicit `skip_build` field, since a bare `None` candidate is not itself a record field, and such a run is never evidence for a review or an investigation, which need a build. `bench run` never sets it. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
 
 ## Alternatives considered
 
@@ -68,4 +71,4 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 - Requirement items point at pytest functions; the record names the items discharged, the image commit, the dirty flag, the set hash and the runner version.
 - The merge queue is gated on one physical board, so merges serialise at a job's length; this is accepted.
 - Reopened if a second board, power control or a serial console arrives (labgrid becomes worth adopting; the tests' shape does not change), or if the organisation's CI policy changes what may run on the build host.
-- An investigation's run is as traceable as a gate's: same command path, same record, no bypass.
+- An investigation's run is as traceable as a gate's: same command path, same record. `--skip-build` is the one named exception, marked as such in its own record; it is never evidence for a review or an investigation, both of which still need a build.

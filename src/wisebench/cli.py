@@ -52,6 +52,7 @@ def main(argv=None):
     test_parser = subparsers.add_parser("test")
     test_parser.add_argument("ref")
     test_parser.add_argument("--set", dest="set_name", default=None)
+    test_parser.add_argument("--skip-build", action="store_true")
     subparsers.add_parser("run")
     args = parser.parse_args(own_args)
 
@@ -85,7 +86,7 @@ def main(argv=None):
                 signal.signal(signal.SIGTERM, previous_handler)
         return 0
 
-    bench = BenchTest(Path.cwd(), args.ref, args.set_name)
+    bench = BenchTest(Path.cwd(), args.ref, args.set_name, skip_build=args.skip_build)
     try:
         with Lock(directory):
             bench.run(lg_env, pytest_args)
