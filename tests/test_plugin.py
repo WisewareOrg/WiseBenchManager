@@ -52,6 +52,7 @@ def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
     assert data["image_commit"] == "deadbeef"
     assert "tree" not in data
     assert data["set"] == "scratch-set"
+    assert "skip_build" not in data
 
 
 def test_run_json_carries_skip_build_when_set(pytester, monkeypatch):
