@@ -26,8 +26,7 @@ class CandidateFailure(Exception):
 
 
 class BenchTest:
-    """One `bench test <ref>` run: the checkout, the ref, the replay set name and whether to
-    skip the build."""
+    """One `bench test <ref>` run: the checkout, ref, replay set name and skip-build flag."""
 
     def __init__(self, checkout, ref, set_name, skip_build=False):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
