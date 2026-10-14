@@ -1,4 +1,10 @@
-"""Turns on pytest-reportlog's record, and writes the one run-level file beside it."""
+"""pytest plugin: the `bench_candidate` and `proxy` fixtures, pytest-reportlog's record, and
+run.json.
+
+Each run writes `report.jsonl` and `run.json` under `<BENCH_RESULT_DIR>/<UTC timestamp>/`.
+run.json holds `version`, `command_line`, `start`, `end`, `exit_status`, and each `BENCH_FIELDS`
+field whose environment variable is set.
+"""
 
 import json
 import shlex
@@ -14,38 +20,87 @@ from wisebench.proxy import proxy as proxy
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
 DEFAULT_RESULT_DIR = "records"
 
-# Environment variable names a caller (bench_test.py's BenchTest.run) and this plugin both use,
-# defined once here so neither side carries its own copy of the literal string.
+# Environment variable names.
 BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
-BENCH_BUNDLE_SHA256 = "BENCH_BUNDLE_SHA256"
+BENCH_SKIP_BUILD = "BENCH_SKIP_BUILD"
 
-# run.json field name -> the environment variable it comes from, when that fact is known.
-# BENCH_SHA/SET are set for every hook and suite; BENCH_BUNDLE_SHA256 only for the target
-# suite, once install() has run.
+BENCH_CANDIDATE_OPTION = "--bench-candidate"
+
+# run.json field name -> environment variable name.
 BENCH_FIELDS = {
-    "image_commit": BENCH_SHA,
+    "test_commit": BENCH_SHA,
     "set": BENCH_SET,
-    "bundle_sha256": BENCH_BUNDLE_SHA256,
+    "skip_build": BENCH_SKIP_BUILD,
 }
+
+# Exit status substituted for pytest's own when the session reports any error: a collection
+# error, or a fixture erroring during setup or teardown.
+SETUP_ERROR_EXIT_STATUS = 90
 
 
 def _run_dir(config):
+    """The directory this run's records go in: BENCH_RESULT_DIR, then this run's timestamp.
+
+    Args:
+        config (pytest.Config): The session's pytest configuration.
+
+    Returns:
+        pathlib.Path: The run's own record directory.
+    """
     base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
 
 
+def pytest_addoption(parser):
+    """Registers the --bench-candidate command-line option.
+
+    Args:
+        parser (pytest.Parser): pytest's own command-line parser.
+    """
+    parser.addoption(BENCH_CANDIDATE_OPTION, default=None)
+
+
+@pytest.fixture(scope="session")
+def bench_candidate(request):
+    """The commit this run built, or `None` without one.
+
+    A layer's own session fixture reads this to install the candidate on the board.
+
+    Args:
+        request (pytest.FixtureRequest): The requesting test's fixture request.
+
+    Returns:
+        str | None: The commit this run built from, or `None` outside a built run.
+    """
+    return request.config.getoption(BENCH_CANDIDATE_OPTION)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
+    """Sets this run's timestamp and points pytest-reportlog at this run's report path.
+
+    Args:
+        config (pytest.Config): The session's pytest configuration.
+    """
     config._wisebench_timestamp = datetime.now(UTC).strftime(_TIMESTAMP)
     config._wisebench_start = datetime.now(UTC)
     config.option.report_log = str(_run_dir(config) / "report.jsonl")
 
 
 def pytest_sessionfinish(session, exitstatus):
+    """Writes run.json, substituting SETUP_ERROR_EXIT_STATUS when the session reports any error.
+
+    Args:
+        session (pytest.Session): The finished session.
+        exitstatus (int | pytest.ExitCode): pytest's own exit status for the session.
+    """
     config = session.config
+    terminalreporter = config.pluginmanager.get_plugin("terminalreporter")
+    if terminalreporter is not None and terminalreporter.stats.get("error"):
+        session.exitstatus = SETUP_ERROR_EXIT_STATUS
     run_dir = _run_dir(config)
     run_dir.mkdir(parents=True, exist_ok=True)
     data = {
@@ -53,7 +108,7 @@ def pytest_sessionfinish(session, exitstatus):
         "command_line": shlex.join(config.invocation_params.args),
         "start": config._wisebench_start.isoformat(),
         "end": datetime.now(UTC).isoformat(),
-        "exit_status": int(exitstatus),
+        "exit_status": int(session.exitstatus),
     }
     for field, env_name in BENCH_FIELDS.items():
         value = environ.get(env_name)

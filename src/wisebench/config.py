@@ -6,31 +6,24 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
-    """`bench.toml`, read once: the three hooks, the bundle, the two suites.
+    """`bench.toml`, read once: the three hooks, the two suites.
 
     Args:
         hooks (dict[str, str]): Command line for "precondition", "build" and "bundle".
-        bundle_path (str): Path to the built bundle, relative to the checkout.
-        bundle_destination (str): Path on the board to stage the bundle at before `rauc
-            install`; the layer's own fact, never this runner's.
         host_suite (str): Path to the host-side pytest suite, relative to the checkout.
         target_suite (str): Path to the target-side pytest suite, relative to the checkout.
         github_repo (str | None): The repository the verdict is posted against, as
-            "owner/name"; None when `bench.toml` has no `[github]` table, which is fine for
-            `bench test` and a failure only `Check`, built by `bench run`, hits.
+            "owner/name"; None without a `[github]` table, which `bench run` requires.
         github_app_id (int | None): The GitHub App's id; None under the same condition.
         github_private_key (str | None): Path to the App's PEM-encoded private key, outside
             the checkout; None under the same condition.
         github_check (str | None): The check run's name, as the layer's ruleset lists it; None
             under the same condition.
         run_unit (str | None): The systemd unit base name (`[run] unit`) `bench run` disables
-            on the bench's own failure; None when `bench.toml` has no `[run]` table, which is
-            fine for `bench test` and a failure only `bench run` itself hits.
+            on the bench's own failure; None without a `[run]` table, which `bench run` requires.
     """
 
     hooks: dict
-    bundle_path: str
-    bundle_destination: str
     host_suite: str
     target_suite: str
     github_repo: str | None = None
@@ -42,8 +35,6 @@ class Config:
     @classmethod
     def load(cls, path):
         """Read and parse `bench.toml`.
-
-        Keys only, no validation beyond the `KeyError` a missing one raises naturally.
 
         Args:
             path (pathlib.Path): Path to `bench.toml` in the checkout.
@@ -61,8 +52,6 @@ class Config:
         github = raw.get("github", {})
         return cls(
             hooks=raw["hooks"],
-            bundle_path=raw["bundle"]["path"],
-            bundle_destination=raw["bundle"]["destination"],
             host_suite=raw["tests"]["host_suite"],
             target_suite=raw["tests"]["target_suite"],
             github_repo=github.get("repo"),

@@ -18,8 +18,8 @@ def _raise_on_sigterm(signum, frame):
     """Turn `SIGTERM` (systemd's `TimeoutStartSec` kill) into a bench failure.
 
     Args:
-        signum: Unused.
-        frame: Unused.
+        signum (int): Unused.
+        frame (types.FrameType | None): Unused.
 
     Raises:
         BenchFailure: Always.
@@ -30,8 +30,7 @@ def _raise_on_sigterm(signum, frame):
 def main(argv=None):
     """Parse arguments and run one `bench test` or `bench run` invocation end to end.
 
-    Holds the `Lock` shared between the two commands for the whole of whichever one runs, so
-    neither `BenchTest` nor `BenchRun` needs to know about it.
+    Holds the `Lock` shared between the two commands for the whole of whichever one runs.
 
     Args:
         argv (list[str] | None): Arguments to parse, defaulting to `sys.argv[1:]`.
@@ -39,6 +38,9 @@ def main(argv=None):
     Returns:
         int: 0 pass (or, for `run`, no job/disabled/lock held), 1 `test`'s candidate failure,
         2 the bench's own failure.
+
+    Raises:
+        SystemExit: argparse rejected the arguments, or printed `--help`.
     """
     argv = sys.argv[1:] if argv is None else argv
     if "--" in argv:
@@ -52,6 +54,7 @@ def main(argv=None):
     test_parser = subparsers.add_parser("test")
     test_parser.add_argument("ref")
     test_parser.add_argument("--set", dest="set_name", default=None)
+    test_parser.add_argument("--skip-build", action="store_true")
     subparsers.add_parser("run")
     args = parser.parse_args(own_args)
 
@@ -85,7 +88,7 @@ def main(argv=None):
                 signal.signal(signal.SIGTERM, previous_handler)
         return 0
 
-    bench = BenchTest(Path.cwd(), args.ref, args.set_name)
+    bench = BenchTest(Path.cwd(), args.ref, args.set_name, skip_build=args.skip_build)
     try:
         with Lock(directory):
             bench.run(lg_env, pytest_args)

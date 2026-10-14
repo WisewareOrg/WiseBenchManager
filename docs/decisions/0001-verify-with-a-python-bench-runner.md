@@ -1,10 +1,24 @@
 # 0001 — Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay
 
 **Status:** accepted
-**Decided:** 2026-10-12 (meta-wisekiosk#223 generic Yocto test runner: survey, plan and the resulting decisions; rev 2: WiseBenchManager#2 core, minimal scope; rev 3: WiseBenchManager#4 `bench test`, the rollback and the recovery step are removed; rev 4: WiseBenchManager#5 replay has no addon, mitmproxy's own output is the record)
-**Rev:** 4
+**Decided:** 2026-10-13 (meta-wisekiosk#223 generic Yocto test runner: survey, plan and the resulting decisions; rev 2: WiseBenchManager#2 core, minimal scope; rev 3: WiseBenchManager#4 `bench test`, the rollback and the recovery step are removed; rev 4: WiseBenchManager#5 replay has no addon, mitmproxy's own output is the record; rev 5: WiseBenchManager#18 the runner owns no device procedure, the layer's own target-suite fixture installs the candidate)
+**Rev:** 5
 
 ## Revisions
+- **rev 5** — 2026-10-13 — decision 1 drops the bundle path from the runner's config; decision 2
+  gains the `bench_candidate` fixture; decision 6 drops the install sentence. The runner's
+  `Ota.install` (labgrid `put`, `rauc install`, reboot) duplicated and drifted from the layer's own
+  update procedure (`kiosk-send-direct`, `tools/kiosk-install.sh`, `kiosk-reboot`), crashing twice
+  on the bench board's hardware watchdog where the layer's own path never has. `ota.py`,
+  `tests/test_ota.py`, the `[bundle]` table and the bundle hash in the environment and run record
+  are removed. Decision 9 gains its one named exception, `bench test <ref> --skip-build`: tests on
+  a running board without a build are allowed; a review or an investigation needs one, so a
+  `--skip-build` run is never evidence for either, and its record says explicitly that it was one.
+  The code now matches decision 6: a fixture erroring during setup or teardown is the bench's own
+  failure, not the candidate's -- pytest's own exit code does not distinguish the two, so the
+  plugin substitutes a distinct exit status when pytest's own report categorises a report as an
+  `error` rather than a `failure`, and `_run_suite` reads that back as `BenchFailure`
+  (WisewareOrg/WiseBenchManager#18).
 - **rev 4** — 2026-10-12 — decision 3's addon (writing `SERVE`/`HIT`/`MISS` lines and stripping a
   configured header list when recording) is removed: mitmproxy's own output is the record of
   what it served, and what a recording keeps or drops is the recorder's own call at recording
@@ -29,15 +43,15 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 
 ## Decision
 
-1. The bench runner, WiseBenchManager, is a generic pytest hardware-in-the-loop runner: a Python package in its own WisewareOrg repository, cloned on the pipeline host and run from its checkout at a tag, pointed at a meta-wisekiosk checkout and a small config (board address and hostname, bundle path, hooks, GitHub target) at run time. Neither repository pins or imports the other; every run record names the runner's version. The split is deliberate and the runner is meant to be hard to change once right.
-2. Every test is pytest, in two suites the config names: `host_suite` runs on the pipeline host against the built artefacts before anything is installed; `target_suite` runs against the booted board. Setup and teardown are fixtures. labgrid's own pytest plugin provides the board: an env file in the layer names the board's address, templated from the environment, and the layer points pytest at it with `--lg-env`; the runner adds no fixture of its own. Everything that names this appliance — its env file, its units, its config, its page state, its probe, its buildinfo stamp — lives in the layer's own `conftest.py` and tests.
+1. The bench runner, WiseBenchManager, is a generic pytest hardware-in-the-loop runner: a Python package in its own WisewareOrg repository, cloned on the pipeline host and run from its checkout at a tag, pointed at a meta-wisekiosk checkout and a small config (board address and hostname, hooks, GitHub target) at run time. Neither repository pins or imports the other; every run record names the runner's version. The split is deliberate and the runner is meant to be hard to change once right.
+2. Every test is pytest, in two suites the config names: `host_suite` runs on the pipeline host against the built artefacts before anything is installed; `target_suite` runs against the booted board. Setup and teardown are fixtures. labgrid's own pytest plugin provides the board: an env file in the layer names the board's address, templated from the environment, and the layer points pytest at it with `--lg-env`; the runner adds no fixture of its own for the board itself. Everything that names this appliance — its env file, its units, its config, its page state, its probe, its buildinfo stamp — lives in the layer's own `conftest.py` and tests. The runner's own pytest plugin adds one more fixture beyond `proxy`: `bench_candidate`, the commit a normal run just built, `None` outside the runner; a layer's own target-suite fixture reads it to install that commit on the board through its own update procedure, the runner itself never touching the board.
 3. Replay uses mitmproxy: server replay from a recorded HAR file, a miss kills the connection and voids the run as the bench's failure, upstream certificates are never fetched, connections are made lazily so replay needs no reachable upstream, and mitmproxy generates the replay CA with one accept step installing it on the board. mitmproxy's own output — one line per flow, tagged when replayed, and a warning naming a killed non-replay request — is the record of what it served; no addon of this runner's own parses or rewrites it. What a recording keeps or drops is decided at recording time, by the command the runner's README documents. The sets (config, expected page state, recording) are the layer's data; the runner never sees a set directory, only the one HAR path a layer fixture hands it.
 4. The layer (meta-wisekiosk) keeps only what is the appliance's: the host suite (artefact checks before install) and the target suite (checks on the booted board) with their parsing helpers, a config file naming its hooks and the two suites, the replay sets as data, the requirement items, `kiosk-preflight` and the OTA recipes for hand use. The oeqa framework, the shell driver, the bespoke proxy, the driver's self-test and the log viewer are deleted at the cut-over.
 5. pytest-reportlog's JSON-lines report is the record: every test report, with whatever a layer's fixtures and tests attach through `record_property`. The runner adds one file beside it per run — its own version, the pytest command line, start and end times, the exit status — and nothing else; a verdict posted as a GitHub check run so a merge queue (Mergify) can require it is a later ticket.
-6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing. A run installs its candidate and leaves the board on it; which slot the board rests on is not a concern.
+6. A failing test is the candidate's failure and is posted; an error in a fixture or a precondition is the bench's failure, writes DISABLED, stops the timer and posts nothing.
 7. Scheduling stays with well-supported tools: a systemd user timer and `flock`. Queue-head selection is a small adapter, swapped when the organisation moves the merge queue to Mergify.
 8. The operator's view is `bench status --watch`, about 150 lines on a maintained terminal library reading the runner's own event stream, keeping the functionality of the existing TUI and no more.
-9. Provenance is structural, not recorded on trust: `bench test <ref>` has no way to skip the build or supply an artefact. It resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what it built, and the first target-suite test asserts that `/etc/buildinfo` on the booted board names that commit. A run therefore cannot test something it did not build from a ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
+9. Provenance is structural where the runner controls it, checked where it does not: `bench test <ref>` refuses a dirty tree and builds from the resolved commit, and the runner names that commit to the layer through `bench_candidate`, the only channel it uses, so a build is never swapped for an artefact from outside. The layer's own target-suite setup installs what that build produced, and a normal run's first target-suite test checks that `/etc/buildinfo` on the booted board names that commit -- checked, not structurally guaranteed. `bench test <ref> --skip-build` is the one named exception: it checks out `<ref>` for its test code only, skips `build`, `bundle` and the host suite, and runs the target suite with `bench_candidate` `None` against the board as it is; its record carries an explicit `skip_build` field, since a bare `None` candidate is not itself a record field, and such a run is never evidence for a review or an investigation, which need a build. `bench run` never sets it. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, the requirement items they discharged and the exact command line, so a partial run reads as partial.
 
 ## Alternatives considered
 
@@ -51,12 +65,14 @@ The first implementation grew inside meta-wisekiosk without a design-space analy
 - **Our own TLS replay proxy.** Rejected: 367 lines plus tests plus yearly leaf minting to do what mitmproxy does with four options and a HAR file; the "stdlib only" preference it was built on contradicts the preference for well-supported tools.
 - **An oeqa custom test target.** Rejected: the most Yocto-native route, but it fuses runner and layer at the seam this decision separates, and poky marks the loader for refactoring. No QEMU tier will exist, so oeqa's QEMU integration carries no weight.
 - **`uv tool install` / pipx.** Not needed: the host clones the repository and runs it at a tag; the record names the tag.
+- **Keep `Ota.install` in the runner.** Rejected in rev 5: it duplicated the layer's own update procedure and the two drifted, crashing the board's hardware watchdog twice where the layer's own path never has; its tests ran only against a fake driver, so that class of failure could not show there. "labgrid has no RAUC strategy, so that code is ours either way" (rev 1) settled who wrote the code, not who owns the procedure — the layer already had one.
 
 ## Consequences
 
 - A new check is a test file and, at most, a fixture beside it; the runner does not change when a test's needs change.
+- The runner owns no device procedure of its own; a layer with a different update mechanism needs only its own `bench_candidate`-reading fixture, not a runner change. The run record and the environment carry the commit only, not a bundle hash.
 - meta-wisekiosk loses on the order of seven thousand lines (the driver, its self-test, the viewer, the proxy and its tests, the oeqa framework and case shells); the runner adds on the order of a thousand lines of code plus its tests (an estimate).
-- Requirement items point at pytest functions; the record names the items discharged, the image commit, the dirty flag, the set hash and the runner version.
+- Requirement items point at pytest functions; the record names the items discharged, the test commit, the dirty flag, the set hash and the runner version.
 - The merge queue is gated on one physical board, so merges serialise at a job's length; this is accepted.
 - Reopened if a second board, power control or a serial console arrives (labgrid becomes worth adopting; the tests' shape does not change), or if the organisation's CI policy changes what may run on the build host.
-- An investigation's run is as traceable as a gate's: same command path, same record, no bypass.
+- An investigation's run is as traceable as a gate's: same command path, same record. `--skip-build` is the one named exception, marked as such in its own record; it is never evidence for a review or an investigation, both of which still need a build.

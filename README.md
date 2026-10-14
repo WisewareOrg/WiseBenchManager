@@ -1,62 +1,58 @@
 # WiseBenchManager
 
 A generic pytest hardware-in-the-loop runner for over-the-air updated boards. It takes a git ref of a
-Yocto layer through build, OTA install, boot, tests on the booted board, and a verdict, and
-it knows nothing about the application the board runs. Design decisions are in
-[`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 4.
+Yocto layer through build and test to a verdict, and it knows nothing about the application the board
+runs — installing a candidate on the board is the layer's own job, through its own fixture. Design
+decisions are in [`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 5.
 
 ## Two commands
 
 ```sh
-bench run                      # on a timer: if the merge queue has an entry, build it, OTA it to the
-                               # board, run the suites, report pass or fail to GitHub;
-                               # if the bench itself broke, post nothing and stop the timer
-bench test <ref> [--set <name>] [-- <pytest args>]
+bench run                      # on a timer: if the merge queue has an entry, build it, run the
+                               # suites (the layer's own fixture installs it on the board), report
+                               # pass or fail to GitHub; if the bench itself broke, post nothing
+                               # and stop the timer
+bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: the same path, results on the terminal;
-                               # --set names a replay set for tests that use one
+                               # --set names a replay set for tests that use one; --skip-build tests
+                               # the board as it already is, with no build and no install
 ```
 
-`bench test` resolves the ref to a commit, refuses a dirty tree, builds from that commit, installs what
-it built, and the first target-suite test asserts the booted board's `/etc/buildinfo` names that commit.
-There is no way to skip the build or supply an artefact: a run cannot test what it did not build from a
-ref it can name. Arguments after `--` reach pytest unchanged; the record lists the tests that ran,
-whatever a layer's own tests recorded against them, and the exact command line.
+`bench test` resolves the ref to a commit and refuses a dirty tree, then builds from that commit --
+unless `--skip-build`, which skips the build, `bundle` and the host suite entirely. A built run's
+target suite gets that commit as the `bench_candidate` fixture's value; a layer's own fixture installs
+it on the board, and the first target-suite test asserts the booted board's `/etc/buildinfo` names that
+commit. A `--skip-build` run's target suite gets `bench_candidate` `None` instead, and runs against the
+board as it already is; its record carries an explicit `skip_build` field, and such a run is never
+evidence for a review or an investigation, both of which need a build. `bench run` never skips the
+build. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, whatever a
+layer's own tests recorded against them, and the exact command line.
 
 ## The job
 
-1. `precondition` hook — the bench is in a known state; the layer's own command, run before the
-   `Ota` is even built.
+1. `precondition` hook — the bench is in a known state; the layer's own command, run first.
 2. `build` and `bundle` hooks — the layer's own commands, run in the checkout of the ref under test.
 3. `host_suite` — pytest on the pipeline host against the built artefacts, before anything is installed.
-4. Only now is one `ota.Ota(driver)` constructed — a hook can run for hours, and holding
-   labgrid's ssh master open across it risks inheriting a dead connection.
-5. Install and boot — `Ota.install(bundle, destination)`: reads the candidate slot (the board's
-   other slot), labgrid's `put`, `rauc install`, reboot, wait for ssh to answer again, then
-   verifies the board booted the candidate (raising on a rauc fallback); returns the bundle's
-   sha256.
-6. `target_suite` — pytest against the booted board, with labgrid's own env file.
-7. Verdict — one GitHub check run via `Check.post`, naming the verdict and the report path
+4. `target_suite` — pytest against the board, with labgrid's own env file and the built commit as the
+   `bench_candidate` fixture's value. A layer's own session fixture reads it and installs that commit on
+   the board, through the layer's own update procedure, before any test in the suite runs.
+5. Verdict — one GitHub check run via `Check.post`, naming the verdict and the report path
    (`bench run`), or the terminal (`bench test`).
 
-`install` is a plain method the `bench test` script calls directly; it is not a pytest fixture.
-A failing hook or test is the candidate's failure and is posted. An error in a bench step — the
-precondition or an install — is the bench's failure: a `DISABLED` marker is written, the timer
-is stopped, nothing is posted. A run installs its candidate and leaves the board on it; rauc
-always installs to whichever slot is inactive, so which slot the board rests on is not a
-concern.
+`--skip-build` skips steps 2 and 3 entirely; step 4 then gets `bench_candidate` `None`.
+
+A failing hook or test is the candidate's failure and is posted. An error in a fixture or the
+precondition is the bench's failure: a `DISABLED` marker is written, the timer is stopped,
+nothing is posted. pytest's own setup/call distinction is what tells the two apart: a fixture
+erroring during setup or teardown is never read as the candidate's test failing.
 
 ## What a layer provides
 
 The runner is pointed at a checkout and reads `bench.toml` from it. Board identity is never in it —
-see "Running it". `destination` is the layer's own choice of where on the board to stage the
-bundle before `rauc install`; the runner never picks one.
+see "Running it".
 
 ```toml
 schema = 1
-
-[bundle]
-path        = "build/.../update-bundle-<machine>.raucb"
-destination = "/path/on/the/board/update.raucb"  # the layer's own choice; the runner never picks one
 
 [hooks]
 precondition = "just bench-precondition"
@@ -120,12 +116,13 @@ and markers still do.
 
 The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
 `NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
-at with `--lg-env`; the runner adds no fixture of its own for it. The one fixture the runner does
-add:
+at with `--lg-env`; the runner adds no fixture of its own for the board itself. The fixtures the
+runner does add:
 
 | Fixture | Gives |
 |---|---|
 | `proxy(har)` | mitmproxy serving that HAR file on a forwarded loopback port; a miss kills the connection; the file's hash goes into the record |
+| `bench_candidate` | the commit this run built, as a session fixture; `None` outside the runner. A layer's own target-suite fixture reads it and installs that commit on the board through the layer's own update procedure. |
 
 Everything that names the application under test — its units, its paths on the board, its page state, its
 replay sets — lives in the layer's own `conftest.py` and tests, built on labgrid's fixtures and the
@@ -142,9 +139,9 @@ run, `run.json`, written at session end so a run that fails halfway still leaves
 that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
 line, the start and end times, and the exit status. The plugin reads whichever of a set of
 `BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
-field name: `image_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `bundle_sha256` from
-`BENCH_BUNDLE_SHA256` — the last one only once `install` has run, for the target suite.
-`BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
+field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
+`BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
+one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
