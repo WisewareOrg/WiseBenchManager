@@ -181,7 +181,7 @@ def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path)
     assert target_env["BENCH_SKIP_BUILD"] == "true"
 
 
-def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_path, monkeypatch):
+def test_a_real_pytest_subprocess_clears_addopts(tmp_path, monkeypatch):
     """_run_suite clears the checkout's ini-file addopts."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     ini = '[tool.pytest.ini_options]\naddopts = "--no-such-option"\n'

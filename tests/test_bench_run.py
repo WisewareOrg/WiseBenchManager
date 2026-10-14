@@ -192,7 +192,7 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monke
     assert _FakeCheck.posts == [("cafef00d", "failure", "target_suite failed", "records")]
 
 
-def test_run_on_a_candidate_test_failure_writes_disabled_disables_the_timer_and_reraises(
+def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
     made, monkeypatch, tmp_path
 ):
     """run on a BenchFailure writes DISABLED, disables the timer, and reraises."""
