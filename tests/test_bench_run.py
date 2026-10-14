@@ -98,8 +98,12 @@ def _stub_subprocess(monkeypatch, *, error_on=None):
     """Fake `bench_run.subprocess.run`.
 
     Args:
+        monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
         error_on (list | None): A command prefix that raises `CalledProcessError` instead of
             succeeding, or None.
+
+    Returns:
+        list: Each call's command, in order.
     """
     calls = []
 
@@ -188,9 +192,6 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monke
     assert _FakeCheck.posts == [("cafef00d", "failure", "target_suite failed", "records")]
 
 
-# -- the bench-failure path: one test per raise site --
-
-
 def test_run_on_a_candidate_test_failure_writes_disabled_disables_the_timer_and_reraises(
     made, monkeypatch, tmp_path
 ):
@@ -253,8 +254,7 @@ def test_run_on_check_construction_failing_writes_disabled_and_disables_the_time
 def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disables_the_timer(
     made, monkeypatch, tmp_path
 ):
-    """run on Check.post failing after a candidate failure writes DISABLED and disables the
-    timer."""
+    """run on Check.post failing after a candidate failure writes DISABLED, disables the timer."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     _FakeBenchTest.outcome = bench_test.CandidateFailure("target_suite failed")

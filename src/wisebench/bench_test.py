@@ -26,22 +26,8 @@ class CandidateFailure(Exception):
 
 
 class BenchTest:
-    """One `bench test <ref>` run: resolve, checkout, hooks, both suites, in order.
-
-    Holds only what identifies this run -- the checkout, the ref, the replay set name and
-    whether to skip the build. `run` takes the labgrid env file and the trailing pytest
-    arguments, and executes the whole job straight through: resolve the ref and refuse a dirty
-    tree, check it out, read `bench.toml`, run the `precondition` hook (a nonzero exit is this
-    runner's own failure). Unless skipping the build, it then runs `build`/`bundle` (the
-    candidate's failure), runs the host suite, and passes the built commit to the target suite
-    as the `bench_candidate` fixture's value; skipping the build skips all three and the target
-    suite gets no candidate. Installing a candidate on the board is the layer's own
-    target-suite fixture's job, using the layer's own update procedure; this runner never
-    touches the board.
-    `run.json` is the pytest plugin's own file (`plugin.py`'s `BENCH_FIELDS`): this class sets
-    `BENCH_*` environment variables for the hooks and suites to inherit; it never opens or
-    writes a `run.json` itself.
-    """
+    """One `bench test <ref>` run: the checkout, the ref, the replay set name and whether to
+    skip the build."""
 
     def __init__(self, checkout, ref, set_name, skip_build=False):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
@@ -59,7 +45,12 @@ class BenchTest:
         self.skip_build = skip_build
 
     def run(self, lg_env, pytest_args):
-        """Execute the full job.
+        """Check out the ref, run the hooks, then run both suites.
+
+        Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`,
+        `BENCH_RESULT_DIR`, and `BENCH_SKIP_BUILD` when skipping the build. Runs
+        `precondition`; unless skipping the build, runs `build`, `bundle` and the host suite,
+        and passes the commit to the target suite as `--bench-candidate`.
 
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`).
@@ -70,8 +61,7 @@ class BenchTest:
                 fixture erroring during setup or teardown.
             CandidateFailure: A `build`/`bundle` hook, or a test's own call (pytest exit 1),
                 failed.
-            Exception: Any other step raised (a dirty tree, git itself) -- propagated as-is,
-                not wrapped; the CLI treats anything but `CandidateFailure` as the bench's own.
+            Exception: Any other step raised (a dirty tree, git itself), propagated unwrapped.
         """
         commit = self._checkout_commit()
         config = Config.load(self.checkout / "bench.toml")
@@ -100,9 +90,6 @@ class BenchTest:
 
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.
-
-        The `git checkout` call's output reaches the terminal directly; `rev-parse` and
-        `status` capture theirs.
 
         Returns:
             str: The resolved commit hex.
@@ -152,10 +139,6 @@ class BenchTest:
     def _run_suite(self, suite, env, extra_args):
         """Run pytest on one suite directory, its output inherited straight to the terminal.
 
-        Runs under this process's own interpreter (`sys.executable -m pytest`, not `uv run`)
-        with `-o addopts=""`, clearing that checkout's own ini-file `addopts` for this
-        invocation.
-
         Args:
             suite (str): The suite's path, relative to the checkout.
             env (dict[str, str]): The subprocess environment.
@@ -165,7 +148,8 @@ class BenchTest:
             CandidateFailure: pytest exited 1 -- a test's own call failed.
             BenchFailure: pytest exited anything else nonzero -- interrupted, internal error,
                 usage error, no tests collected, or a fixture erroring during setup or teardown
-                (`plugin.py` substitutes its own exit status for pytest's 1 in that case).
+                (`plugin.py` substitutes its own exit status whenever the session reports an
+                error).
         """
         command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
         result = subprocess.run(command, cwd=self.checkout, env=env)

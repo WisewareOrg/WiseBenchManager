@@ -13,16 +13,14 @@ class Config:
         host_suite (str): Path to the host-side pytest suite, relative to the checkout.
         target_suite (str): Path to the target-side pytest suite, relative to the checkout.
         github_repo (str | None): The repository the verdict is posted against, as
-            "owner/name"; None when `bench.toml` has no `[github]` table, which is fine for
-            `bench test` and a failure only `Check`, built by `bench run`, hits.
+            "owner/name"; None without a `[github]` table, which `bench run` requires.
         github_app_id (int | None): The GitHub App's id; None under the same condition.
         github_private_key (str | None): Path to the App's PEM-encoded private key, outside
             the checkout; None under the same condition.
         github_check (str | None): The check run's name, as the layer's ruleset lists it; None
             under the same condition.
         run_unit (str | None): The systemd unit base name (`[run] unit`) `bench run` disables
-            on the bench's own failure; None when `bench.toml` has no `[run]` table, which is
-            fine for `bench test` and a failure only `bench run` itself hits.
+            on the bench's own failure; None without a `[run]` table, which `bench run` requires.
     """
 
     hooks: dict
@@ -37,8 +35,6 @@ class Config:
     @classmethod
     def load(cls, path):
         """Read and parse `bench.toml`.
-
-        Keys only, no validation beyond the `KeyError` a missing one raises naturally.
 
         Args:
             path (pathlib.Path): Path to `bench.toml` in the checkout.

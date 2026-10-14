@@ -78,8 +78,7 @@ def test_main_returns_2_on_a_bench_failure(made, monkeypatch, tmp_path):
 
 
 def test_main_returns_2_on_a_raw_exception_run_never_wraps(made, monkeypatch, tmp_path):
-    """`run()` never wraps a step's own exception into `BenchFailure` -- a raw dirty-tree
-    `RuntimeError` reaches `main` as itself, and `main` still exits 2."""
+    """main returns 2 on an exception that is neither BenchFailure nor CandidateFailure."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "BenchTest", _build(RuntimeError("tree is dirty: [' M x']")))
     assert cli.main(["test", "HEAD"]) == 2
@@ -139,9 +138,6 @@ def test_main_test_returns_2_when_the_lock_is_already_held(made, monkeypatch, tm
     assert made[0].run_calls == []
 
 
-# -- `bench run` --
-
-
 def _write_bench_toml(repo):
     (repo / "bench.toml").write_text("""
 [hooks]
@@ -185,6 +181,14 @@ class _FakeBenchRun:
 
 @pytest.fixture
 def made_run(monkeypatch):
+    """Sets a harmless `LG_ENV` and resets `_FakeBenchRun`'s instances and outcome.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
+
+    Yields:
+        list[_FakeBenchRun]: Each `BenchRun` this test constructs, in order.
+    """
     monkeypatch.setenv("LG_ENV", "unused.yaml")
     _FakeBenchRun.instances = []
     _FakeBenchRun.outcome = None
@@ -276,8 +280,7 @@ def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_pa
 
 
 def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch, tmp_path):
-    """main's SIGTERM handler turns a TimeoutStartSec kill into a BenchFailure that writes
-    DISABLED and disables the timer."""
+    """main exits 2 on SIGTERM, writing DISABLED and disabling the timer."""
     _write_bench_toml(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LG_ENV", "unused.yaml")

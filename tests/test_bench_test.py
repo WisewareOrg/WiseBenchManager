@@ -50,9 +50,6 @@ def _write_suite(repo, name, *, passing=True):
     (suite / "test_one.py").write_text(f"def test_one():\n    {body}\n")
 
 
-# -- one test per failure class --
-
-
 def test_a_dirty_tree_raises_runtime_error(tmp_path):
     """A dirty tree raises RuntimeError."""
     _repo_with_one_commit(tmp_path)
@@ -103,11 +100,11 @@ def test_a_failing_target_suite_is_a_candidate_failure(tmp_path):
         bench.run(lg_env, [])
 
 
-# -- the happy path (subprocess stubbed) --
-
-
 def _stub_subprocess(monkeypatch):
     """Stub `bench_test.subprocess.run`, recording every call's command and environment.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
 
     Returns:
         list[tuple]: One `(command, env)` pair per call, in order -- `command` is the shell
@@ -148,7 +145,7 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     assert commands[6][:4] == [sys.executable, "-m", "pytest", "host_suite"]
     assert "--lg-env" not in commands[6]
     assert "-k" not in commands[6]
-    assert commands[7][:4] == [sys.executable, "-m", "pytest", "target_suite"]  # straight after
+    assert commands[7][:4] == [sys.executable, "-m", "pytest", "target_suite"]
     assert commands[7][commands[7].index("--lg-env") + 1] == "env.yaml"
     assert commands[7][commands[7].index("--bench-candidate") + 1] == "deadbeef"
     assert commands[7][-2:] == ["-k", "x"]
@@ -172,7 +169,7 @@ def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path)
 
     commands = [command for command, _ in calls]
     assert commands[3] == "true"  # precondition
-    assert commands[4][:4] == [sys.executable, "-m", "pytest", "target_suite"]  # straight after
+    assert commands[4][:4] == [sys.executable, "-m", "pytest", "target_suite"]
     assert "--bench-candidate" not in commands[4]
     assert commands[4][commands[4].index("--lg-env") + 1] == "env.yaml"
     assert commands[4][-2:] == ["-k", "x"]
@@ -184,11 +181,8 @@ def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path)
     assert target_env["BENCH_SKIP_BUILD"] == "true"
 
 
-# -- the real pytest subprocess --
-
-
 def test_a_real_pytest_subprocess_uses_this_interpreter_and_clears_addopts(tmp_path, monkeypatch):
-    """_run_suite runs a real suite under this process's own interpreter, with addopts cleared."""
+    """_run_suite clears the checkout's ini-file addopts."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     ini = '[tool.pytest.ini_options]\naddopts = "--no-such-option"\n'
     (tmp_path / "pyproject.toml").write_text(ini)

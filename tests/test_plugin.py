@@ -1,4 +1,5 @@
-"""The plugin's own record: run.json's fields, and the reportlog path it sets."""
+"""The plugin's own record (run.json's fields, the reportlog path) and the bench_candidate
+fixture."""
 
 import json
 from pathlib import Path

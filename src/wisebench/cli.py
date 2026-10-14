@@ -18,8 +18,8 @@ def _raise_on_sigterm(signum, frame):
     """Turn `SIGTERM` (systemd's `TimeoutStartSec` kill) into a bench failure.
 
     Args:
-        signum: Unused.
-        frame: Unused.
+        signum (int): Unused.
+        frame (types.FrameType | None): Unused.
 
     Raises:
         BenchFailure: Always.
@@ -38,6 +38,9 @@ def main(argv=None):
     Returns:
         int: 0 pass (or, for `run`, no job/disabled/lock held), 1 `test`'s candidate failure,
         2 the bench's own failure.
+
+    Raises:
+        SystemExit: argparse rejected the arguments, or printed `--help`.
     """
     argv = sys.argv[1:] if argv is None else argv
     if "--" in argv:

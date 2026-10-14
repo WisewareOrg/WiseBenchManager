@@ -1,5 +1,10 @@
-"""pytest plugin: turns on pytest-reportlog's record, writes run.json, and provides
-bench_candidate."""
+"""pytest plugin: the `bench_candidate` and `proxy` fixtures, pytest-reportlog's record, and
+run.json.
+
+Each run writes `report.jsonl` and `run.json` under `<BENCH_RESULT_DIR>/<UTC timestamp>/`.
+run.json holds `version`, `command_line`, `start`, `end`, `exit_status`, and each `BENCH_FIELDS`
+field whose environment variable is set.
+"""
 
 import json
 import shlex
@@ -15,25 +20,24 @@ from wisebench.proxy import proxy as proxy
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
 DEFAULT_RESULT_DIR = "records"
 
-# Environment variable names, shared with bench_test.py's BenchTest.run.
+# Environment variable names.
 BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
 BENCH_SKIP_BUILD = "BENCH_SKIP_BUILD"
 
-# Command-line option name, shared with bench_test.py's BenchTest.run.
 BENCH_CANDIDATE_OPTION = "--bench-candidate"
 
-# run.json field name -> environment variable; written only when the variable is set.
+# run.json field name -> environment variable name.
 BENCH_FIELDS = {
     "test_commit": BENCH_SHA,
     "set": BENCH_SET,
     "skip_build": BENCH_SKIP_BUILD,
 }
 
-# Exit status substituted for pytest's own 1 when a fixture errors during setup or teardown,
-# rather than a test's own call failing.
+# Exit status substituted for pytest's own when the session reports any error: a collection
+# error, or a fixture erroring during setup or teardown.
 SETUP_ERROR_EXIT_STATUS = 90
 
 
@@ -87,7 +91,7 @@ def pytest_configure(config):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Writes run.json, after substituting exitstatus for a setup or teardown error.
+    """Writes run.json, substituting SETUP_ERROR_EXIT_STATUS when the session reports any error.
 
     Args:
         session (pytest.Session): The finished session.
