@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from mitmproxy.io import FlowWriter
+from mitmproxy.test import tflow, tutils
 
 from wisebench import proxy
 
@@ -60,35 +62,39 @@ def _fetch(port, url):
 
 
 def test_start_serves_the_recorded_response(har, tmp_path):
-    server = proxy.Proxy(har, tmp_path / "proxy.log")
+    server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     try:
         assert _fetch(server.port, _HIT_URL).read() == _HIT_BODY
+        assert server.served() == {("GET", _HIT_URL): 1}
+        assert server.killed() == []
     finally:
         server.stop()
 
 
 def test_a_recorded_request_replays_every_time_it_is_repeated(har, tmp_path):
-    server = proxy.Proxy(har, tmp_path / "proxy.log")
+    server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     try:
         assert _fetch(server.port, _HIT_URL).read() == _HIT_BODY
         assert _fetch(server.port, _HIT_URL).read() == _HIT_BODY
+        assert server.served() == {("GET", _HIT_URL): 2}
     finally:
         server.stop()
 
 
-def test_stop_raises_on_a_request_outside_the_recording(har, tmp_path):
-    server = proxy.Proxy(har, tmp_path / "proxy.log")
+def test_killed_names_a_request_outside_the_recording(har, tmp_path):
+    server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     with pytest.raises((urllib.error.URLError, ConnectionError)):
         _fetch(server.port, _MISS_URL)
-    with pytest.raises(proxy.ProxyError, match="killed non-replay request"):
-        server.stop()
+    assert server.killed() == [_MISS_URL]
+    assert server.served() == {("GET", _HIT_URL): 0}
+    server.stop()
 
 
 def test_https_replay_needs_no_reachable_upstream(https_har, tmp_path):
-    server = proxy.Proxy(https_har, tmp_path / "proxy.log")
+    server = proxy.Proxy(https_har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     try:
         hit = subprocess.run(
@@ -106,14 +112,15 @@ def test_https_replay_needs_no_reachable_upstream(https_har, tmp_path):
         )
         assert miss.returncode != 0
     finally:
-        with pytest.raises(proxy.ProxyError, match="killed non-replay request"):
-            server.stop()
+        server.stop()
+    assert server.killed() == [_HTTPS_MISS_URL]
+    assert server.served() == {("GET", _HTTPS_HIT_URL): 1}
 
 
 def test_start_raises_and_logs_mitmdumps_own_error_on_an_unreadable_recording(tmp_path):
     bad_har = tmp_path / "not_a_har_file"
     bad_har.write_text("not a har file")
-    server = proxy.Proxy(bad_har, tmp_path / "proxy.log")
+    server = proxy.Proxy(bad_har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     with pytest.raises(OSError, match="mitmdump exited"):
         server.start()
     assert (tmp_path / "proxy.log").read_text().strip()
@@ -142,7 +149,7 @@ def test_start_kills_a_process_that_never_starts_listening(har, tmp_path, monkey
     monkeypatch.setattr(proxy, "_LISTEN_TIMEOUT", 0.3)
     monkeypatch.setattr(proxy, "_LISTEN_INTERVAL", 0.05)
 
-    server = proxy.Proxy(har, tmp_path / "proxy.log")
+    server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     started = time.monotonic()
     with pytest.raises(OSError):
         server.start()
@@ -163,7 +170,7 @@ def test_proxy_fixture_yields_a_port_and_records_the_recordings_sha256(pytester,
         @pytest.mark.parametrize("proxy", [{str(har)!r}], indirect=True)
         def test_it(proxy):
             opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({{"http": f"http://127.0.0.1:{{proxy}}"}})
+                urllib.request.ProxyHandler({{"http": f"http://127.0.0.1:{{proxy.port}}"}})
             )
             assert opener.open({_HIT_URL!r}, timeout=5).read() == {_HIT_BODY!r}
     """)
@@ -175,13 +182,15 @@ def test_proxy_fixture_yields_a_port_and_records_the_recordings_sha256(pytester,
         expected_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
     report = (run_dir / "report.jsonl").read_text()
     assert f'"recording_sha256", "{expected_sha256}"' in report
+    assert '"served_count", 1' in report
+    assert '"killed_count", 0' in report
 
     proxy_logs = list(run_dir.glob("proxy-test_it-*.log"))
     assert len(proxy_logs) == 1
     assert "[replay]" in proxy_logs[0].read_text()
 
 
-def test_proxy_fixture_exits_2_on_a_request_outside_the_recording(pytester, monkeypatch, har):
+def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkeypatch, har):
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.error
@@ -192,14 +201,21 @@ def test_proxy_fixture_exits_2_on_a_request_outside_the_recording(pytester, monk
         @pytest.mark.parametrize("proxy", [{str(har)!r}], indirect=True)
         def test_it(proxy):
             opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({{"http": f"http://127.0.0.1:{{proxy}}"}})
+                urllib.request.ProxyHandler({{"http": f"http://127.0.0.1:{{proxy.port}}"}})
             )
             with pytest.raises((urllib.error.URLError, ConnectionError)):
                 opener.open({_MISS_URL!r}, timeout=5)
+
+        def test_another():
+            pass
     """)
     result = pytester.runpytest()
-    assert result.ret == 2
-    result.stdout.fnmatch_lines(["*proxy: *::test_it*killed non-replay request*"])
+    assert result.ret == 0
+    result.assert_outcomes(passed=2)
+
+    run_dir = next(Path("records").iterdir())
+    report = (run_dir / "report.jsonl").read_text()
+    assert '"killed_count", 1' in report
 
 
 def test_proxy_fixture_exits_2_on_an_unreadable_recording(pytester, monkeypatch, tmp_path):
@@ -216,3 +232,37 @@ def test_proxy_fixture_exits_2_on_an_unreadable_recording(pytester, monkeypatch,
     result = pytester.runpytest()
     assert result.ret == 2
     result.stdout.fnmatch_lines(["*proxy: *::test_it*mitmdump exited*"])
+
+
+def test_a_proxy_nothing_reaches_reports_zero_for_every_recorded_request(har, tmp_path):
+    server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
+    server.start()
+    server.stop()
+    assert server.served() == {("GET", _HIT_URL): 0}
+    assert server.killed() == []
+
+
+def test_a_cut_trailing_flow_record_yields_the_complete_flows_before_it(har, tmp_path):
+    flows_path = tmp_path / "proxy.flows"
+    with open(flows_path, "wb") as fo:
+        writer = FlowWriter(fo)
+
+        served_req = tutils.treq(
+            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/hello"
+        )
+        served_flow = tflow.tflow(req=served_req, resp=True)
+        served_flow.is_replay = "response"
+        writer.add(served_flow)
+
+        cut_req = tutils.treq(
+            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/mid-write"
+        )
+        cut_flow = tflow.tflow(req=cut_req, resp=False)
+        cut_flow.is_replay = None
+        writer.add(cut_flow)
+
+    flows_path.write_bytes(flows_path.read_bytes()[:-5])
+
+    server = proxy.Proxy(har, tmp_path / "proxy.log", flows_path)
+    assert server.served() == {("GET", _HIT_URL): 1}
+    assert server.killed() == []
