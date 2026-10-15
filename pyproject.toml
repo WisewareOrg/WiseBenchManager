@@ -5,10 +5,10 @@ description = "A generic pytest hardware-in-the-loop runner for over-the-air upd
 authors = [
     { name = "Wise", email = "47094117+tjwise99@users.noreply.github.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "labgrid>=26.0",
-    "mitmproxy>=11.0.2",
+    "mitmproxy>=12.2.3",
     "pygithub>=2.10.0",
     "pytest>=9.1.1",
     "pytest-reportlog>=1.0",
