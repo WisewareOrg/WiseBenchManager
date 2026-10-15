@@ -107,6 +107,9 @@ class Proxy:
             dict[tuple[str, str], int]: Every `(method, url)` read from the HAR, mapped to the
             count of flows in the flow file with that exact `(request.method, request.url)` and
             `is_replay == "response"`. A recorded request mitmdump never served maps to 0.
+
+        Raises:
+            mitmproxy.exceptions.FlowReadException: See `_read_flows`.
         """
         with open(self.har, "rb") as fo:
             recorded = [(f.request.method, f.request.url) for f in FlowReader(fo).stream()]
@@ -125,26 +128,24 @@ class Proxy:
             list[str]: `request.url` for every flow in the flow file whose `is_replay` is not
             `"response"`, in the order mitmdump wrote them. A flow mitmdump saves unanswered at
             shutdown counts as killed.
+
+        Raises:
+            mitmproxy.exceptions.FlowReadException: See `_read_flows`.
         """
         return [f.request.url for f in self._read_flows() if f.is_replay != "response"]
 
     def _read_flows(self):
-        """Read every complete flow `flows_path` holds, tolerating one still being written.
+        """Read the complete flows in a snapshot of `flows_path`.
 
-        mitmdump flushes a flow to `flows_path` as soon as it is handled, so this can run while
-        mitmdump is still serving traffic. A snapshot taken mid-write ends on a cut trailing
-        record, and `FlowReader.stream` reports that the same way it reports real corruption: a
-        `FlowReadException`. The one way to tell them apart is whether the reader had consumed
-        the whole snapshot before raising -- a cut record always has, because there is nothing
-        after it to raise on first.
+        A `FlowReadException` raised once the whole snapshot is consumed is a trailing record
+        mitmdump is still writing; the flows before it are returned.
 
         Returns:
-            list[mitmproxy.flow.Flow]: The flows read before any trailing, not-yet-written
-            record.
+            list[mitmproxy.flow.Flow]: The flows before any partly written trailing record.
 
         Raises:
             mitmproxy.exceptions.FlowReadException: The reader failed before the end of the
-                snapshot, so the file holds more than a cut trailing record.
+                snapshot.
         """
         data = Path(self.flows_path).read_bytes()
         buf = io.BytesIO(data)
@@ -190,8 +191,8 @@ def proxy(request, record_property):
     `report.jsonl`. A setup failure -- the recording unreadable, mitmdump missing or never
     listening -- ends the session with `pytest.exit(..., returncode=2)`, naming the test and the
     log's last lines. At teardown, after `stop`, `served_count` (the total of `served()`) and
-    `killed_count` (the length of `killed()`) are recorded through `record_property`; a kill is
-    never a reason to fail or exit here -- a test that cares asserts on `served` or `killed`
+    `killed_count` (the length of `killed()`) are recorded through `record_property`. A kill
+    neither fails the test nor ends the session; a test asserts on `served()` or `killed()`
     itself.
 
     Args:
