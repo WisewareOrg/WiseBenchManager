@@ -3,7 +3,7 @@
 A generic pytest hardware-in-the-loop runner for over-the-air updated boards. It takes a git ref of a
 Yocto layer through build and test to a verdict, and it knows nothing about the application the board
 runs — installing a candidate on the board is the layer's own job, through its own fixture. Design
-decisions are in [`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 5.
+decisions are in [`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 6.
 
 ## Two commands
 
@@ -121,7 +121,7 @@ runner does add:
 
 | Fixture | Gives |
 |---|---|
-| `proxy(har)` | mitmproxy serving that HAR file on a forwarded loopback port; a miss kills the connection; the file's hash goes into the record |
+| `proxy(har)` | mitmproxy serving that HAR file on a forwarded loopback port, yielded as a `Proxy` whose `port`, `served()` and `killed()` a test reads; a miss kills the connection, is listed by `killed()`, and never ends the session; the file's hash and the served and killed counts go into the record |
 | `bench_candidate` | the commit this run built, as a session fixture; `None` outside the runner. A layer's own target-suite fixture reads it and installs that commit on the board through the layer's own update procedure. |
 
 Everything that names the application under test — its units, its paths on the board, its page state, its
@@ -145,7 +145,9 @@ one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays 
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
-stderr to `proxy-<test>-<n>.log` beside that run's `report.jsonl`, one file per fixture use.
+stderr to `proxy-<test>-<n>.log` beside that run's `report.jsonl`, one file per fixture use, with
+the flow file `served()` and `killed()` read back at `proxy-<test>-<n>.flows` beside it. At
+teardown it attaches `served_count` and `killed_count` through `record_property`.
 
 ## Running it
 
