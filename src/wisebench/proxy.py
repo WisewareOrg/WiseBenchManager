@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from mitmproxy import exceptions
+from mitmproxy import exceptions, http
 from mitmproxy.io import FlowReader
 from tenacity import Retrying, stop_after_delay, wait_fixed
 
@@ -106,7 +106,8 @@ class Proxy:
         Returns:
             dict[tuple[str, str], int]: Every `(method, url)` read from the HAR, mapped to the
             count of flows in the flow file with that exact `(request.method, request.url)` and
-            `is_replay == "response"`. A recorded request mitmdump never served maps to 0.
+            `is_replay == "response"`. A recorded request mitmdump never served maps to 0. A
+            non-HTTP flow is never counted, since it is never a replay response.
 
         Raises:
             mitmproxy.exceptions.FlowReadException: See `_read_flows`.
@@ -122,17 +123,27 @@ class Proxy:
         return counts
 
     def killed(self):
-        """List the URL of every flow mitmdump did not serve from the recording.
+        """List every flow mitmdump did not serve from the recording, by what it named.
 
         Returns:
-            list[str]: `request.url` for every flow in the flow file whose `is_replay` is not
-            `"response"`, in the order mitmdump wrote them. A flow mitmdump saves unanswered at
-            shutdown counts as killed.
+            list[str]: For every flow in the flow file whose `is_replay` is not `"response"`,
+            in the order mitmdump wrote them: `request.url` for an HTTP flow, or
+            `tcp://<host>:<port>` from `server_conn.address` for any other flow. A flow
+            mitmdump saves unanswered at shutdown counts as killed.
 
         Raises:
             mitmproxy.exceptions.FlowReadException: See `_read_flows`.
         """
-        return [f.request.url for f in self._read_flows() if f.is_replay != "response"]
+        killed = []
+        for f in self._read_flows():
+            if f.is_replay == "response":
+                continue
+            if isinstance(f, http.HTTPFlow):
+                killed.append(f.request.url)
+            else:
+                host, port = f.server_conn.address
+                killed.append(f"tcp://{host}:{port}")
+        return killed
 
     def _read_flows(self):
         """Read the complete flows in a snapshot of `flows_path`.
