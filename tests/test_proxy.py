@@ -115,13 +115,15 @@ def test_a_recorded_request_replays_every_time_it_is_repeated(har, tmp_path):
 
 
 def test_killed_names_a_request_outside_the_recording(har, tmp_path):
-    """A request outside the recording is named by its URL in killed(); served() is unaffected."""
+    """killed() lists one entry per miss, not deduplicated, named by its URL each time."""
     server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     try:
         with pytest.raises((urllib.error.URLError, ConnectionError)):
             _fetch(server.port, _MISS_URL)
-        assert server.killed() == [_MISS_URL]
+        with pytest.raises((urllib.error.URLError, ConnectionError)):
+            _fetch(server.port, _MISS_URL)
+        assert server.killed() == [_MISS_URL, _MISS_URL]
         assert server.served() == {("GET", _HIT_URL): 0}
     finally:
         server.stop()
@@ -156,6 +158,7 @@ def test_killed_names_a_tcp_flow_the_proxy_could_not_classify_as_http(har, tmp_p
     server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.settimeout(5)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     listener_port = listener.getsockname()[1]
@@ -168,6 +171,7 @@ def test_killed_names_a_tcp_flow_the_proxy_could_not_classify_as_http(har, tmp_p
             assert b"200" in client.recv(4096)
             client.sendall(_TCP_GARBAGE)
             accepted, _ = listener.accept()
+            accepted.settimeout(5)
             accepted.recv(4096)
             accepted.close()
     finally:
@@ -245,8 +249,8 @@ def test_proxy_fixture_yields_a_proxy_and_records_the_recordings_sha256_and_coun
         expected_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
     report = (run_dir / "report.jsonl").read_text()
     assert f'"recording_sha256", "{expected_sha256}"' in report
-    assert '"served_count", 1' in report
-    assert '"killed_count", 0' in report
+    assert '"served_count", 1]' in report
+    assert '"killed_count", 0]' in report
 
     proxy_logs = list(run_dir.glob("proxy-test_it-*.log"))
     assert len(proxy_logs) == 1
@@ -276,7 +280,7 @@ def test_proxy_fixture_records_served_count_as_a_sum_of_replays_not_a_count_of_r
 
     run_dir = next(Path("records").iterdir())
     report = (run_dir / "report.jsonl").read_text()
-    assert '"served_count", 2' in report
+    assert '"served_count", 2]' in report
 
 
 def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkeypatch, har):
@@ -305,8 +309,8 @@ def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkey
 
     run_dir = next(Path("records").iterdir())
     report = (run_dir / "report.jsonl").read_text()
-    assert '"served_count", 0' in report
-    assert '"killed_count", 1' in report
+    assert '"served_count", 0]' in report
+    assert '"killed_count", 1]' in report
 
 
 def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
@@ -322,6 +326,7 @@ def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
         @pytest.mark.parametrize("proxy", [{str(har)!r}], indirect=True)
         def test_it(proxy):
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.settimeout(5)
             listener.bind(("127.0.0.1", 0))
             listener.listen(1)
             listener_port = listener.getsockname()[1]
@@ -333,6 +338,7 @@ def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
                 assert b"200" in client.recv(4096)
                 client.sendall({_TCP_GARBAGE!r})
                 accepted, _ = listener.accept()
+                accepted.settimeout(5)
                 accepted.recv(4096)
                 accepted.close()
             listener.close()
@@ -346,7 +352,7 @@ def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
 
     run_dir = next(Path("records").iterdir())
     report = (run_dir / "report.jsonl").read_text()
-    assert '"killed_count", 1' in report
+    assert '"killed_count", 1]' in report
 
 
 def test_proxy_fixture_exits_2_on_an_unreadable_recording(pytester, monkeypatch, tmp_path):
