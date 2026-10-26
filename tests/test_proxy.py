@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import socket
 import subprocess
 import time
 import urllib.error
@@ -22,6 +23,8 @@ _MISS_URL = "http://example.invalid/missing"
 _HTTPS_HIT_URL = "https://wisebench-proxy-test.invalid/hello"
 _HTTPS_HIT_BODY = "hello-from-replay"
 _HTTPS_MISS_URL = "https://wisebench-proxy-test.invalid/missing"
+
+_TCP_GARBAGE = b"not-http-or-tls\n"
 
 
 def _har_entry(url, body):
@@ -117,6 +120,32 @@ def test_https_replay_needs_no_reachable_upstream(https_har, tmp_path):
     assert server.served() == {("GET", _HTTPS_HIT_URL): 1}
 
 
+def test_killed_names_a_tcp_flow_the_proxy_could_not_classify_as_http(har, tmp_path):
+    """A non-HTTP flow is named by its destination, and served() is unaffected by it."""
+    server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
+    server.start()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener_port = listener.getsockname()[1]
+    try:
+        with socket.create_connection(("127.0.0.1", server.port), timeout=5) as client:
+            client.sendall(
+                f"CONNECT 127.0.0.1:{listener_port} HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{listener_port}\r\n\r\n".encode()
+            )
+            assert b"200" in client.recv(4096)
+            client.sendall(_TCP_GARBAGE)
+            accepted, _ = listener.accept()
+            accepted.recv(4096)
+            accepted.close()
+    finally:
+        listener.close()
+        server.stop()
+    assert server.killed() == [f"tcp://127.0.0.1:{listener_port}"]
+    assert server.served() == {("GET", _HIT_URL): 0}
+
+
 def test_start_raises_and_logs_mitmdumps_own_error_on_an_unreadable_recording(tmp_path):
     bad_har = tmp_path / "not_a_har_file"
     bad_har.write_text("not a har file")
@@ -205,6 +234,45 @@ def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkey
             )
             with pytest.raises((urllib.error.URLError, ConnectionError)):
                 opener.open({_MISS_URL!r}, timeout=5)
+
+        def test_another():
+            pass
+    """)
+    result = pytester.runpytest()
+    assert result.ret == 0
+    result.assert_outcomes(passed=2)
+
+    run_dir = next(Path("records").iterdir())
+    report = (run_dir / "report.jsonl").read_text()
+    assert '"killed_count", 1' in report
+
+
+def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
+    pytester, monkeypatch, har
+):
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile(f"""
+        import socket
+
+        import pytest
+
+        @pytest.mark.parametrize("proxy", [{str(har)!r}], indirect=True)
+        def test_it(proxy):
+            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener_port = listener.getsockname()[1]
+            with socket.create_connection(("127.0.0.1", proxy.port), timeout=5) as client:
+                client.sendall(
+                    "CONNECT 127.0.0.1:{{0}} HTTP/1.1\\r\\n"
+                    "Host: 127.0.0.1:{{0}}\\r\\n\\r\\n".format(listener_port).encode()
+                )
+                assert b"200" in client.recv(4096)
+                client.sendall({_TCP_GARBAGE!r})
+                accepted, _ = listener.accept()
+                accepted.recv(4096)
+                accepted.close()
+            listener.close()
 
         def test_another():
             pass
