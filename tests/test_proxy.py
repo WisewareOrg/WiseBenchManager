@@ -115,6 +115,7 @@ def test_a_recorded_request_replays_every_time_it_is_repeated(har, tmp_path):
 
 
 def test_killed_names_a_request_outside_the_recording(har, tmp_path):
+    """A request outside the recording is named by its URL in killed(); served() is unaffected."""
     server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     try:
@@ -222,8 +223,7 @@ def test_start_kills_a_process_that_never_starts_listening(har, tmp_path, monkey
 def test_proxy_fixture_yields_a_proxy_and_records_the_recordings_sha256_and_counts(
     pytester, monkeypatch, har
 ):
-    """The fixture yields a `Proxy`, and teardown records the sha256, served_count and
-    killed_count through `record_property`."""
+    """The fixture yields a `Proxy`, and records the sha256, served_count and killed_count."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.request
@@ -256,8 +256,7 @@ def test_proxy_fixture_yields_a_proxy_and_records_the_recordings_sha256_and_coun
 def test_proxy_fixture_records_served_count_as_a_sum_of_replays_not_a_count_of_requests(
     pytester, monkeypatch, har
 ):
-    """`served_count` sums every replay of a recorded request, so replaying the same request
-    twice reports 2, not the 1 distinct request the HAR recorded."""
+    """`served_count` sums every replay, not the count of distinct recorded requests."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.request
@@ -281,8 +280,7 @@ def test_proxy_fixture_records_served_count_as_a_sum_of_replays_not_a_count_of_r
 
 
 def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkeypatch, har):
-    """A kill neither fails the test nor ends the session, and served_count stays the sum of
-    actual replays (0 here) even though the HAR recorded one request."""
+    """A kill never fails the test or ends the session; served_count counts only replays."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.error
@@ -368,6 +366,7 @@ def test_proxy_fixture_exits_2_on_an_unreadable_recording(pytester, monkeypatch,
 
 
 def test_a_proxy_nothing_reaches_reports_zero_for_every_recorded_request(har, tmp_path):
+    """served() reports 0 for a recorded request nothing reached, and killed() stays empty."""
     server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
     server.stop()
@@ -376,6 +375,7 @@ def test_a_proxy_nothing_reaches_reports_zero_for_every_recorded_request(har, tm
 
 
 def test_a_cut_trailing_flow_record_yields_the_complete_flows_before_it(har, tmp_path):
+    """A record cut by mitmdump mid-write is tolerated; served()/killed() use what precedes it."""
     flows_path = tmp_path / "proxy.flows"
     with open(flows_path, "wb") as fo:
         writer = FlowWriter(fo)
@@ -432,9 +432,7 @@ def test_a_flow_record_corrupted_before_the_trailing_record_raises(har, tmp_path
 
 
 def test_served_matches_on_method_and_url_together_not_on_either_alone(post_har, tmp_path):
-    """A flow sharing the recorded method and url only counts when mitmdump actually replayed
-    it, and a flow sharing only the url under a different method never counts, even if it was
-    somehow marked as replayed."""
+    """A flow must match on method and url, and actually have replayed, to count as served."""
     flows_path = tmp_path / "proxy.flows"
     with open(flows_path, "wb") as fo:
         writer = FlowWriter(fo)
