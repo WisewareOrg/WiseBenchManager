@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from mitmproxy import exceptions
 from mitmproxy.io import FlowWriter
 from mitmproxy.test import tflow, tutils
 
@@ -25,6 +26,9 @@ _HTTPS_HIT_BODY = "hello-from-replay"
 _HTTPS_MISS_URL = "https://wisebench-proxy-test.invalid/missing"
 
 _TCP_GARBAGE = b"not-http-or-tls\n"
+
+_POST_URL = "http://example.invalid/submit"
+_POST_BODY = "field=value"
 
 
 def _har_entry(url, body):
@@ -53,6 +57,30 @@ def har(tmp_path):
 def https_har(tmp_path):
     path = tmp_path / "https_recording.har"
     entry = _har_entry(_HTTPS_HIT_URL, _HTTPS_HIT_BODY)
+    path.write_text(json.dumps({"log": {"version": "1.2", "entries": [entry]}}))
+    return path
+
+
+@pytest.fixture
+def post_har(tmp_path):
+    path = tmp_path / "post_recording.har"
+    entry = {
+        "startedDateTime": datetime.now(UTC).isoformat(),
+        "time": 0,
+        "request": {
+            "method": "POST",
+            "url": _POST_URL,
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "postData": {"text": _POST_BODY},
+        },
+        "response": {
+            "status": 200,
+            "httpVersion": "HTTP/1.1",
+            "headers": [{"name": "Content-Type", "value": "text/plain"}],
+            "content": {"text": "ok"},
+        },
+    }
     path.write_text(json.dumps({"log": {"version": "1.2", "entries": [entry]}}))
     return path
 
@@ -89,11 +117,13 @@ def test_a_recorded_request_replays_every_time_it_is_repeated(har, tmp_path):
 def test_killed_names_a_request_outside_the_recording(har, tmp_path):
     server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
     server.start()
-    with pytest.raises((urllib.error.URLError, ConnectionError)):
-        _fetch(server.port, _MISS_URL)
-    assert server.killed() == [_MISS_URL]
-    assert server.served() == {("GET", _HIT_URL): 0}
-    server.stop()
+    try:
+        with pytest.raises((urllib.error.URLError, ConnectionError)):
+            _fetch(server.port, _MISS_URL)
+        assert server.killed() == [_MISS_URL]
+        assert server.served() == {("GET", _HIT_URL): 0}
+    finally:
+        server.stop()
 
 
 def test_https_replay_needs_no_reachable_upstream(https_har, tmp_path):
@@ -189,7 +219,11 @@ def test_start_kills_a_process_that_never_starts_listening(har, tmp_path, monkey
     assert stand_in.waited
 
 
-def test_proxy_fixture_yields_a_port_and_records_the_recordings_sha256(pytester, monkeypatch, har):
+def test_proxy_fixture_yields_a_proxy_and_records_the_recordings_sha256_and_counts(
+    pytester, monkeypatch, har
+):
+    """The fixture yields a `Proxy`, and teardown records the sha256, served_count and
+    killed_count through `record_property`."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.request
@@ -219,7 +253,36 @@ def test_proxy_fixture_yields_a_port_and_records_the_recordings_sha256(pytester,
     assert "[replay]" in proxy_logs[0].read_text()
 
 
+def test_proxy_fixture_records_served_count_as_a_sum_of_replays_not_a_count_of_requests(
+    pytester, monkeypatch, har
+):
+    """`served_count` sums every replay of a recorded request, so replaying the same request
+    twice reports 2, not the 1 distinct request the HAR recorded."""
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile(f"""
+        import urllib.request
+
+        import pytest
+
+        @pytest.mark.parametrize("proxy", [{str(har)!r}], indirect=True)
+        def test_it(proxy):
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({{"http": f"http://127.0.0.1:{{proxy.port}}"}})
+            )
+            assert opener.open({_HIT_URL!r}, timeout=5).read() == {_HIT_BODY!r}
+            assert opener.open({_HIT_URL!r}, timeout=5).read() == {_HIT_BODY!r}
+    """)
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1)
+
+    run_dir = next(Path("records").iterdir())
+    report = (run_dir / "report.jsonl").read_text()
+    assert '"served_count", 2' in report
+
+
 def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkeypatch, har):
+    """A kill neither fails the test nor ends the session, and served_count stays the sum of
+    actual replays (0 here) even though the HAR recorded one request."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.error
@@ -244,12 +307,14 @@ def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkey
 
     run_dir = next(Path("records").iterdir())
     report = (run_dir / "report.jsonl").read_text()
+    assert '"served_count", 0' in report
     assert '"killed_count", 1' in report
 
 
 def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
     pytester, monkeypatch, har
 ):
+    """A non-HTTP flow is counted into killed_count, and the session continues past it."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import socket
@@ -334,3 +399,64 @@ def test_a_cut_trailing_flow_record_yields_the_complete_flows_before_it(har, tmp
     server = proxy.Proxy(har, tmp_path / "proxy.log", flows_path)
     assert server.served() == {("GET", _HIT_URL): 1}
     assert server.killed() == []
+
+
+def test_a_flow_record_corrupted_before_the_trailing_record_raises(har, tmp_path):
+    """Only a cut trailing record is tolerated; a `FlowReadException` anywhere else propagates."""
+    flows_path = tmp_path / "proxy.flows"
+    with open(flows_path, "wb") as fo:
+        writer = FlowWriter(fo)
+
+        served_req = tutils.treq(
+            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/hello"
+        )
+        served_flow = tflow.tflow(req=served_req, resp=True)
+        served_flow.is_replay = "response"
+        writer.add(served_flow)
+        end_of_served = fo.tell()
+
+        trailing_req = tutils.treq(
+            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/after"
+        )
+        trailing_flow = tflow.tflow(req=trailing_req, resp=True)
+        trailing_flow.is_replay = None
+        writer.add(trailing_flow)
+
+    corrupted = flows_path.read_bytes()
+    corrupted = corrupted[:end_of_served] + b"\xff" + corrupted[end_of_served:]
+    flows_path.write_bytes(corrupted)
+
+    server = proxy.Proxy(har, tmp_path / "proxy.log", flows_path)
+    with pytest.raises(exceptions.FlowReadException):
+        server.served()
+
+
+def test_served_matches_on_method_and_url_together_not_on_either_alone(post_har, tmp_path):
+    """A flow sharing the recorded method and url only counts when mitmdump actually replayed
+    it, and a flow sharing only the url under a different method never counts, even if it was
+    somehow marked as replayed."""
+    flows_path = tmp_path / "proxy.flows"
+    with open(flows_path, "wb") as fo:
+        writer = FlowWriter(fo)
+
+        differing_body_req = tutils.treq(
+            method=b"POST",
+            host="example.invalid",
+            port=80,
+            scheme=b"http",
+            path=b"/submit",
+            content=b"field=other",
+        )
+        differing_body_flow = tflow.tflow(req=differing_body_req, resp=True)
+        differing_body_flow.is_replay = None
+        writer.add(differing_body_flow)
+
+        differing_method_req = tutils.treq(
+            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/submit"
+        )
+        differing_method_flow = tflow.tflow(req=differing_method_req, resp=True)
+        differing_method_flow.is_replay = "response"
+        writer.add(differing_method_flow)
+
+    server = proxy.Proxy(post_har, tmp_path / "proxy.log", flows_path)
+    assert server.served() == {("POST", _POST_URL): 0}
