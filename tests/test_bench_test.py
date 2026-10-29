@@ -325,7 +325,7 @@ def test_a_failing_fetch_is_an_error_and_pins_kind_run(monkeypatch, tmp_path):
         bench.run("env.yaml", [])
 
     lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
-    assert lines[0].endswith("run started kind=run ref=cafef00d")
+    assert lines[0].endswith("run started kind=run ref=main")
     assert any("stage checkout error" in line for line in lines)
     assert lines[-1].endswith("run error")
 
