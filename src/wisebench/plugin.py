@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from wisebench import marks
 from wisebench.proxy import proxy as proxy
 
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
@@ -22,6 +23,7 @@ DEFAULT_RESULT_DIR = "records"
 
 # Environment variable names.
 BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
+BENCH_RECORD_DIR = "BENCH_RECORD_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
@@ -42,7 +44,11 @@ SETUP_ERROR_EXIT_STATUS = 90
 
 
 def _run_dir(config):
-    """The directory this run's records go in: BENCH_RESULT_DIR, then this run's timestamp.
+    """The directory this run's records go in.
+
+    BENCH_RECORD_DIR, when set, names it directly -- the runner has already stamped a run
+    directory for it, one level up. Otherwise BENCH_RESULT_DIR, then this run's own timestamp,
+    as for a plain `pytest` invocation outside the runner.
 
     Args:
         config (pytest.Config): The session's pytest configuration.
@@ -50,6 +56,9 @@ def _run_dir(config):
     Returns:
         pathlib.Path: The run's own record directory.
     """
+    record_dir = environ.get(BENCH_RECORD_DIR)
+    if record_dir is not None:
+        return Path(record_dir)
     base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
 
@@ -76,6 +85,55 @@ def bench_candidate(request):
         str | None: The commit this run built from, or `None` outside a built run.
     """
     return request.config.getoption(BENCH_CANDIDATE_OPTION)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(items):
+    """Prints `collected <n>`, counting the item set after any deselection, when
+    BENCH_RECORD_DIR is set.
+
+    Args:
+        items (list[pytest.Item]): The collected items, after every other plugin's own
+            `pytest_collection_modifyitems` has run.
+    """
+    if environ.get(BENCH_RECORD_DIR) is not None:
+        marks.write_collected(len(items))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    """Prints `test started <nodeid>` at the start of the test's call phase when
+    BENCH_RECORD_DIR is set.
+
+    Args:
+        item (pytest.Item): The test about to run.
+    """
+    if environ.get(BENCH_RECORD_DIR) is not None:
+        marks.write_test_started(item.nodeid)
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    """Prints `setup <fixture> started` then `setup <fixture> <done|error>` around the setup of
+    a fixture that depends on `bench_candidate`, when BENCH_RECORD_DIR is set.
+
+    Args:
+        fixturedef (_pytest.fixtures.FixtureDef): The fixture about to be set up.
+        request (pytest.FixtureRequest): Unused; required by the hook's own signature.
+    """
+    tracked = environ.get(BENCH_RECORD_DIR) is not None and "bench_candidate" in fixturedef.argnames
+    if tracked:
+        marks.write_setup_started(fixturedef.argname)
+    try:
+        result = yield
+    except BaseException:
+        if tracked:
+            marks.write_setup_result(fixturedef.argname, "error")
+        raise
+    if tracked:
+        marks.write_setup_result(fixturedef.argname, "done")
+    return result
 
 
 @pytest.hookimpl(tryfirst=True)
