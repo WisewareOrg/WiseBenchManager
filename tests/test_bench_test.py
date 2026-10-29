@@ -2,6 +2,7 @@
 
 import functools
 import os
+import re
 import subprocess
 import sys
 
@@ -23,7 +24,15 @@ def _repo_with_one_commit(path):
     _git(path, "commit", "-q", "-m", "first")
 
 
-def _write_bench_toml(repo, *, precondition="true", build="true", bundle="true"):
+def _write_bench_toml(
+    repo,
+    *,
+    precondition="true",
+    build="true",
+    bundle="true",
+    host_suite="host_suite",
+    target_suite="target_suite",
+):
     (repo / "bench.toml").write_text(f"""
 [hooks]
 precondition = "{precondition}"
@@ -31,8 +40,8 @@ build = "{build}"
 bundle = "{bundle}"
 
 [tests]
-host_suite = "host_suite"
-target_suite = "target_suite"
+host_suite = "{host_suite}"
+target_suite = "{target_suite}"
 """)
 
 
@@ -45,13 +54,14 @@ def _write_lg_env(repo):
 
 def _write_suite(repo, name, *, passing=True):
     suite = repo / name
-    suite.mkdir()
+    suite.mkdir(parents=True)
     body = "assert True" if passing else "assert False"
     (suite / "test_one.py").write_text(f"def test_one():\n    {body}\n")
 
 
-def test_a_dirty_tree_raises_runtime_error(tmp_path):
+def test_a_dirty_tree_raises_runtime_error(monkeypatch, tmp_path):
     """A dirty tree raises RuntimeError."""
+    monkeypatch.chdir(tmp_path)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     (tmp_path / "tracked.txt").write_text("changed\n")
@@ -60,8 +70,9 @@ def test_a_dirty_tree_raises_runtime_error(tmp_path):
         bench.run("env.yaml", [])
 
 
-def test_a_failing_precondition_hook_is_a_bench_failure(tmp_path):
+def test_a_failing_precondition_hook_is_a_bench_failure(monkeypatch, tmp_path):
     """A failing precondition hook is a bench failure."""
+    monkeypatch.chdir(tmp_path)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path, precondition="exit 9")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
@@ -69,17 +80,23 @@ def test_a_failing_precondition_hook_is_a_bench_failure(tmp_path):
         bench.run("env.yaml", [])
 
 
-def test_a_failing_build_hook_is_a_candidate_failure(tmp_path):
-    """A failing build hook is a candidate failure."""
+def test_a_failing_build_hook_is_a_candidate_failure(monkeypatch, tmp_path):
+    """A failing build hook is a candidate failure, marked failed in bench.log."""
+    monkeypatch.chdir(tmp_path)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path, build="exit 3")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     with pytest.raises(bench_test.CandidateFailure, match="build exited 3"):
         bench.run("env.yaml", [])
 
+    lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
+    assert any(line.endswith("stage build failed reason=build exited 3") for line in lines)
+    assert re.fullmatch(r"bench: \S+ run failed", lines[-1])
 
-def test_a_failing_host_suite_is_a_candidate_failure(tmp_path):
+
+def test_a_failing_host_suite_is_a_candidate_failure(monkeypatch, tmp_path):
     """A failing host_suite is a candidate failure."""
+    monkeypatch.chdir(tmp_path)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=False)
@@ -88,8 +105,9 @@ def test_a_failing_host_suite_is_a_candidate_failure(tmp_path):
         bench.run("env.yaml", [])
 
 
-def test_a_failing_target_suite_is_a_candidate_failure(tmp_path):
+def test_a_failing_target_suite_is_a_candidate_failure(monkeypatch, tmp_path):
     """A failing target_suite is a candidate failure."""
+    monkeypatch.chdir(tmp_path)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
     _write_suite(tmp_path, "host_suite", passing=True)
@@ -129,6 +147,7 @@ def _stub_subprocess(monkeypatch):
 def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     """A normal run calls the hooks, both suites and --bench-candidate, in order."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
     _write_bench_toml(tmp_path)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
@@ -161,6 +180,7 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path):
     """skip_build skips build, bundle and the host suite, and passes no --bench-candidate."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
     _write_bench_toml(tmp_path)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None, skip_build=True)
@@ -173,6 +193,12 @@ def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path)
     assert "--bench-candidate" not in commands[4]
     assert commands[4][commands[4].index("--lg-env") + 1] == "env.yaml"
     assert commands[4][-2:] == ["-k", "x"]
+
+    lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
+    assert any(line.endswith("stage build skipped") for line in lines)
+    assert any(line.endswith("stage bundle skipped") for line in lines)
+    assert any(line.endswith("stage host_suite skipped") for line in lines)
+    assert not any(line.endswith("stage build started") for line in lines)
 
     precondition_env = calls[3][1]
     assert precondition_env["BENCH_SKIP_BUILD"] == "true"
@@ -216,3 +242,105 @@ def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_pa
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     with pytest.raises(bench_test.BenchFailure, match="pytest exited"):
         bench._run_suite("suite", {**os.environ}, [])
+
+
+def test_hook_output_and_every_marker_land_in_bench_log_in_order(monkeypatch, tmp_path, capsys):
+    """Hook output and every marker land in bench.log, in order; nothing prints to a terminal."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path, precondition="echo precondition-output")
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=True)
+    lg_env = _write_lg_env(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+
+    bench.run(lg_env, [])
+
+    assert capsys.readouterr() == ("", "")
+    log_text = next((tmp_path / "records").rglob("bench.log")).read_text()
+    assert "precondition-output" in log_text
+    first_bench_line = next(line for line in log_text.splitlines() if line.startswith("bench: "))
+    assert re.match(r"^bench: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00 ", first_bench_line)
+    lines = [
+        re.sub(r"^bench: \S+ ", "", line)
+        for line in log_text.splitlines()
+        if line.startswith("bench: ")
+    ]
+    checkout_end = next(line for line in lines if line.startswith("stage checkout p"))
+    assert re.fullmatch(r"stage checkout passed sha=[0-9a-f]{40}", checkout_end)
+    assert lines == [
+        "run started kind=test ref=HEAD",
+        "stage checkout started",
+        checkout_end,
+        "stage precondition started",
+        "stage precondition passed",
+        "stage build started",
+        "stage build passed",
+        "stage bundle started",
+        "stage bundle passed",
+        "stage host_suite started",
+        "stage host_suite passed",
+        "stage target_suite started",
+        "stage target_suite passed",
+        "run passed",
+    ]
+
+
+def test_stage_names_are_fixed_regardless_of_the_configured_suite_paths(monkeypatch, tmp_path):
+    """Stage names in bench.log are the fixed host_suite/target_suite, not the configured paths."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path, host_suite="suites/host", target_suite="suites/target")
+    _write_suite(tmp_path, "suites/host", passing=True)
+    _write_suite(tmp_path, "suites/target", passing=True)
+    lg_env = _write_lg_env(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+
+    bench.run(lg_env, [])
+
+    log_text = next((tmp_path / "records").rglob("bench.log")).read_text()
+    marker_lines = [line for line in log_text.splitlines() if line.startswith("bench: ")]
+    assert any(line.endswith("stage host_suite started") for line in marker_lines)
+    assert any(line.endswith("stage target_suite started") for line in marker_lines)
+    assert not any("suites/host" in line or "suites/target" in line for line in marker_lines)
+
+
+def test_a_failing_fetch_is_an_error_and_pins_kind_run(monkeypatch, tmp_path):
+    """A failing fetch (no origin remote) is an error, not a candidate failure; kind=run."""
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "cafef00d", None, fetch="main")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        bench.run("env.yaml", [])
+
+    lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
+    assert lines[0].endswith("run started kind=run ref=cafef00d")
+    assert any("stage checkout error" in line for line in lines)
+    assert lines[-1].endswith("run error")
+
+
+def test_a_keyboardinterrupt_during_a_hook_is_an_error_and_reraises(monkeypatch, tmp_path):
+    """A KeyboardInterrupt during a hook is an error, reraised; modelled on the SIGTERM test."""
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    real_run = subprocess.run
+
+    def fake_run(command, **kwargs):
+        if command == "true":
+            raise KeyboardInterrupt
+        return real_run(command, **kwargs, timeout=30)
+
+    monkeypatch.setattr(bench_test.subprocess, "run", fake_run)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+
+    with pytest.raises(KeyboardInterrupt):
+        bench.run("env.yaml", [])
+
+    lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
+    assert any(line.endswith("stage precondition error reason=KeyboardInterrupt") for line in lines)
+    assert lines[-1].endswith("run error")
