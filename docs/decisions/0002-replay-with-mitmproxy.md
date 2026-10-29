@@ -17,7 +17,7 @@ upstream reachable, and with the application under test unchanged — a check ma
 it checks to make it testable.
 
 Replay then raises a question of its own: **what happens when the board asks for something the
-recording does not hold.** A miss is either evidence about the candidate or noise from the bench,
+recording does not hold.** A miss is either evidence about the candidate or a gap in the recording,
 and the runner has exactly two outcomes — a failure is the candidate's and is posted, or the bench's
 and is not. What it is held to:
 
@@ -30,7 +30,7 @@ and is not. What it is held to:
 ## Decision
 
 **`mitmdump` server replay**, from a HAR file the layer hands the `proxy` fixture, on a loopback
-port forwarded to the board.
+port.
 
 - A miss kills the connection (`server_replay_extra=kill`); upstream certificates are never fetched
   (`upstream_cert=false`) and connections are made lazily, so replay needs no reachable upstream.
@@ -40,7 +40,8 @@ port forwarded to the board.
   runner's own runs inside mitmproxy.
 - What a recording keeps or drops is decided when it is recorded, by whoever records it.
 - **A miss is the candidate's.** The fixture reports it through `killed()` beside `served()`, for a
-  check to fail on, and records both counts; the session goes on to its other checks.
+  check to fail on, and records both counts; the session goes on to its other checks. A gap in the
+  recording reads the same as a regression, and the killed request is named either way.
 
 ## Alternatives considered
 
@@ -50,11 +51,11 @@ port forwarded to the board.
   mitmproxy does with a handful of options and a HAR file — and the "standard library only"
   preference it was built on contradicts the preference for maintained tools.
 - **Hoverfly.** A maintained Go capture-and-simulate proxy, and the survey's viable second choice.
-  Rejected for a middleware model less suited to the scrub addon planned at the time. With no addon
-  (below) that reason does not apply, and mitmproxy keeps the lead on its native HAR support alone.
-- **WireMock.** Forward proxying with a CA, and record and playback both. Rejected: pass-through to
-  the real host is its default, so a miss dials out unless configured otherwise; it needs a JVM; its
-  4.0 line is a beta.
+  Its recorded rejection, a middleware model less suited to the scrub addon planned for replay, does
+  not apply with no addon (below). It stays the second choice; mitmproxy keeps the place because the
+  fixture is built on it and was proven against the bench board.
+- **WireMock.** Forward proxying with a CA, and record and playback both. Rejected: it needs a JVM,
+  and its 4.0 line is a beta.
 - **vcrpy, go-vcr.** The simplest record-and-replay there is: no proxy, no CA. Rejected: they patch
   the client's HTTP stack in-process, which means editing the application under test.
 - **mitmproxy with an addon of ours**, writing `SERVE`/`HIT`/`MISS` lines and stripping a configured
@@ -63,12 +64,14 @@ port forwarded to the board.
   missed, and what a recording drops is the recorder's call, made with mitmproxy's own options.
 - **A miss voids the run as the bench's failure** (the fixture ends the session at teardown). No
   check has to remember to assert, and no miss passes silently. Rejected: a request outside the
-  recording is something the candidate did, so it is the candidate's failure; voiding the run hides
-  every other check's result behind it; and a fixture that reports only misses cannot tell "every
-  request was served" from "nothing reached the proxy", since both log no kill.
+  recording is something the candidate did, so it is the candidate's failure, and voiding the run
+  hides every other check's result behind it.
 
 ## Consequences
 
+- **An incomplete recording fails the candidate.** A request the recording should have held but
+  does not is a miss like any other; the killed request is named in the record, and the remedy is a
+  fresh recording, not a bench fault.
 - **A miss fails only the check that asserts on it.** One no check examines fails nothing; its count
   is still in the record, so it is visible after the fact but not gating.
 - **Strictness is configuration, not mitmproxy's default.** `server_replay_extra` defaults to
@@ -78,8 +81,7 @@ port forwarded to the board.
   application sees a dropped connection, which is a different code path from an error response.
 - **Recordings are made by hand**, the one time a proxy reaches a real upstream, and a recording is a
   HAR file the record hashes.
-- **The board must trust mitmproxy's CA**, and getting it there is the layer's job.
 
 **Premise that would reopen this:** mitmproxy ceasing to be maintained, or a check that needs a miss
 answered with something a killed connection or mitmproxy's `404`/`500` cannot stand in for. Hoverfly
-is the second choice already weighed. Preferring another proxy's interface is not that premise.
+is the second choice already weighed.

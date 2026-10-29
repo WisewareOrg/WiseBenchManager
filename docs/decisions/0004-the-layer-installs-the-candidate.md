@@ -15,8 +15,8 @@ build on the board first. labgrid has no RAUC strategy, so the install code is w
 either way. The question is **who owns the procedure**: the runner, which every layer would share,
 or the layer, which already has an update path of its own that it uses by hand.
 
-The generic answer looks right at first: RAUC is not specific to any one layer, an install strategy
-is labgrid's documented extension point, and a runner-owned install could be upstreamed. Pulling the
+The generic answer has a real case: RAUC is not specific to any one layer, an install strategy is
+labgrid's documented extension point, and a runner-owned install could be upstreamed. Pulling the
 other way, a device procedure that exists twice drifts, and only one of the two is exercised every
 day. What the choice is held to:
 
@@ -29,7 +29,7 @@ day. What the choice is held to:
 **The runner names the build; the layer installs it.**
 
 - The runner's pytest plugin gives the target suite a `bench_candidate` fixture: the commit this run
-  built, `None` outside a built run. It is the only channel the runner uses to name the build.
+  built, `None` outside a built run.
 - The layer's own session fixture reads it and installs that commit through the layer's own update
   procedure, before any target-suite check runs.
 - The runner touches the board no further. The layer's first target-suite check asserts the booted
@@ -46,6 +46,11 @@ day. What the choice is held to:
   times. The runner's install was tested only against a fake driver, where that class of failure
   cannot show. That labgrid has no RAUC strategy settles who writes the code, not who owns the
   procedure — and the layer already owned one.
+- **An optional `install` hook**, run like `build` and `bundle`, with every hook handed the board's
+  `user@address` from labgrid's env file. It keeps the install a layer command and needs no new
+  fixture. Rejected: the runner still waits for the board to answer over ssh after the hook and
+  hands the board's address to every hook, so it keeps a device step of its own; installing in the
+  target suite's own session fixture is where pytest and labgrid put such setup.
 
 ## Consequences
 
@@ -54,12 +59,9 @@ day. What the choice is held to:
 - **A failed install is the bench's failure, not the candidate's.** It happens in a fixture's setup,
   and a fixture erroring is the bench's: the timer stops and nothing is posted, even when the
   candidate's bundle was at fault.
-- **A run against the board as it already is becomes possible.** `bench test <ref> --skip-build`
-  gives `bench_candidate` `None`, installs nothing, and its record says so; it is never evidence for
-  a review or an investigation, both of which need a build.
 - **A layer with a different update mechanism needs only its own fixture**, not a runner change. The
   runner's config and record carry the commit only, never a bundle path or hash.
 
 **Premise that would reopen this:** the layer's own update procedure proving unreliable on the bench
 where a shared one would not be. That labgrid lacks a RAUC strategy, or that an install could be
-written generically, is not that premise — it was the reasoning this decision replaced.
+written generically, is not that premise: it is the reasoning the rejected alternative rested on.

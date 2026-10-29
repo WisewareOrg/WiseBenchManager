@@ -32,7 +32,6 @@ host. What the choice is held to:
   base is `main`'s current tip. With none, it exits.
 - `bench run` and `bench test` share one lock file beside the records. A tick that finds it held
   backs off; a hand run that finds it held refuses.
-- The verdict is one completed GitHub check run, posted through a GitHub App.
 - Reading the queue head is one class, `Queue.head()`, so a different queue is a different class.
 
 ## Alternatives considered
@@ -48,11 +47,8 @@ host. What the choice is held to:
 
 ## Consequences
 
-- **Merges serialise at the length of one build-and-test job on one board.** This is accepted.
 - **A queue entry waits for the next tick** before a run picks it up, and for the current job too if
   the lock is held.
-- **GitHub sees nothing until the verdict.** The check run is posted once, completed; there is no
-  in-progress status while a job runs.
 - **Queue-head selection is our code**, a `git ls-remote` read kept behind one class, where an
   Actions runner would have done it for free.
 - **The bench stops itself.** The timer is the unit the bench's own failure disables, so a broken
@@ -60,5 +56,4 @@ host. What the choice is held to:
 
 **Premise that would reopen this:** the organisation's CI policy changing what may run on the build
 host, which makes the Actions runner the pre-analysed alternative; or a second board or user, which
-makes labgrid's coordinator worth its weight for the lock. A shorter wait between ticks is a timer
-setting, not that premise.
+makes labgrid's coordinator worth its weight for the lock.

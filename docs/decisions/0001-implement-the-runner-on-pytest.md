@@ -19,9 +19,10 @@ custom `TEST_TARGET` controller is its documented extension point, and its `test
 already records each layer's commit. Any other harness gives that up.
 
 Second, **a check has to own its own setup.** A check on a booted board needs state first — a
-replay running, a service stopped, a file in place — and needs it undone after. A harness that runs
-a test but cannot set one up pushes every such state into whatever drives it, so that driver changes
-with every new check. That is the defect class this choice exists to remove.
+replay running, a service stopped, a file in place — and needs it undone after, and several checks
+need the same state. A harness with no setup shared across checks by name and scope pushes every
+such state into whatever drives it, so that driver changes with every new check. That is the defect
+class this choice exists to remove.
 
 The survey behind this choice scored ten candidates against the loop: build a ref, install over the
 air, detect the booted slot, run tests host-side against the booted board, replay upstreams, record
@@ -37,10 +38,12 @@ around. What it is held to:
 ## Decision
 
 **pytest is the harness.** Both suites are pytest, and setup and teardown are fixtures. Three
-maintained pieces carry everything a check needs from the runner:
+maintained pieces carry the board, the record and a check's facts, and the runner's own plugin adds
+only the fixtures none of them provides (`proxy`, `bench_candidate`):
 
 - **labgrid's own pytest plugin and env file are the board.** The layer's env file names it and the
-  layer points pytest at it with `--lg-env`; the runner adds no board fixture of its own.
+  runner hands it to the target suite with `--lg-env`, from `LG_ENV`; the runner adds no board
+  fixture of its own.
 - **pytest-reportlog's JSON-lines report is the record**, with one run-level file of the runner's
   own beside it naming the runner's version, the command line, the times and the exit status.
 - **`record_property` is how a check attaches its facts**, and pytest-reportlog writes them.
@@ -48,8 +51,9 @@ maintained pieces carry everything a check needs from the runner:
 ## Alternatives considered
 
 - **oeqa runtime tests.** The most Yocto-native route, and what a layer's test side already is.
-  Rejected on the second force above: a case runs but cannot set itself up, and cases do not assert;
-  verdict objects sit between the test and the fact it checks. As a custom `TEST_TARGET` controller
+  Rejected on the second force above: a case's setup is unittest's `setUp` inside its own class,
+  with nothing shared across cases by name and scope, so a state several checks need is built by
+  whatever drives them. As a custom `TEST_TARGET` controller
   it would make `testimage` change the board, fusing runner and layer into one tree, on a loader
   poky itself marks *"Don't base your targets on this code it will be refactored"*. Its record
   carries no dirty flag and no replay hash.
@@ -58,25 +62,26 @@ maintained pieces carry everything a check needs from the runner:
   detection, fake drivers for a board-less self-test, and an active release line. Rejected because
   what it adds over its plugin is places, a coordinator, power and serial drivers and board
   strategies, none of which one board over ssh uses; it has no RAUC strategy, so that code is
-  written either way; and its coordinator lock has no timer. **Its pytest plugin and env file are
+  written either way. **Its pytest plugin and env file are
   kept as the board.**
 - **pytest with a board transport of our own** (a plain fabric fixture for run, put, get and port
   forward). Less surface than labgrid, and the plan this runner started from chose it. Rejected:
   it re-implements what labgrid's plugin already does, maintained; the same holds for a record
   writer of our own over pytest-reportlog, and a test marker of our own over `record_property`.
-- **LAVA.** The serious lab system: real scheduling, health checks, monthly releases, 21 deploy
-  methods. Rejected on footprint and shape: a PostgreSQL, web, scheduler and worker stack wanting
+- **LAVA, and KernelCI built on it.** The serious lab system: real scheduling, health checks,
+  monthly releases, 21 deploy methods. Rejected on footprint and shape: a PostgreSQL, web, scheduler and worker stack wanting
   4 GB of RAM at minimum to run one board, scheduling nothing here needs; none of its deploy methods
   is an OTA install, so the install becomes a test-shell command; its test shell runs on the device,
-  not host-side; its verdicts are notifications, not GitHub check runs.
-- **KernelCI.** LAVA labs plus its own pipeline, built for upstream kernel testing; heavier than LAVA
-  and adds nothing on the board side for a product image.
-- **Yocto autobuilder.** Builds a ref and schedules, which nothing else surveyed does. Rejected: a
+  not host-side; its verdicts are notifications, not GitHub check runs. KernelCI adds its own
+  pipeline for upstream kernel testing on top, heavier still and nothing more on the board side.
+- **Yocto autobuilder.** The one candidate that builds a product image from a ref, and it schedules
+  too. Rejected: a
   buildbot master and workers with a heavily customised config, its verdicts go to buildbot's UI,
   and its record is buildbot's log store.
 - **Avocado.** A maintained, generic runner whose remote spawner runs tests over ssh — a real
-  competitor to pytest as the harness. Rejected: it has no deploy or boot model, and labgrid's board
-  integration is a pytest plugin, so the board would be ours to write again.
+  competitor to pytest as the harness. Rejected: labgrid ships its board integration as a pytest
+  plugin, and `record_property` and pytest-reportlog are pytest's, so under Avocado the glue between
+  board, check and record would be ours to write.
 - **pytest-embedded.** pytest already, with a board model. Rejected: scoped to microcontrollers
   (ESP-IDF over serial and JTAG), with no Linux-over-ssh or OTA service.
 - **Fuego.** Jenkins in a container with an ssh transport. Rejected: last release December 2020.
@@ -86,7 +91,7 @@ maintained pieces carry everything a check needs from the runner:
 - **A new check is a test file and, at most, a fixture beside it, in the layer.** The runner does
   not change when a check's needs change, which is the whole point of the choice.
 - **The loop's glue is ours.** Nothing surveyed closes the loop, so running the layer's hooks, the
-  lock, the queue and the verdict post are code in this repository, each kept to a call into a
+  run-level file and the verdict post are code in this repository, each kept to a call into a
   maintained tool.
 - **The suites run under the runner's interpreter.** A layer's test helpers import only what the
   runner's lock file ships, plus the layer's own `pythonpath`; a layer cannot bring its own pytest.
@@ -96,5 +101,4 @@ maintained pieces carry everything a check needs from the runner:
 
 **Premise that would reopen this:** a check whose setup or teardown a fixture cannot express, or
 labgrid's pytest plugin or pytest-reportlog ceasing to be maintained. A second board, power control
-or a serial console is not that premise: each is more of labgrid inside the same harness. Nor is a
-harness with nicer syntax, or a faster one.
+or a serial console is not that premise: each is more of labgrid inside the same harness.
