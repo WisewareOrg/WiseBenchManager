@@ -7,11 +7,13 @@ import signal
 import sys
 from pathlib import Path
 
+from wisebench import marks
 from wisebench.bench_run import BenchRun
 from wisebench.bench_test import BenchFailure, BenchTest, CandidateFailure
 from wisebench.config import Config
 from wisebench.lock import Lock
 from wisebench.plugin import BENCH_RESULT_DIR, DEFAULT_RESULT_DIR
+from wisebench.run_log import RunLog
 
 
 def _raise_on_sigterm(signum, frame):
@@ -88,18 +90,29 @@ def main(argv=None):
                 signal.signal(signal.SIGTERM, previous_handler)
         return 0
 
-    bench = BenchTest(Path.cwd(), args.ref, args.set_name, skip_build=args.skip_build)
     try:
-        with Lock(directory):
-            bench.run(lg_env, pytest_args)
-    except CandidateFailure as exc:
-        print(f"FAIL: {exc}")
-        return 1
+        with Lock(directory), RunLog(directory) as log:
+            bench = BenchTest(Path.cwd(), args.ref, args.set_name, log, skip_build=args.skip_build)
+            marks.write_run_started(log.path, "test", args.ref)
+            try:
+                bench.run(lg_env, pytest_args)
+            except CandidateFailure as exc:
+                marks.write_run_result(log.path, "failed")
+                print(f"FAIL: {exc}")
+                return 1
+            except Exception as exc:
+                marks.write_run_result(log.path, "error")
+                print(f"BENCH ERROR: {exc}", file=sys.stderr)
+                return 2
+            except BaseException:
+                marks.write_run_result(log.path, "error")
+                raise
+            marks.write_run_result(log.path, "passed")
+            print("PASS")
+            return 0
     except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2
-    print("PASS")
-    return 0
 
 
 if __name__ == "__main__":
