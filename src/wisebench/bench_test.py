@@ -163,8 +163,8 @@ class BenchTest:
         body may set `sha` on, appended to the `passed` line.
 
         Raises:
-            Exception: Whatever the body raised, after logging it as the stage's failed/error
-                line.
+            BaseException: Whatever the body raised, after logging it as the stage's
+                failed/error line.
         """
         info = {}
         self._mark(log, f"stage {name} started")
