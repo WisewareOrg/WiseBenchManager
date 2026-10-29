@@ -132,6 +132,11 @@ There is no marker and no credit rule of the runner's own.
 
 ## The record
 
+Every run -- a hand `bench test`, always; a `bench run` cycle, once it has taken a job -- also
+gets its own `records/<stamp>/bench.log`: every hook's and both suites' stdout and stderr,
+appended, nothing printed to a terminal, with a `bench:` line marking where each stage starts and
+ends (ADR 0002 rev 1).
+
 pytest-reportlog's JSON-lines report (`--report-log`, set to `$BENCH_RESULT_DIR/<UTC start
 time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: every test report,
 with whatever a layer attaches through `record_property`. Beside it the runner writes one file per
