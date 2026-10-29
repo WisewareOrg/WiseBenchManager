@@ -1,9 +1,0 @@
-name: proof-seed
-
-on: pull_request
-
-jobs:
-  proof-seed:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo ok
