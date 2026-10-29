@@ -24,14 +24,16 @@ Enforced by the `check-branch` and `pr-title` CI checks.
 
 ## Getting a change merged
 
-Branch and PR; the maintainer merges. The repository squash-merges: the PR title becomes the commit
-subject on `main`, and the branch's commit messages become the body. The PR body carries a reading
-guide for any diff over a screen: what it does, the stops in reading order, what to skip, where the
-risk sits.
+Branch and PR; the maintainer merges ([`CLAUDE.md`](CLAUDE.md) § "How changes land"). The
+repository squash-merges, commit title `PR_TITLE` and commit message `COMMIT_MESSAGES` (this
+repository's own settings): the PR title becomes the commit subject on `main`, and the branch's
+commit messages become the body. The PR body carries a reading guide for any diff over a screen:
+what it does, the stops in reading order, what to skip, where the risk sits
+([`CLAUDE.md`](CLAUDE.md) § "How changes land").
 
 Review is the `/pr-ready` flow: three reviewers (content, documentation discipline, test quality) in
 fresh contexts, findings to the implementer, escalations to the maintainer; the PR is not called
-ready before they have closed.
+ready before they have closed ([`CLAUDE.md`](CLAUDE.md) § "How changes land").
 
 A Renovate pull request for a `minor`, `patch`, `pin`, `pinDigest`, `digest` or `lockFileMaintenance`
 update automerges on green; a `major` update waits for review. See
