@@ -71,13 +71,16 @@ def test_a_dirty_tree_raises_runtime_error(monkeypatch, tmp_path):
 
 
 def test_a_failing_precondition_hook_is_a_bench_failure(monkeypatch, tmp_path):
-    """A failing precondition hook is a bench failure."""
+    """A failing precondition hook is a bench failure, and bench.log's last line is the error."""
     monkeypatch.chdir(tmp_path)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path, precondition="exit 9")
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     with pytest.raises(bench_test.BenchFailure, match="precondition exited 9"):
         bench.run("env.yaml", [])
+
+    lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
+    assert lines[-1].endswith("run error")
 
 
 def test_a_failing_build_hook_is_a_candidate_failure(monkeypatch, tmp_path):
@@ -312,22 +315,6 @@ def test_stage_names_are_fixed_regardless_of_the_configured_suite_paths(monkeypa
     assert any(line.endswith("stage host_suite started") for line in marker_lines)
     assert any(line.endswith("stage target_suite started") for line in marker_lines)
     assert not any("suites/host" in line or "suites/target" in line for line in marker_lines)
-
-
-def test_a_failing_fetch_is_an_error_and_pins_kind_run(monkeypatch, tmp_path):
-    """A failing fetch (no origin remote) is an error, not a candidate failure; kind=run."""
-    monkeypatch.chdir(tmp_path)
-    _repo_with_one_commit(tmp_path)
-    _write_bench_toml(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "cafef00d", None, fetch="main")
-
-    with pytest.raises(subprocess.CalledProcessError):
-        bench.run("env.yaml", [])
-
-    lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
-    assert lines[0].endswith("run started kind=run ref=main")
-    assert any("stage checkout error" in line for line in lines)
-    assert lines[-1].endswith("run error")
 
 
 def test_a_keyboardinterrupt_during_a_hook_is_an_error_and_reraises(monkeypatch, tmp_path):

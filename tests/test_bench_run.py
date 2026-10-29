@@ -1,5 +1,7 @@
 """`BenchRun.run`: `DISABLED`, the queue head, and the posted verdict."""
 
+import subprocess
+
 import pytest
 
 from wisebench import bench_run, bench_test
@@ -40,11 +42,11 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name, fetch=None):
+    def __init__(self, checkout, ref, set_name, kind="test"):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
-        self.fetch = fetch
+        self.kind = kind
         self.run_calls = []
         _FakeBenchTest.instances.append(self)
 
@@ -93,11 +95,13 @@ def made(monkeypatch):
     yield
 
 
-def _stub_subprocess(monkeypatch):
+def _stub_subprocess(monkeypatch, *, error_on=None):
     """Fake `bench_run.subprocess.run`.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
+        error_on (list | None): A command prefix that raises `CalledProcessError` instead of
+            succeeding, or None.
 
     Returns:
         list: Each call's command, in order.
@@ -106,6 +110,8 @@ def _stub_subprocess(monkeypatch):
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        if error_on is not None and command[: len(error_on)] == error_on:
+            raise subprocess.CalledProcessError(1, command)
 
         class _Result:
             returncode = 0
@@ -163,17 +169,17 @@ def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
 
 
 def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monkeypatch, tmp_path):
-    """run tests the queue head's sha with its ref as fetch=, then posts success."""
+    """run fetches and tests the queue head's sha, then posts success; kind=run."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path)
     run.run("env.yaml")
 
-    assert calls == []
+    assert calls == [["git", "fetch", "origin", "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"]]
     assert _FakeBenchTest.instances[0].checkout == tmp_path
     assert _FakeBenchTest.instances[0].ref == "cafef00d"
     assert _FakeBenchTest.instances[0].set_name is None
-    assert _FakeBenchTest.instances[0].fetch == "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
+    assert _FakeBenchTest.instances[0].kind == "run"
     assert _FakeBenchTest.instances[0].run_calls == [("env.yaml", [])]
     assert _FakeCheck.posts == [("cafef00d", "success", "PASS", "records")]
 
@@ -216,6 +222,19 @@ def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer
         run.run("env.yaml")
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "more than one")
+    assert _FakeBenchTest.instances == []
+
+
+def test_run_on_a_failing_fetch_writes_disabled_and_disables_the_timer(made, monkeypatch, tmp_path):
+    """run on a failing fetch writes DISABLED and disables the timer."""
+    calls = _stub_subprocess(monkeypatch, error_on=["git", "fetch"])
+    _FakeQueue.result = _QUEUE_HEAD
+    run = _make_run(tmp_path, run_unit="scratch-unit")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run.run("env.yaml")
+
+    _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "returned non-zero exit status")
     assert _FakeBenchTest.instances == []
 
 
