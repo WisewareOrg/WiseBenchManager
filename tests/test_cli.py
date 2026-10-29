@@ -1,4 +1,5 @@
-"""`main`'s exit-code mapping, against a scripted fake `BenchTest`/`BenchRun`."""
+"""`main`'s exit-code mapping, against a scripted fake `BenchTest`/`BenchRun`, and the markers
+`main` writes around a `bench test` run."""
 
 import contextlib
 import fcntl
@@ -7,8 +8,13 @@ import signal
 
 import pytest
 
-from wisebench import bench_run, bench_test, cli
+from wisebench import bench_run, bench_test, cli, marks
 from wisebench.lock import Lock
+
+
+def _markers(captured_out):
+    """Parse every `bench:` marker line out of captured stdout, in order."""
+    return [m for m in (marks.parse(line) for line in captured_out.splitlines()) if m is not None]
 
 
 class _FakeBenchTest:
@@ -16,10 +22,11 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name, skip_build=False):
+    def __init__(self, checkout, ref, set_name, run_log, skip_build=False):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
+        self.run_log = run_log
         self.skip_build = skip_build
         self.run_calls = []
         self.outcome = None
@@ -40,9 +47,27 @@ def _build(outcome=None):
     return factory
 
 
+class _FakeRunLog:
+    """Scripted stand-in for `wisebench.run_log.RunLog`; a no-op context manager."""
+
+    instances = []
+
+    def __init__(self, base_dir):
+        self.base_dir = base_dir
+        self.directory = base_dir / "20261028T000000Z"
+        _FakeRunLog.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
 @pytest.fixture
 def made(monkeypatch):
-    """Sets a harmless `LG_ENV` and clears `_FakeBenchTest.instances`.
+    """Sets a harmless `LG_ENV`, clears `_FakeBenchTest`/`_FakeRunLog` instances, and fakes
+    `cli.RunLog`.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
@@ -51,7 +76,9 @@ def made(monkeypatch):
         list[_FakeBenchTest]: Each `BenchTest` this test constructs, in order.
     """
     monkeypatch.setenv("LG_ENV", "unused.yaml")
+    monkeypatch.setattr(cli, "RunLog", _FakeRunLog)
     _FakeBenchTest.instances.clear()
+    _FakeRunLog.instances = []
     yield _FakeBenchTest.instances
 
 
@@ -130,12 +157,87 @@ def _hold_lock(tmp_path):
 
 
 def test_main_test_returns_2_when_the_lock_is_already_held(made, monkeypatch, tmp_path):
-    """main returns 2 for bench test when the lock is already held."""
+    """main returns 2 for bench test when the lock is already held, creating neither a RunLog
+    nor a BenchTest -- no job was taken."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "BenchTest", _build())
     with _hold_lock(tmp_path):
         assert cli.main(["test", "HEAD"]) == 2
-    assert made[0].run_calls == []
+    assert made == []
+    assert _FakeRunLog.instances == []
+
+
+def test_main_test_creates_a_run_log_and_passes_it_into_benchtest(made, monkeypatch, tmp_path):
+    """main creates one RunLog under the result directory and passes it into BenchTest."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD"]) == 0
+    assert len(_FakeRunLog.instances) == 1
+    assert _FakeRunLog.instances[0].base_dir == tmp_path / "records"
+    assert made[0].run_log is _FakeRunLog.instances[0]
+
+
+def test_main_test_writes_run_started_with_kind_test_and_the_ref(
+    made, monkeypatch, tmp_path, capfd
+):
+    """main writes `run started` with kind=test and ref=<the given ref> for bench test."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD"]) == 0
+    started = next(m for m in _markers(capfd.readouterr().out) if m["type"] == "run_started")
+    assert started["kind"] == "test"
+    assert started["ref"] == "HEAD"
+    assert started["pr"] is None
+
+
+def test_main_test_writes_run_started_with_skip_build_when_set(made, monkeypatch, tmp_path, capfd):
+    """main writes `run started` with the skip-build flag set when --skip-build is given."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD", "--skip-build"]) == 0
+    started = next(m for m in _markers(capfd.readouterr().out) if m["type"] == "run_started")
+    assert started["skip_build"] is True
+
+
+def test_main_test_writes_run_passed_on_a_clean_run(made, monkeypatch, tmp_path, capfd):
+    """main writes `run passed` as the last marker on a clean bench test run."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD"]) == 0
+    markers = _markers(capfd.readouterr().out)
+    assert markers[-1]["type"] == "run_result"
+    assert markers[-1]["result"] == "passed"
+
+
+def test_main_test_writes_run_failed_on_a_candidate_failure(made, monkeypatch, tmp_path, capfd):
+    """main writes `run failed` on a candidate failure."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(bench_test.CandidateFailure("build exited 1")))
+    assert cli.main(["test", "HEAD"]) == 1
+    markers = _markers(capfd.readouterr().out)
+    run_result = next(m for m in markers if m["type"] == "run_result")
+    assert run_result["result"] == "failed"
+
+
+def test_main_test_writes_run_error_on_a_bench_failure(made, monkeypatch, tmp_path, capfd):
+    """main writes `run error` on a bench failure."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(bench_test.BenchFailure("precondition exited 2")))
+    assert cli.main(["test", "HEAD"]) == 2
+    markers = _markers(capfd.readouterr().out)
+    run_result = next(m for m in markers if m["type"] == "run_result")
+    assert run_result["result"] == "error"
+
+
+def test_main_test_writes_run_error_on_a_raw_exception(made, monkeypatch, tmp_path, capfd):
+    """main writes `run error`, not `run failed`, on an exception that is neither
+    BenchFailure nor CandidateFailure."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(RuntimeError("tree is dirty: [' M x']")))
+    assert cli.main(["test", "HEAD"]) == 2
+    markers = _markers(capfd.readouterr().out)
+    run_result = next(m for m in markers if m["type"] == "run_result")
+    assert run_result["result"] == "error"
 
 
 def _write_bench_toml(repo):
@@ -279,8 +381,11 @@ def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_pa
     assert made_run[0].run_calls == ["unused.yaml"]
 
 
-def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch, tmp_path):
-    """main exits 2 on SIGTERM, writing DISABLED and disabling the timer."""
+def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch, tmp_path, capfd):
+    """main exits 2 on SIGTERM to the main process only -- as systemd's KillMode=mixed sends it
+    -- writing DISABLED with the real reason (never a broken-pipe message from a marker racing
+    tee's own shutdown) and disabling the timer; bench.log, through a real RunLog/tee, ends
+    with a `run error` line because tee itself, untouched by the signal, outlives the write."""
     _write_bench_toml(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LG_ENV", "unused.yaml")
@@ -313,7 +418,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
             pass
 
     class _SigtermBenchTest:
-        def __init__(self, checkout, ref, set_name):
+        def __init__(self, checkout, ref, set_name, run_log):
             pass
 
         def run(self, lg_env, pytest_args):
@@ -327,7 +432,13 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
 
     disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
     assert "TimeoutStartSec" in disabled[1]
+    assert "Broken pipe" not in disabled[1]
     assert calls[-1] == ["systemctl", "--user", "disable", "--now", "bench-run.timer"]
+
+    [run_dir] = [p for p in (tmp_path / "records").iterdir() if p.is_dir()]
+    bench_log_markers = _markers((run_dir / "bench.log").read_text())
+    assert bench_log_markers[-1]["type"] == "run_result"
+    assert bench_log_markers[-1]["result"] == "error"
 
     with Lock(tmp_path / "records"):
         pass

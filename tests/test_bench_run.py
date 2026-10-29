@@ -1,11 +1,16 @@
-"""`BenchRun.run`: `DISABLED`, the queue head, and the posted verdict."""
+"""`BenchRun.run`: `DISABLED`, the queue head, and the posted verdict and run markers."""
 
 import subprocess
 
 import pytest
 
-from wisebench import bench_run, bench_test
+from wisebench import bench_run, bench_test, marks
 from wisebench.config import Config
+
+
+def _markers(captured_out):
+    """Parse every `bench:` marker line out of captured stdout, in order."""
+    return [m for m in (marks.parse(line) for line in captured_out.splitlines()) if m is not None]
 
 
 def _config(run_unit="bench-run"):
@@ -42,10 +47,11 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name):
+    def __init__(self, checkout, ref, set_name, run_log):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
+        self.run_log = run_log
         self.run_calls = []
         _FakeBenchTest.instances.append(self)
 
@@ -53,6 +59,23 @@ class _FakeBenchTest:
         self.run_calls.append((lg_env, pytest_args))
         if isinstance(_FakeBenchTest.outcome, Exception):
             raise _FakeBenchTest.outcome
+
+
+class _FakeRunLog:
+    """Scripted stand-in for `wisebench.run_log.RunLog`; a no-op context manager."""
+
+    instances = []
+
+    def __init__(self, base_dir):
+        self.base_dir = base_dir
+        self.directory = base_dir / "20261028T000000Z"
+        _FakeRunLog.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
 
 
 class _FakeCheck:
@@ -83,6 +106,7 @@ def made(monkeypatch):
     monkeypatch.setattr(bench_run, "Queue", _FakeQueue)
     monkeypatch.setattr(bench_run, "BenchTest", _FakeBenchTest)
     monkeypatch.setattr(bench_run, "Check", _FakeCheck)
+    monkeypatch.setattr(bench_run, "RunLog", _FakeRunLog)
     _FakeQueue.result = None
     _FakeQueue.outcome = None
     _FakeBenchTest.instances = []
@@ -91,6 +115,7 @@ def made(monkeypatch):
     _FakeCheck.posts = []
     _FakeCheck.init_outcome = None
     _FakeCheck.post_outcome = None
+    _FakeRunLog.instances = []
     yield
 
 
@@ -151,6 +176,7 @@ def test_run_exits_quietly_when_no_job_is_queued(made, monkeypatch, tmp_path, ca
     assert "no job" in capsys.readouterr().out
     assert calls == []
     assert _FakeBenchTest.instances == []
+    assert _FakeRunLog.instances == []
 
 
 def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
@@ -164,6 +190,7 @@ def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
     assert "disabled" in capsys.readouterr().out
     assert calls == []
     assert _FakeBenchTest.instances == []
+    assert _FakeRunLog.instances == []
 
 
 def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monkeypatch, tmp_path):
@@ -181,6 +208,61 @@ def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monk
     assert _FakeCheck.posts == [("cafef00d", "success", "PASS", "records")]
 
 
+def test_run_creates_the_run_log_only_after_taking_the_job(made, monkeypatch, tmp_path):
+    """run creates its RunLog under the result directory only once a job is taken, and passes
+    it into BenchTest."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    assert len(_FakeRunLog.instances) == 1
+    assert _FakeRunLog.instances[0].base_dir == tmp_path / "records"
+    assert _FakeBenchTest.instances[0].run_log is _FakeRunLog.instances[0]
+
+
+def test_run_writes_run_started_with_kind_run_the_sha_and_the_parsed_pr(
+    made, monkeypatch, tmp_path, capfd
+):
+    """run writes `run started` with kind=run, ref=<sha>, and pr= parsed from the queue ref."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    started = next(m for m in _markers(capfd.readouterr().out) if m["type"] == "run_started")
+    assert started["kind"] == "run"
+    assert started["ref"] == "cafef00d"
+    assert started["pr"] == 14
+
+
+def test_run_writes_a_posted_stage_and_run_passed_on_success(made, monkeypatch, tmp_path, capfd):
+    """run writes a `posted` stage (started then passed) and closes with `run passed`."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    markers = _markers(capfd.readouterr().out)
+    shape = [(m["type"], m.get("name"), m.get("result")) for m in markers]
+    assert ("stage_started", "posted", None) in shape
+    assert ("stage_result", "posted", "passed") in shape
+    assert shape[-1] == ("run_result", None, "passed")
+
+
+def test_run_writes_run_failed_on_a_candidate_failure(made, monkeypatch, tmp_path, capfd):
+    """run writes `run failed`, not `run error`, on the candidate's own failure."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    _FakeBenchTest.outcome = bench_test.CandidateFailure("target_suite failed")
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    markers = _markers(capfd.readouterr().out)
+    run_result = next(m for m in markers if m["type"] == "run_result")
+    assert run_result["result"] == "failed"
+
+
 def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monkeypatch, tmp_path):
     """run posts failure on a candidate failure, without raising."""
     _stub_subprocess(monkeypatch)
@@ -193,9 +275,10 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monke
 
 
 def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
-    made, monkeypatch, tmp_path
+    made, monkeypatch, tmp_path, capfd
 ):
-    """run on a BenchFailure writes DISABLED, disables the timer, and reraises."""
+    """run on a BenchFailure writes DISABLED, disables the timer, reraises, and writes
+    `run error`."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     _FakeBenchTest.outcome = bench_test.BenchFailure("precondition exited 9")
@@ -205,6 +288,8 @@ def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
         run.run("env.yaml")
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "precondition exited 9")
+    run_result = next(m for m in _markers(capfd.readouterr().out) if m["type"] == "run_result")
+    assert run_result["result"] == "error"
 
 
 def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer(
@@ -220,6 +305,7 @@ def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "more than one")
     assert _FakeBenchTest.instances == []
+    assert _FakeRunLog.instances == []
 
 
 def test_run_on_a_failing_fetch_writes_disabled_and_disables_the_timer(made, monkeypatch, tmp_path):
@@ -252,9 +338,10 @@ def test_run_on_check_construction_failing_writes_disabled_and_disables_the_time
 
 
 def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disables_the_timer(
-    made, monkeypatch, tmp_path
+    made, monkeypatch, tmp_path, capfd
 ):
-    """run on Check.post failing after a candidate failure writes DISABLED, disables the timer."""
+    """run on Check.post failing after a candidate failure writes DISABLED, disables the timer,
+    and writes `run error`, not `run failed`."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     _FakeBenchTest.outcome = bench_test.CandidateFailure("target_suite failed")
@@ -265,6 +352,8 @@ def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disab
         run.run("env.yaml")
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "github is down")
+    run_result = next(m for m in _markers(capfd.readouterr().out) if m["type"] == "run_result")
+    assert run_result["result"] == "error"
 
 
 def test_run_on_post_failing_after_a_pass_writes_disabled_and_disables_the_timer(

@@ -1,12 +1,18 @@
-"""The plugin's own record (run.json's fields, the reportlog path) and the bench_candidate
-fixture."""
+"""The plugin's own record (run.json's fields, the reportlog path), the bench_candidate
+fixture, and -- when BENCH_RECORD_DIR is set -- the collected/setup/test-started markers."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from wisebench.plugin import SETUP_ERROR_EXIT_STATUS
+from wisebench import marks
+from wisebench.plugin import BENCH_RECORD_DIR, SETUP_ERROR_EXIT_STATUS
+
+
+def _markers(captured_out):
+    """Parse every `bench:` marker line out of captured stdout, in order."""
+    return [m for m in (marks.parse(line) for line in captured_out.splitlines()) if m is not None]
 
 
 def _run_one_passing_test(pytester, monkeypatch):
@@ -110,3 +116,135 @@ def test_bench_candidate_reads_the_command_line_option(pytester, monkeypatch):
     """)
     result = pytester.runpytest("--bench-candidate", "deadbeef")
     result.assert_outcomes(passed=1)
+
+
+def test_bench_record_dir_writes_report_and_run_json_directly_there(
+    pytester, monkeypatch, tmp_path
+):
+    """BENCH_RECORD_DIR, when set, is written into directly -- no stamp subdirectory."""
+    record_dir = tmp_path / "run" / "target_suite"
+    monkeypatch.setenv(BENCH_RECORD_DIR, str(record_dir))
+    pytester.makepyfile("def test_pass():\n    assert True\n")
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1)
+    assert (record_dir / "run.json").is_file()
+    assert (record_dir / "report.jsonl").is_file()
+    assert not any(p.is_dir() for p in record_dir.iterdir())
+
+
+def test_bench_record_dir_unset_writes_no_markers(pytester, monkeypatch, capfd):
+    """Without BENCH_RECORD_DIR, today's behaviour holds: no `bench:` marker is printed."""
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.delenv(BENCH_RECORD_DIR, raising=False)
+    pytester.makepyfile("def test_one():\n    assert True\n")
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(passed=1)
+    assert _markers(capfd.readouterr().out) == []
+
+
+def test_bench_record_dir_set_prints_collected_after_deselection(
+    pytester, monkeypatch, capfd, tmp_path
+):
+    """BENCH_RECORD_DIR set prints `collected <n>` counting the deselected-down item set."""
+    monkeypatch.setenv(BENCH_RECORD_DIR, str(tmp_path / "run"))
+    pytester.makepyfile("""
+        def test_one():
+            assert True
+        def test_two():
+            assert True
+        def test_three():
+            assert True
+    """)
+    result = pytester.runpytest("-s", "-k", "one or two")
+    result.assert_outcomes(passed=2, deselected=1)
+    collected = next(m for m in _markers(capfd.readouterr().out) if m["type"] == "collected")
+    assert collected["n"] == 2
+
+
+def test_bench_record_dir_set_prints_test_started_for_each_test(
+    pytester, monkeypatch, capfd, tmp_path
+):
+    """BENCH_RECORD_DIR set prints `test started <nodeid>` at the start of each test, in order."""
+    monkeypatch.setenv(BENCH_RECORD_DIR, str(tmp_path / "run"))
+    pytester.makepyfile("""
+        def test_one():
+            assert True
+        def test_two():
+            assert True
+    """)
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(passed=2)
+    nodeids = [m["nodeid"] for m in _markers(capfd.readouterr().out) if m["type"] == "test_started"]
+    assert len(nodeids) == 2
+    assert nodeids[0].endswith("::test_one")
+    assert nodeids[1].endswith("::test_two")
+
+
+def test_bench_record_dir_set_marks_setup_of_a_fixture_depending_on_bench_candidate(
+    pytester, monkeypatch, capfd, tmp_path
+):
+    """BENCH_RECORD_DIR set writes `setup <fixture> started` then `setup <fixture> done`
+    around a fixture whose own argnames include bench_candidate."""
+    monkeypatch.setenv(BENCH_RECORD_DIR, str(tmp_path / "run"))
+    pytester.makepyfile("""
+        import pytest
+
+        @pytest.fixture
+        def install_candidate(bench_candidate):
+            return bench_candidate
+
+        def test_one(install_candidate):
+            assert True
+    """)
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(passed=1)
+    markers = _markers(capfd.readouterr().out)
+    started = [m for m in markers if m["type"] == "setup_started"]
+    done = [m for m in markers if m["type"] == "setup_result"]
+    assert [m["fixture"] for m in started] == ["install_candidate"]
+    assert [m["fixture"] for m in done] == ["install_candidate"]
+    assert done[0]["result"] == "done"
+
+
+def test_bench_record_dir_set_marks_setup_error_for_a_failing_fixture(
+    pytester, monkeypatch, capfd, tmp_path
+):
+    """A fixture depending on bench_candidate that raises during setup writes
+    `setup <fixture> error`."""
+    monkeypatch.setenv(BENCH_RECORD_DIR, str(tmp_path / "run"))
+    pytester.makepyfile("""
+        import pytest
+
+        @pytest.fixture
+        def install_candidate(bench_candidate):
+            raise RuntimeError("board unreachable")
+
+        def test_one(install_candidate):
+            assert True
+    """)
+    result = pytester.runpytest("-s")
+    assert result.ret == SETUP_ERROR_EXIT_STATUS
+    setup_result = next(m for m in _markers(capfd.readouterr().out) if m["type"] == "setup_result")
+    assert setup_result["fixture"] == "install_candidate"
+    assert setup_result["result"] == "error"
+
+
+def test_bench_record_dir_set_does_not_mark_a_fixture_that_does_not_depend_on_bench_candidate(
+    pytester, monkeypatch, capfd, tmp_path
+):
+    """A fixture that does not depend on bench_candidate gets no setup marker."""
+    monkeypatch.setenv(BENCH_RECORD_DIR, str(tmp_path / "run"))
+    pytester.makepyfile("""
+        import pytest
+
+        @pytest.fixture
+        def unrelated():
+            return 1
+
+        def test_one(unrelated):
+            assert True
+    """)
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(passed=1)
+    markers = _markers(capfd.readouterr().out)
+    assert [m for m in markers if m["type"] in ("setup_started", "setup_result")] == []
