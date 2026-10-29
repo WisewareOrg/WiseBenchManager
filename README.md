@@ -132,8 +132,9 @@ There is no marker and no credit rule of the runner's own.
 
 ## The record
 
-Each run also writes `records/<stamp>/bench.log`: every hook's and suite's output, bracketed by a
-line marking each stage's start and end.
+Each run also writes `records/<stamp>/bench.log`, in its own directory, separate from each
+suite's `report.jsonl`. It holds every hook's and suite's output, bracketed by a line marking each
+stage's start and end.
 
 pytest-reportlog's JSON-lines report (`--report-log`, set to `$BENCH_RESULT_DIR/<UTC start
 time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: every test report,
