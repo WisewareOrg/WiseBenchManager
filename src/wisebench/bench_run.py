@@ -28,6 +28,18 @@ def _parse_pr(ref):
     return int(match[1]) if match else None
 
 
+def _reason(exc):
+    """The exception's first line, or "" for one with no message (e.g. a bare KeyboardInterrupt).
+
+    Args:
+        exc (BaseException): The exception a marker's `reason=` is taken from.
+
+    Returns:
+        str: The first line of `str(exc)`, or "".
+    """
+    return str(exc).splitlines()[0] if str(exc) else ""
+
+
 class BenchRun:
     """One `bench run` cycle: the queue head, through `BenchTest` in-process, to one check run.
 
@@ -54,6 +66,27 @@ class BenchRun:
         self.checkout = checkout
         self.config = config
         self._result_dir = result_dir
+
+    def _post(self, check, sha, conclusion, title, summary):
+        """Post one check run, as a `posted` stage.
+
+        Args:
+            check (wisebench.check.Check): The GitHub check this cycle posts to.
+            sha (str): The commit the check run is posted on.
+            conclusion (str): `"success"` or `"failure"`.
+            title (str): The check run's one-line title.
+            summary (str): The check run's summary -- the result directory path.
+
+        Raises:
+            Exception: `check.post` itself raised.
+        """
+        marks.write_stage_started("posted")
+        try:
+            check.post(sha, conclusion, title, summary)
+        except BaseException as exc:
+            marks.write_stage_result("posted", "error", reason=_reason(exc))
+            raise
+        marks.write_stage_result("posted", "passed")
 
     def run(self, lg_env):
         """Execute one cycle: the queue head, the job, the verdict.
@@ -95,23 +128,18 @@ class BenchRun:
                     try:
                         BenchTest(self.checkout, sha, None, log).run(lg_env, [])
                     except CandidateFailure as exc:
-                        marks.write_stage_started("posted")
-                        check.post(sha, "failure", str(exc).splitlines()[0], summary)
-                        marks.write_stage_result("posted", "passed")
+                        self._post(check, sha, "failure", str(exc).splitlines()[0], summary)
                         marks.write_run_result("failed")
                         return
 
-                    marks.write_stage_started("posted")
-                    check.post(sha, "success", "PASS", summary)
-                    marks.write_stage_result("posted", "passed")
+                    self._post(check, sha, "success", "PASS", summary)
                     marks.write_run_result("passed")
-                except Exception:
+                except BaseException:
                     marks.write_run_result("error")
                     raise
-        except Exception as exc:
+        except BaseException as exc:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
-            reason = str(exc).splitlines()[0] if str(exc) else ""
-            disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{reason}\n")
+            disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{_reason(exc)}\n")
             result = subprocess.run(
                 ["systemctl", "--user", "disable", "--now", f"{self.config.run_unit}.timer"],
                 capture_output=True,
