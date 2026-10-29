@@ -28,18 +28,6 @@ def _parse_pr(ref):
     return int(match[1]) if match else None
 
 
-def _reason(exc):
-    """The exception's first line, or "" for one with no message (e.g. a bare KeyboardInterrupt).
-
-    Args:
-        exc (BaseException): The exception a marker's `reason=` is taken from.
-
-    Returns:
-        str: The first line of `str(exc)`, or "".
-    """
-    return str(exc).splitlines()[0] if str(exc) else ""
-
-
 class BenchRun:
     """One `bench run` cycle: the queue head, through `BenchTest` in-process, to one check run.
 
@@ -84,7 +72,7 @@ class BenchRun:
         try:
             check.post(sha, conclusion, title, summary)
         except BaseException as exc:
-            marks.write_stage_result("posted", "error", reason=_reason(exc))
+            marks.write_stage_result("posted", "error", reason=marks.reason(exc))
             raise
         marks.write_stage_result("posted", "passed")
 
@@ -139,7 +127,7 @@ class BenchRun:
                     raise
         except BaseException as exc:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
-            disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{_reason(exc)}\n")
+            disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{marks.reason(exc)}\n")
             result = subprocess.run(
                 ["systemctl", "--user", "disable", "--now", f"{self.config.run_unit}.timer"],
                 capture_output=True,

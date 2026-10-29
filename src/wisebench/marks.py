@@ -23,6 +23,19 @@ def _write(fd, line):
             raise
 
 
+def reason(exc):
+    """The exception's first line, for a stage marker's `reason=` -- "" for one with no message
+    (e.g. a bare KeyboardInterrupt).
+
+    Args:
+        exc (BaseException): The exception a stage or run marker's `reason=` is taken from.
+
+    Returns:
+        str: The first line of `str(exc)`, or "".
+    """
+    return str(exc).splitlines()[0] if str(exc) else ""
+
+
 def write_run_started(pid, kind, ref, pr=None, skip_build=False, fd=1):
     """Write `run started pid=<pid> kind=<kind> ref=<ref> [pr=<n>] [skip-build]`."""
     line = f"bench: {_now()} run started pid={pid} kind={kind} ref={ref}"

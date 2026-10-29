@@ -27,18 +27,6 @@ class CandidateFailure(Exception):
     """A failure that is the candidate's: a `build`/`bundle` hook, or a test's own call failing."""
 
 
-def _reason(exc):
-    """The exception's first line, or "" for one with no message (e.g. a bare KeyboardInterrupt).
-
-    Args:
-        exc (BaseException): The exception a stage marker's `reason=` is taken from.
-
-    Returns:
-        str: The first line of `str(exc)`, or "".
-    """
-    return str(exc).splitlines()[0] if str(exc) else ""
-
-
 class BenchTest:
     """One `bench test <ref>` run: the checkout, ref, replay set name and skip-build flag."""
 
@@ -84,7 +72,7 @@ class BenchTest:
             commit = self._checkout_commit()
             config = Config.load(self.checkout / "bench.toml")
         except BaseException as exc:
-            marks.write_stage_result("checkout", "error", reason=_reason(exc))
+            marks.write_stage_result("checkout", "error", reason=marks.reason(exc))
             raise
         marks.write_stage_result("checkout", "passed", sha=commit)
 
@@ -168,7 +156,7 @@ class BenchTest:
             marks.write_stage_result(name, error_result, reason=str(failure))
             raise failure from exc
         except BaseException as exc:
-            marks.write_stage_result(name, "error", reason=_reason(exc))
+            marks.write_stage_result(name, "error", reason=marks.reason(exc))
             raise
         marks.write_stage_result(name, "passed")
 
@@ -197,7 +185,7 @@ class BenchTest:
         try:
             result = subprocess.run(command, cwd=self.checkout, env=suite_env)
         except BaseException as exc:
-            marks.write_stage_result(stage, "error", reason=_reason(exc))
+            marks.write_stage_result(stage, "error", reason=marks.reason(exc))
             raise
         if result.returncode == 1:
             failure = CandidateFailure(f"{suite} failed")
