@@ -5,9 +5,11 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 
+from wisebench import marks
 from wisebench.bench_test import BenchTest, CandidateFailure
 from wisebench.check import Check
 from wisebench.queue import Queue
+from wisebench.run_log import RunLog
 
 
 class BenchRun:
@@ -22,11 +24,12 @@ class BenchRun:
         """Bind one BenchRun to a checkout, its loaded configuration and its result directory.
 
         Args:
-            checkout (pathlib.Path): The layer's clone this run reads the queue head against,
-                fetches the job's ref into, and tests.
+            checkout (pathlib.Path): The layer's clone this run reads the queue head against
+                and tests; `BenchTest` fetches the job's ref into it.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
                 names the systemd unit this run disables on the bench's own failure.
-            result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value.
+            result_dir (pathlib.Path): The directory `DISABLED` sits in, and `bench.log`'s own
+                run directory is stamped under; the CLI's own value.
 
         Raises:
             ValueError: `config.run_unit` is None (`bench.toml` has no `[run] unit`).
@@ -61,27 +64,34 @@ class BenchRun:
                 return
             ref, sha = head
 
-            subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
+            with RunLog(self._result_dir) as log:
+                marks.write_run_started(log.path, "run", ref)
+                try:
+                    check = Check(
+                        self.config.github_repo,
+                        self.config.github_app_id,
+                        self.config.github_private_key,
+                        self.config.github_check,
+                    )
+                    summary = os.path.relpath(self._result_dir, self.checkout)
 
-            check = Check(
-                self.config.github_repo,
-                self.config.github_app_id,
-                self.config.github_private_key,
-                self.config.github_check,
-            )
-            summary = os.path.relpath(self._result_dir, self.checkout)
+                    try:
+                        BenchTest(self.checkout, ref, None, log, fetch_from="origin").run(
+                            lg_env, []
+                        )
+                    except CandidateFailure as exc:
+                        check.post(sha, "failure", str(exc).splitlines()[0], summary)
+                        marks.write_run_result(log.path, "failed")
+                        return
 
-            try:
-                BenchTest(self.checkout, sha, None).run(lg_env, [])
-            except CandidateFailure as exc:
-                check.post(sha, "failure", str(exc).splitlines()[0], summary)
-                return
-
-            check.post(sha, "success", "PASS", summary)
+                    check.post(sha, "success", "PASS", summary)
+                    marks.write_run_result(log.path, "passed")
+                except Exception:
+                    marks.write_run_result(log.path, "error")
+                    raise
         except Exception as exc:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
-            reason = str(exc).splitlines()[0] if str(exc) else ""
-            disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{reason}\n")
+            disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{marks.reason(exc)}\n")
             result = subprocess.run(
                 ["systemctl", "--user", "disable", "--now", f"{self.config.run_unit}.timer"],
                 capture_output=True,
