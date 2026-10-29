@@ -6,6 +6,7 @@ run.json holds `version`, `command_line`, `start`, `end`, `exit_status`, and eac
 field whose environment variable is set.
 """
 
+import contextlib
 import json
 import shlex
 from datetime import UTC, datetime
@@ -63,6 +64,24 @@ def _run_dir(config):
     return base / config._wisebench_timestamp
 
 
+def _output_disabled(config):
+    """A context manager suspending pytest's own output capture, the same way `-s` would.
+
+    `BenchTest` runs each suite without `-s`; a marker written during a test's setup or call
+    phase needs this, or pytest's own capture swallows it before it reaches fd 1 at all.
+
+    Args:
+        config (pytest.Config): The session's pytest configuration.
+
+    Returns:
+        AbstractContextManager: Suspends capture for its `with` block.
+    """
+    capman = config.pluginmanager.getplugin("capturemanager")
+    if capman is None:
+        return contextlib.nullcontext()
+    return capman.global_and_fixture_disabled()
+
+
 def pytest_addoption(parser):
     """Registers the --bench-candidate command-line option.
 
@@ -109,7 +128,8 @@ def pytest_runtest_call(item):
         item (pytest.Item): The test about to run.
     """
     if environ.get(BENCH_RECORD_DIR) is not None:
-        marks.write_test_started(item.nodeid)
+        with _output_disabled(item.config):
+            marks.write_test_started(item.nodeid)
     return (yield)
 
 
@@ -124,15 +144,18 @@ def pytest_fixture_setup(fixturedef, request):
     """
     tracked = environ.get(BENCH_RECORD_DIR) is not None and "bench_candidate" in fixturedef.argnames
     if tracked:
-        marks.write_setup_started(fixturedef.argname)
+        with _output_disabled(request.config):
+            marks.write_setup_started(fixturedef.argname)
     try:
         result = yield
     except BaseException:
         if tracked:
-            marks.write_setup_result(fixturedef.argname, "error")
+            with _output_disabled(request.config):
+                marks.write_setup_result(fixturedef.argname, "error")
         raise
     if tracked:
-        marks.write_setup_result(fixturedef.argname, "done")
+        with _output_disabled(request.config):
+            marks.write_setup_result(fixturedef.argname, "done")
     return result
 
 
