@@ -22,8 +22,8 @@ class BenchRun:
         """Bind one BenchRun to a checkout, its loaded configuration and its result directory.
 
         Args:
-            checkout (pathlib.Path): The layer's clone this run reads the queue head against,
-                fetches the job's ref into, and tests.
+            checkout (pathlib.Path): The layer's clone this run reads the queue head against
+                and tests; `BenchTest` fetches the job's ref into it.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
                 names the systemd unit this run disables on the bench's own failure.
             result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value.
@@ -61,8 +61,6 @@ class BenchRun:
                 return
             ref, sha = head
 
-            subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
-
             check = Check(
                 self.config.github_repo,
                 self.config.github_app_id,
@@ -72,7 +70,7 @@ class BenchRun:
             summary = os.path.relpath(self._result_dir, self.checkout)
 
             try:
-                BenchTest(self.checkout, sha, None).run(lg_env, [])
+                BenchTest(self.checkout, sha, None, fetch=ref).run(lg_env, [])
             except CandidateFailure as exc:
                 check.post(sha, "failure", str(exc).splitlines()[0], summary)
                 return
