@@ -76,7 +76,7 @@ update automerges on green; a `major` update waits for review. See
 This repository is public. No address, hostname, SSID, MAC, serial or key reaches a tracked file; a
 test whose output carries one is a failing test.
 
-## Review
+## Review checklist
 
 Review is the `/pr-ready` flow: three reviewers (content, documentation discipline, test quality) in
 fresh contexts, findings to the implementer, escalations to the maintainer; the PR is not called
@@ -84,3 +84,44 @@ ready before they have closed.
 
 Comments state mechanism, one or two lines, no history, no issue numbers; the why lives in the ADR
 or the README. No temporal words ("now", "no longer").
+
+Each question below is an obligation on the author that leaves no artifact, so no check decides it —
+the reviewer is the mechanism.
+
+**Cite a question by number *and* name** — `question 6, *Every check watched failing*`. A bare
+number resolves silently to whatever occupies it after a renumber, in documents no sweep reliably
+reaches. New questions are appended for the same reason; inserting one is permitted and renumbers
+everything below.
+
+1. **No application knowledge.** Does the change add a unit name, board path, page state, probe,
+   replay set or config key that belongs to a consumer? (§ ["What this repository is not allowed to
+   know"](#what-this-repository-is-not-allowed-to-know))
+2. **No consumer reference.** Does the change add a pin, import, URL or path to a layer repository?
+   (§ ["What this repository is not allowed to know"](#what-this-repository-is-not-allowed-to-know))
+3. **No state between runs.** Does the change carry anything from one run to the next beyond the
+   DISABLED marker? (§ ["What this repository is not allowed to
+   know"](#what-this-repository-is-not-allowed-to-know))
+4. **Small classes, shell as glue.** Is new logic a small Python class with one job, with any shell
+   reduced to glue rather than read as logic? (§ ["How a change is built and
+   tested"](#how-a-change-is-built-and-tested))
+5. **The why-no-maintained-tool sentence.** Where the change adds a bespoke piece instead of a
+   well-supported tool, does it carry the sentence saying why no maintained tool fits, and does that
+   sentence hold up under review? (§ ["How a change is built and
+   tested"](#how-a-change-is-built-and-tested))
+6. **Every check watched failing.** Has a new fixture or runner step been proven on a fake board,
+   with a test that fails when the check is removed, and once on the real board? (§ ["How a change
+   is built and tested"](#how-a-change-is-built-and-tested))
+7. **No new provenance bypass.** Does the change add another way to skip the build, beyond the one
+   named exception? (§ ["How a change is built and tested"](#how-a-change-is-built-and-tested))
+8. **Two outcomes only.** Does the change keep outcomes to exactly two — the candidate's failure
+   posted, or the bench's own error leading to DISABLED with nothing posted — rather than inventing
+   a third? (§ ["How a change is built and tested"](#how-a-change-is-built-and-tested))
+9. **An ADR with a rejected alternative before code.** Does a design decision in the change have an
+   ADR, and does that ADR carry a rejected alternative? (§ ["Before you build
+   anything"](#before-you-build-anything))
+10. **A reading guide for long diffs.** Where the diff is over a screen, does the PR body carry a
+    reading guide — what it does, the stops in reading order, what to skip, where the risk sits?
+    (§ ["Getting a change merged"](#getting-a-change-merged))
+11. **Comments as mechanism only.** Does each comment the change adds state mechanism, one or two
+    lines, with no history, no issue numbers and no temporal words? (§ ["Review
+    checklist"](#review-checklist))
