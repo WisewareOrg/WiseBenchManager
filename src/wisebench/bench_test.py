@@ -27,6 +27,18 @@ class CandidateFailure(Exception):
     """A failure that is the candidate's: a `build`/`bundle` hook, or a test's own call failing."""
 
 
+def _reason(exc):
+    """The exception's first line, or "" for one with no message (e.g. a bare KeyboardInterrupt).
+
+    Args:
+        exc (BaseException): The exception a stage marker's `reason=` is taken from.
+
+    Returns:
+        str: The first line of `str(exc)`, or "".
+    """
+    return str(exc).splitlines()[0] if str(exc) else ""
+
+
 class BenchTest:
     """One `bench test <ref>` run: the checkout, ref, replay set name and skip-build flag."""
 
@@ -70,12 +82,12 @@ class BenchTest:
         marks.write_stage_started("checkout")
         try:
             commit = self._checkout_commit()
-        except Exception as exc:
-            marks.write_stage_result("checkout", "error", reason=str(exc).splitlines()[0])
+            config = Config.load(self.checkout / "bench.toml")
+        except BaseException as exc:
+            marks.write_stage_result("checkout", "error", reason=_reason(exc))
             raise
         marks.write_stage_result("checkout", "passed", sha=commit)
 
-        config = Config.load(self.checkout / "bench.toml")
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         env = {
             **os.environ,
@@ -93,7 +105,7 @@ class BenchTest:
         if not self.skip_build:
             self._run_hook(config.hooks["build"], env, CandidateFailure, "build", "failed")
             self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle", "failed")
-            self._run_suite(config.host_suite, env, [])
+            self._run_suite(config.host_suite, env, [], "host_suite")
             candidate_args = [BENCH_CANDIDATE_OPTION, commit]
         else:
             marks.write_stage_result("build", "skipped")
@@ -101,7 +113,7 @@ class BenchTest:
             marks.write_stage_result("host_suite", "skipped")
 
         target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
-        self._run_suite(config.target_suite, env, target_args)
+        self._run_suite(config.target_suite, env, target_args, "target_suite")
 
     def _checkout_commit(self):
         """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.
@@ -155,16 +167,21 @@ class BenchTest:
             failure = failure_cls(f"{name} exited {exc.returncode}")
             marks.write_stage_result(name, error_result, reason=str(failure))
             raise failure from exc
+        except BaseException as exc:
+            marks.write_stage_result(name, "error", reason=_reason(exc))
+            raise
         marks.write_stage_result(name, "passed")
 
-    def _run_suite(self, suite, env, extra_args):
+    def _run_suite(self, suite, env, extra_args, name=None):
         """Run pytest on one suite directory, its output inherited straight to the terminal.
 
         Args:
-            suite (str): The suite's path, relative to the checkout -- also its stage name, and
-                the subdirectory of the run log's directory its own BENCH_RECORD_DIR points at.
+            suite (str): The suite's path, relative to the checkout.
             env (dict[str, str]): The subprocess environment.
             extra_args (list[str]): Extra pytest arguments, appended last.
+            name (str | None): The stage name (`"host_suite"`/`"target_suite"`), also the
+                subdirectory of the run log's directory its own BENCH_RECORD_DIR points at.
+                Defaults to `suite` itself.
 
         Raises:
             CandidateFailure: pytest exited 1 -- a test's own call failed.
@@ -173,16 +190,21 @@ class BenchTest:
                 (`plugin.py` substitutes its own exit status whenever the session reports an
                 error).
         """
-        marks.write_stage_started(suite)
-        suite_env = {**env, BENCH_RECORD_DIR: str(self.run_log.directory / suite)}
+        stage = name or suite
+        marks.write_stage_started(stage)
+        suite_env = {**env, BENCH_RECORD_DIR: str(self.run_log.directory / stage)}
         command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
-        result = subprocess.run(command, cwd=self.checkout, env=suite_env)
+        try:
+            result = subprocess.run(command, cwd=self.checkout, env=suite_env)
+        except BaseException as exc:
+            marks.write_stage_result(stage, "error", reason=_reason(exc))
+            raise
         if result.returncode == 1:
             failure = CandidateFailure(f"{suite} failed")
-            marks.write_stage_result(suite, "failed", reason=str(failure))
+            marks.write_stage_result(stage, "failed", reason=str(failure))
             raise failure
         if result.returncode != 0:
             failure = BenchFailure(f"{suite} pytest exited {result.returncode}")
-            marks.write_stage_result(suite, "error", reason=str(failure))
+            marks.write_stage_result(stage, "error", reason=str(failure))
             raise failure
-        marks.write_stage_result(suite, "passed")
+        marks.write_stage_result(stage, "passed")
