@@ -313,7 +313,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
             pass
 
     class _SigtermBenchTest:
-        def __init__(self, checkout, ref, set_name):
+        def __init__(self, checkout, ref, set_name, fetch=None):
             pass
 
         def run(self, lg_env, pytest_args):
