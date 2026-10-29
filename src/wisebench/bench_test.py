@@ -73,8 +73,8 @@ class BenchTest:
         """
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         log = self._open_log(result_dir)
-        self._mark(log, f"run started kind={'run' if self.fetch else 'test'} ref={self.ref}")
         try:
+            self._mark(log, f"run started kind={'run' if self.fetch else 'test'} ref={self.ref}")
             with self._stage(log, "checkout") as info:
                 if self.fetch:
                     subprocess.run(
@@ -232,9 +232,8 @@ class BenchTest:
         except subprocess.CalledProcessError as exc:
             raise failure_cls(f"{name} exited {exc.returncode}") from exc
 
-    def _run_suite(self, suite, env, extra_args, log=None):
-        """Run pytest on one suite directory, its output appended to `log`, or inherited
-        straight to the terminal when `log` is None.
+    def _run_suite(self, suite, env, extra_args, log):
+        """Run pytest on one suite directory, its output appended to `log`.
 
         Args:
             suite (str): The suite's path, relative to the checkout.
@@ -249,8 +248,9 @@ class BenchTest:
                 error).
         """
         command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
-        redirect = {"stdout": log, "stderr": subprocess.STDOUT} if log is not None else {}
-        result = subprocess.run(command, cwd=self.checkout, env=env, **redirect)
+        result = subprocess.run(
+            command, cwd=self.checkout, env=env, stdout=log, stderr=subprocess.STDOUT
+        )
         if result.returncode == 1:
             raise CandidateFailure(f"{suite} failed")
         if result.returncode != 0:
