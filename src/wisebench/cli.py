@@ -104,6 +104,9 @@ def main(argv=None):
                 marks.write_run_result("error")
                 print(f"BENCH ERROR: {exc}", file=sys.stderr)
                 return 2
+            except BaseException:
+                marks.write_run_result("error")
+                raise
             marks.write_run_result("passed")
             print("PASS")
             return 0
