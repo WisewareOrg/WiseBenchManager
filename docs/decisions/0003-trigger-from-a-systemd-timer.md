@@ -40,10 +40,6 @@ host. What the choice is held to:
   job serialisation and status reporting all for free, and no queue-reading code of ours. Rejected:
   it is a long-lived registered runner on the build host, which organisation policy forbids, and the
   timer and the lock already give the trigger and the exclusion with tools the host runs anyway.
-- **labgrid's coordinator for the lock.** Places with acquire and reserve, maintained, from the same
-  project as the board's pytest plugin. Rejected: it earns its keep with more than one board or
-  more than one user, neither of which the bench has, and it has no timer, so the trigger would
-  still be ours.
 
 ## Consequences
 
@@ -55,5 +51,4 @@ host. What the choice is held to:
   bench does not keep failing on every tick; restarting it is a hand step.
 
 **Premise that would reopen this:** the organisation's CI policy changing what may run on the build
-host, which makes the Actions runner the pre-analysed alternative; or a second board or user, which
-makes labgrid's coordinator worth its weight for the lock.
+host, which makes the Actions runner the pre-analysed alternative.
