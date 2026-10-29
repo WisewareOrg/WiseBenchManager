@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from datetime import UTC, datetime
 
 from wisebench.plugin import _TIMESTAMP
@@ -25,6 +26,8 @@ class RunLog:
         Returns:
             RunLog: self, with `.directory` set to the stamped run directory.
         """
+        sys.stdout.flush()
+        sys.stderr.flush()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime(_TIMESTAMP)
         directory = self.base_dir / stamp
@@ -52,6 +55,8 @@ class RunLog:
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Restore fd 1 and 2 to what they were before, then wait for `tee` to drain and exit."""
+        sys.stdout.flush()
+        sys.stderr.flush()
         os.dup2(self._saved_stdout, 1)
         os.dup2(self._saved_stderr, 2)
         os.close(self._saved_stdout)
