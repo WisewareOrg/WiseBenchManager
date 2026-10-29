@@ -1,4 +1,4 @@
-# 0004 — The layer installs the candidate through its own fixture; the runner owns no device procedure
+# 0004 — Install the candidate from the layer's own fixture; the runner owns no device procedure
 
 **Status:** accepted
 **Decided:** 2026-10-13 (WisewareOrg/WiseBenchManager#18 remove the runner's install stage)
@@ -27,9 +27,10 @@ runs.
 ## Alternatives considered
 
 - **The runner installs the bundle itself** (labgrid `put`, `rauc install`, reboot). Rejected: it
-  duplicated the layer's own update procedure, the two drifted, and the runner's copy crashed the
-  board's hardware watchdog twice where the layer's own path never has. Its tests ran only against a
-  fake driver, where that class of failure cannot show.
+  duplicated the layer's own update procedure and the two drifted. Two of about eight of the
+  runner's installs on the bench board were cut off mid-write when the board's hardware watchdog
+  reset it; no such failure is known on the layer's own path, which has run hundreds of times. The
+  runner's install was tested only against a fake driver, where that class of failure cannot show.
 
 ## Consequences
 

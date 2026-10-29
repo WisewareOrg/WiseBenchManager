@@ -1,7 +1,7 @@
-# 0001 — Run the suites with a small runner on pytest and labgrid's plugin, not a test framework of its own
+# 0001 — Run the suites with a small runner on pytest and labgrid's plugin, not an existing hardware-in-the-loop framework
 
 **Status:** accepted
-**Decided:** 2026-10-11 (WisewareOrg/WiseBenchManager#2 core: pytest-reportlog record, run-level file, labgrid for ssh)
+**Decided:** 2026-10-11 (the runner survey that founded this repository; built in WisewareOrg/WiseBenchManager#2 core)
 **Rev:** 1
 
 ## Revisions
@@ -19,6 +19,7 @@ cannot set one up, so every state a test needed became driver code, and the driv
 every test ticket. What the choice is held to:
 
 - A test owns its own setup and teardown; the runner does not change when a test's needs change.
+- The runner is generic: it knows no layer, and a layer knows the runner only through its config.
 - One language, read in review: Python.
 - A maintained tool before code of our own.
 - One board over ssh: no power control, no serial console, no second board planned.
@@ -27,8 +28,7 @@ every test ticket. What the choice is held to:
 
 A small Python runner in its own repository. Every test is pytest, in a host suite and a target
 suite the layer names. labgrid's own pytest plugin and env file are the board; pytest-reportlog's
-JSON-lines report is the record. The runner adds only the job around them: the layer's hooks, the
-lock and the queue, the check run, and the fixtures no maintained tool provides.
+JSON-lines report is the record, with one run-level file of the runner's own beside it.
 
 ## Alternatives considered
 
@@ -41,18 +41,15 @@ lock and the queue, the check run, and the fixtures no maintained tool provides.
   QEMU integration carries no weight.
 - **labgrid as the whole runner.** Rejected: its value is places, a coordinator, power and serial
   drivers and board strategies, none of which one board over ssh uses, and it has no RAUC strategy.
-  Its pytest plugin and env file are used as the board.
 - **LAVA, KernelCI.** Rejected: a database, scheduler and workers for one board; no OTA deploy
   action; tests run on the device rather than host-side; verdicts are not GitHub check runs.
 - **Fuego, Avocado, pytest-embedded.** Rejected: Fuego is unmaintained since 2020; Avocado has no
   deploy or boot model; pytest-embedded is scoped to microcontrollers.
-- **The runner's own ssh transport, record writer, test marker and fake board.** Rejected: each
-  re-implements what labgrid's plugin, pytest-reportlog and `record_property` already do.
+- **The runner's own ssh transport, test record and test marker.** Rejected: each re-implements
+  what labgrid's plugin, pytest-reportlog and `record_property` already do.
 
 ## Consequences
 
 - A new check is a test file and, at most, a fixture beside it, in the layer.
-- The suites run under the runner's interpreter, so a layer's test helpers import only what the
-  runner's lock file ships, plus the layer's own `pythonpath`.
 - Reopened if a second board, power control or a serial console arrives: labgrid's coordinator and
   strategies become worth adopting, and the tests' shape does not change.

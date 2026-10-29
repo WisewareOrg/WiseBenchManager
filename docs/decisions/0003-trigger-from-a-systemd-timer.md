@@ -1,7 +1,7 @@
 # 0003 — Start `bench run` from a systemd user timer under `flock`, not a CI runner
 
 **Status:** accepted
-**Decided:** 2026-10-11 (WisewareOrg/WiseBenchManager#6 `bench run`: the lock, the queue head, the job)
+**Decided:** 2026-10-11 (the runner survey that founded this repository; built in WisewareOrg/WiseBenchManager#6 `bench run`)
 **Rev:** 1
 
 ## Revisions
@@ -19,10 +19,9 @@ held to:
 
 ## Decision
 
-A systemd user timer starts `bench run`. It reads the merge queue's head from the
-`gh-readonly-queue` refs with `git ls-remote`, and holds an `fcntl.flock` on a lock file it shares
-with `bench test`: a timer tick that finds the lock held backs off, and a hand run that finds it held
-refuses.
+A systemd user timer starts `bench run`, which takes the merge queue's head. It holds an
+`fcntl.flock` on a lock file it shares with `bench test`: a timer tick that finds the lock held
+backs off, and a hand run that finds it held refuses.
 
 ## Alternatives considered
 
@@ -33,6 +32,4 @@ refuses.
 ## Consequences
 
 - Merges serialise at the length of one build-and-test job on one board; this is accepted.
-- A queue entry waits up to one timer interval before a run picks it up.
-- The timer is the unit the bench's own failure disables, so a broken bench stops itself.
 - Reopened if the organisation's CI policy changes what may run on the build host.
