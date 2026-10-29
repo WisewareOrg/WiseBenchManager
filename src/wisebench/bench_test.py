@@ -74,7 +74,10 @@ class BenchTest:
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         log = self._open_log(result_dir)
         try:
-            self._mark(log, f"run started kind={'run' if self.fetch else 'test'} ref={self.ref}")
+            self._mark(
+                log,
+                f"run started kind={'run' if self.fetch else 'test'} ref={self.fetch or self.ref}",
+            )
             with self._stage(log, "checkout") as info:
                 if self.fetch:
                     subprocess.run(
@@ -125,7 +128,11 @@ class BenchTest:
             log.close()
 
     def _open_log(self, result_dir):
-        """Create `result_dir/<stamp>/bench.log`, retrying with `-2`, `-3` on a collision."""
+        """Create `result_dir/<stamp>/bench.log`, retrying with `-2`, `-3` on a collision.
+
+        Returns:
+            BinaryIO: The log, opened append-binary.
+        """
         stamp = datetime.now(UTC).strftime(_TIMESTAMP)
         suffix = 1
         while True:
@@ -153,7 +160,12 @@ class BenchTest:
     @contextmanager
     def _stage(self, log, name):
         """Bracket one stage with `started`/`passed`/`failed`/`error` lines; yields a dict the
-        body may set `sha` on, appended to the `passed` line."""
+        body may set `sha` on, appended to the `passed` line.
+
+        Raises:
+            Exception: Whatever the body raised, after logging it as the stage's failed/error
+                line.
+        """
         info = {}
         self._mark(log, f"stage {name} started")
         try:
@@ -215,6 +227,7 @@ class BenchTest:
             failure_cls (type[Exception]): `BenchFailure` for `precondition`, `CandidateFailure`
                 for `build`/`bundle`.
             name (str): The hook's name, for the raised failure's message.
+            log (BinaryIO): The run's bench.log.
 
         Raises:
             failure_cls: The hook exited nonzero.
@@ -239,6 +252,7 @@ class BenchTest:
             suite (str): The suite's path, relative to the checkout.
             env (dict[str, str]): The subprocess environment.
             extra_args (list[str]): Extra pytest arguments, appended last.
+            log (BinaryIO): The run's bench.log.
 
         Raises:
             CandidateFailure: pytest exited 1 -- a test's own call failed.
