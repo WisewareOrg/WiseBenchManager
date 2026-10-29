@@ -39,9 +39,11 @@ on whose it was.
 
 | # | Rev | Decided | Decision |
 |---|---|---|---|
-| [0001](0001-verify-with-a-python-bench-runner.md) | 6 | 2026-10-15 | Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay |
+| [0001](0001-run-the-suites-on-pytest-and-labgrid.md) | 1 | 2026-10-11 | Run the suites with a small runner on pytest and labgrid's plugin, not a test framework of its own |
+| [0002](0002-replay-with-mitmproxy.md) | 1 | 2026-10-12 | Replay recorded traffic with mitmproxy's own server replay and its own output |
+| [0003](0003-trigger-from-a-systemd-timer.md) | 1 | 2026-10-11 | Start `bench run` from a systemd user timer under `flock`, not a CI runner |
+| [0004](0004-the-layer-installs-the-candidate.md) | 1 | 2026-10-13 | The layer installs the candidate through its own fixture; the runner owns no device procedure |
 
 ## Revisions
 
-- **rev 1** — 2026-10-11 — first written, alongside ADR 0001 (WisewareOrg/meta-wisekiosk#223 generic
-  Yocto test runner).
+- **rev 1** — 2026-10-11 — first written.
