@@ -1,0 +1,51 @@
+name: CodeQL
+
+# Modelled on WiseKiosk's codeql.yml, minus `merge_group` (no merge queue here). The `process-gates`
+# ruleset's `code_scanning` rule reads these results on every pull request.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # `name:` equals the id; GitHub suffixes each matrix leg's check name with its values, so the
+  # required-status-check context is `codeql (actions, none)`.
+  codeql:
+    name: codeql
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # analyze uploads the SARIF results to code scanning
+      actions: read # init reads workflow run metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}
