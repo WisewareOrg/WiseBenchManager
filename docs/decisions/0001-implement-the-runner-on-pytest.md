@@ -50,9 +50,9 @@ maintained pieces carry everything a check needs from the runner:
 - **oeqa runtime tests.** The most Yocto-native route, and what a layer's test side already is.
   Rejected on the second force above: a case runs but cannot set itself up, and cases do not assert;
   verdict objects sit between the test and the fact it checks. As a custom `TEST_TARGET` controller
-  it would make `testimage` change the board, fusing runner and layer into one tree, on a loader poky itself marks *"Don't base your targets on this
-  code it will be refactored"*. Its record carries no dirty flag and no replay hash. No QEMU tier is
-  planned, so its QEMU integration, the thing it does best, carries no weight.
+  it would make `testimage` change the board, fusing runner and layer into one tree, on a loader
+  poky itself marks *"Don't base your targets on this code it will be refactored"*. Its record
+  carries no dirty flag and no replay hash.
 - **labgrid as the whole runner.** The closest fit on paper: a pytest plugin, `SSHDriver` for the
   transport, a `Strategy` state machine as the documented place for install, reboot and slot
   detection, fake drivers for a board-less self-test, and an active release line. Rejected because
@@ -71,13 +71,14 @@ maintained pieces carry everything a check needs from the runner:
   not host-side; its verdicts are notifications, not GitHub check runs.
 - **KernelCI.** LAVA labs plus its own pipeline, built for upstream kernel testing; heavier than LAVA
   and adds nothing on the board side for a product image.
-- **Yocto autobuilder.** Builds a ref and schedules, which nothing else surveyed does. Rejected: its
-  test matrix is QEMU, its verdicts go to buildbot's UI, and its record is buildbot's log store.
+- **Yocto autobuilder.** Builds a ref and schedules, which nothing else surveyed does. Rejected: a
+  buildbot master and workers with a heavily customised config, its verdicts go to buildbot's UI,
+  and its record is buildbot's log store.
 - **Avocado.** A maintained, generic runner whose remote spawner runs tests over ssh — a real
   competitor to pytest as the harness. Rejected: it has no deploy or boot model, and labgrid's board
   integration is a pytest plugin, so the board would be ours to write again.
 - **pytest-embedded.** pytest already, with a board model. Rejected: scoped to microcontrollers
-  (ESP-IDF, serial, JTAG, QEMU), with no Linux-over-ssh or OTA service.
+  (ESP-IDF over serial and JTAG), with no Linux-over-ssh or OTA service.
 - **Fuego.** Jenkins in a container with an ssh transport. Rejected: last release December 2020.
 
 ## Consequences
@@ -92,10 +93,8 @@ maintained pieces carry everything a check needs from the runner:
 - **labgrid is a pinned dependency, and its env file is the board's config.** The board's identity
   lives in a labgrid file beside `bench.toml`, not in `bench.toml` itself, because labgrid's plugin
   reads its own.
-- **No test runs without a board.** There is no QEMU tier; a check of the booted image needs the
-  bench.
 
-**Premise that would reopen this:** a second board, power control or a serial console. Each is
-what labgrid's coordinator, power drivers and strategies are for, and adopting more of labgrid is
-the pre-analysed path; the checks' shape does not change, since they are pytest either way. A
-harness with nicer syntax, or a faster one, is not that premise.
+**Premise that would reopen this:** a check whose setup or teardown a fixture cannot express, or
+labgrid's pytest plugin or pytest-reportlog ceasing to be maintained. A second board, power control
+or a serial console is not that premise: each is more of labgrid inside the same harness. Nor is a
+harness with nicer syntax, or a faster one.
