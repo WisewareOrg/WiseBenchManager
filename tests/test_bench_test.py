@@ -331,7 +331,7 @@ def test_a_failing_fetch_is_an_error_and_pins_kind_run(monkeypatch, tmp_path):
 
 
 def test_a_keyboardinterrupt_during_a_hook_is_an_error_and_reraises(monkeypatch, tmp_path):
-    """A KeyboardInterrupt during a hook marks a stage error and a run error, then reraises."""
+    """A KeyboardInterrupt during a hook is an error, reraised."""
     monkeypatch.chdir(tmp_path)
     _repo_with_one_commit(tmp_path)
     _write_bench_toml(tmp_path)
