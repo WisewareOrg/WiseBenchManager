@@ -39,7 +39,8 @@ on whose it was.
 
 | # | Rev | Decided | Decision |
 |---|---|---|---|
-| [0001](0001-verify-with-a-python-bench-runner.md) | 6 | 2026-10-15 | Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay |
+| [0001](0001-verify-with-a-python-bench-runner.md) | 7 | 2026-10-15 | Verify the appliance with a Python bench runner in its own repository, pytest for every test, mitmproxy for replay |
+| [0002](0002-one-log-per-run-and-the-watch-view.md) | 1 | 2026-10-28 | One log per run, and the watch view that reads it |
 
 ## Revisions
 

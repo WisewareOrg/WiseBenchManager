@@ -3,7 +3,8 @@
 A generic pytest hardware-in-the-loop runner for over-the-air updated boards. It takes a git ref of a
 Yocto layer through build and test to a verdict, and it knows nothing about the application the board
 runs — installing a candidate on the board is the layer's own job, through its own fixture. Design
-decisions are in [`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 6.
+decisions are in [`docs/decisions/`](docs/decisions/README.md); the shape of the runner is ADR 0001 rev 7
+and ADR 0002 rev 1.
 
 ## Two commands
 
@@ -132,22 +133,36 @@ There is no marker and no credit rule of the runner's own.
 
 ## The record
 
-pytest-reportlog's JSON-lines report (`--report-log`, set to `$BENCH_RESULT_DIR/<UTC start
-time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: every test report,
-with whatever a layer attaches through `record_property`. Beside it the runner writes one file per
-run, `run.json`, written at session end so a run that fails halfway still leaves everything up to
-that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
-line, the start and end times, and the exit status. The plugin reads whichever of a set of
+Every run (a `bench run` cycle that took a job, or any `bench test`) gets one stamped directory,
+`$BENCH_RESULT_DIR/<UTC start time>/` (`BENCH_RESULT_DIR` defaults to `records/`; a second run in
+the same second gets `-2`, then `-3`); a cycle that found no job creates none. It holds
+`bench.log`, the run's whole output from the moment the job is taken -- both hooks and both
+suites, stdout and stderr merged, captured by a real `tee` so the same bytes still reach the
+terminal or the service's journal -- and `host_suite/`, `target_suite/`, each the matching suite's
+own pytest-reportlog report and `run.json`, pointed there through `BENCH_RECORD_DIR`, set for
+that suite subprocess only. `bench.log` carries `bench:`-prefixed marker lines (`src/wisebench/
+marks.py`; the grammar is ADR 0002 rev 1) giving a reader positions in the stream -- a stage's
+start and result, a suite's collected count, each test's start -- interleaved with whatever the
+hooks and pytest themselves print; it is kept output, not a record format of its own, and test
+outcomes stay pytest-reportlog's.
+
+Within a suite's own directory, pytest-reportlog's JSON-lines report (`report.jsonl`) is the
+record of every test report, with whatever a layer attaches through `record_property`. Beside it
+the plugin writes `run.json` at session end, so a run that fails halfway still leaves everything
+up to that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest
+command line, the start and end times, and the exit status. The plugin reads whichever of a set of
 `BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
 field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
 `BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
-one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
-it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
-A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
-`record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
-stderr to `proxy-<test>-<n>.log` beside that run's `report.jsonl`, one file per fixture use, with
-the flow file `served()` and `killed()` read back at `proxy-<test>-<n>.flows` beside it. At
-teardown it attaches `served_count` and `killed_count` through `record_property`.
+one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only
+variable; it never reaches `run.json`. A plain `pytest` invocation outside the runner, with
+neither `BENCH_RECORD_DIR` nor `BENCH_RESULT_DIR` set, still writes its own `records/<timestamp>/`
+this way, unchanged. A per-item credit map is not built. The `proxy` fixture attaches the
+recording's sha256 through `record_property` under the key `recording_sha256`, and writes
+mitmdump's combined stdout and stderr to `proxy-<test>-<n>.log` beside that suite's own
+`report.jsonl`, one file per fixture use, with the flow file `served()` and `killed()` read back
+at `proxy-<test>-<n>.flows` beside it. At teardown it attaches `served_count` and `killed_count`
+through `record_property`.
 
 ## Running it
 

@@ -7,3 +7,4 @@ WorkingDirectory=/path/to/the/layer/checkout
 EnvironmentFile=%h/.config/wisebench/env
 ExecStart=/path/to/the/venv/bin/bench run
 TimeoutStartSec=6h
+KillMode=mixed
