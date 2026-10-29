@@ -1,9 +1,9 @@
-"""`BenchRun.run`: `DISABLED`, the queue head, the posted verdict, and the `bench.log` run/stage
-lines issue #27 adds around it -- RunLog created only once a job is taken, `checkout` spanning
-the fetch, and `ref=` carrying the queue ref, not the sha."""
+"""`BenchRun.run`: `DISABLED`, the queue head, the posted verdict, and the `bench.log` run
+lines issue #27 adds around it -- RunLog created only once a job is taken, `ref=` carrying
+the queue ref not the sha, and BenchTest built with `fetch_from="origin"` so the fetch itself
+runs inside BenchTest's own checkout stage (see test_bench_test.py), never here."""
 
 import re
-import subprocess
 
 import pytest
 
@@ -11,10 +11,6 @@ from wisebench import bench_run, bench_test
 from wisebench.config import Config
 
 _RUN_STARTED_RE = re.compile(r"^bench: \S+ run started kind=(?P<kind>\S+) ref=(?P<ref>.*)$")
-_STAGE_RESULT_RE = re.compile(
-    r"^bench: \S+ stage (?P<name>\S+) (?P<result>passed|failed|error|skipped)"
-    r"(?: sha=(?P<sha>\S+))?(?: reason=(?P<reason>.*))?$"
-)
 _RUN_RESULT_RE = re.compile(r"^bench: \S+ run (?P<result>passed|failed|error)$")
 
 
@@ -64,11 +60,12 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name, run_log):
+    def __init__(self, checkout, ref, set_name, run_log, fetch_from=None):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
         self.run_log = run_log
+        self.fetch_from = fetch_from
         self.run_calls = []
         _FakeBenchTest.instances.append(self)
 
@@ -117,13 +114,11 @@ def made(monkeypatch):
     yield
 
 
-def _stub_subprocess(monkeypatch, *, error_on=None):
-    """Fake `bench_run.subprocess.run`.
+def _stub_subprocess(monkeypatch):
+    """Fake `bench_run.subprocess.run` (only `systemctl`, on the bench-failure path).
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
-        error_on (list | None): A command prefix that raises `CalledProcessError` instead of
-            succeeding, or None.
 
     Returns:
         list: Each call's command, in order.
@@ -132,8 +127,6 @@ def _stub_subprocess(monkeypatch, *, error_on=None):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if error_on is not None and command[: len(error_on)] == error_on:
-            raise subprocess.CalledProcessError(1, command)
 
         class _Result:
             returncode = 0
@@ -191,16 +184,21 @@ def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
     assert _run_dirs(tmp_path) == []
 
 
-def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monkeypatch, tmp_path):
-    """run fetches and tests the queue head's sha, then posts success."""
+def test_run_builds_benchtest_with_the_queue_ref_and_fetch_from_origin_then_posts_success(
+    made, monkeypatch, tmp_path
+):
+    """run builds BenchTest with ref=<the queue ref> and fetch_from="origin" -- the fetch
+    itself runs inside BenchTest's own checkout stage, never as a call BenchRun makes -- and
+    posts success on the queue head's sha."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path)
     run.run("env.yaml")
 
-    assert calls == [["git", "fetch", "origin", "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"]]
+    assert calls == []
     assert _FakeBenchTest.instances[0].checkout == tmp_path
-    assert _FakeBenchTest.instances[0].ref == "cafef00d"
+    assert _FakeBenchTest.instances[0].ref == "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
+    assert _FakeBenchTest.instances[0].fetch_from == "origin"
     assert _FakeBenchTest.instances[0].set_name is None
     assert _FakeBenchTest.instances[0].run_calls == [("env.yaml", [])]
     assert _FakeCheck.posts == [("cafef00d", "success", "PASS", "records")]
@@ -284,26 +282,6 @@ def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_reraises_and_
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "precondition exited 9")
     lines = [line for line in _bench_log_lines(tmp_path) if line]
-    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
-
-
-def test_run_on_a_failing_fetch_writes_a_stage_checkout_error_marker_then_run_error(
-    made, monkeypatch, tmp_path
-):
-    """A failing `git fetch` writes `stage checkout error reason=...` then `run error`, and
-    never constructs a BenchTest -- the checkout stage includes bench run's own fetch."""
-    calls = _stub_subprocess(monkeypatch, error_on=["git", "fetch"])
-    _FakeQueue.result = _QUEUE_HEAD
-    run = _make_run(tmp_path, run_unit="scratch-unit")
-
-    with pytest.raises(subprocess.CalledProcessError):
-        run.run("env.yaml")
-
-    _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "returned non-zero exit status")
-    assert _FakeBenchTest.instances == []
-    lines = [line for line in _bench_log_lines(tmp_path) if line]
-    [checkout] = [m for line in lines if (m := _STAGE_RESULT_RE.match(line)) and m["name"] == "checkout"]
-    assert checkout["result"] == "error"
     assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
 
 

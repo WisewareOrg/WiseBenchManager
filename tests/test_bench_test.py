@@ -409,6 +409,100 @@ def test_a_keyboardinterrupt_from_a_suite_writes_a_stage_error_marker_and_rerais
     assert host_suite["result"] == "error"
 
 
+_QUEUE_REF = "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
+
+
+def _stub_subprocess_with_fetch(monkeypatch):
+    """Stub `bench_test.subprocess.run` as `_stub_subprocess` does, recording every call's
+    command; `git fetch` succeeds like everything else.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
+
+    Returns:
+        list: Each call's command, in order.
+    """
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(list(command) if not isinstance(command, str) else command)
+        if isinstance(command, list) and command[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(command, 0, stdout="deadbeef\n")
+        if isinstance(command, list) and command[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(command, 0, stdout="")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bench_test.subprocess, "run", fake_run)
+    return calls
+
+
+def test_fetch_from_fetches_before_resolving_the_ref(monkeypatch, tmp_path):
+    """fetch_from="origin" runs `git fetch origin <ref>` first, before resolving and checking
+    out the ref."""
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    calls = _stub_subprocess_with_fetch(monkeypatch)
+    _write_bench_toml(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, _QUEUE_REF, None, _run_log(tmp_path), fetch_from="origin")
+
+    bench.run("env.yaml", [])
+
+    assert calls[0] == ["git", "fetch", "origin", _QUEUE_REF]
+    assert calls[1][:2] == ["git", "rev-parse"]
+    assert calls[2][:2] == ["git", "status"]
+    assert calls[3][:2] == ["git", "checkout"]
+
+
+def test_no_fetch_from_never_fetches(monkeypatch, tmp_path):
+    """Without fetch_from (bench test's own case), no `git fetch` call is ever made."""
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    calls = _stub_subprocess_with_fetch(monkeypatch)
+    _write_bench_toml(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, _run_log(tmp_path))
+
+    bench.run("env.yaml", [])
+
+    assert not any(isinstance(c, list) and c[:2] == ["git", "fetch"] for c in calls)
+
+
+def test_fetch_from_and_the_checkout_it_precedes_share_one_stage_span(monkeypatch, tmp_path):
+    """The fetch and the rev-parse/checkout/config-load that follow it are one `checkout`
+    stage -- a single started line and a single result line, not two."""
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    _stub_subprocess_with_fetch(monkeypatch)
+    _write_bench_toml(tmp_path)
+    log = _run_log(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, _QUEUE_REF, None, log, fetch_from="origin")
+
+    bench.run("env.yaml", [])
+
+    lines = _bench_log_text(log).splitlines()
+    assert _stage_started(lines).count("checkout") == 1
+    assert len([m for m in _stage_results(lines) if m["name"] == "checkout"]) == 1
+
+
+def test_a_failing_fetch_writes_stage_checkout_started_then_error(monkeypatch, tmp_path):
+    """A failing `git fetch` still opens the checkout stage, then closes it with
+    `stage checkout error reason=...`, and reraises -- BenchTest never resolves or checks
+    out anything."""
+
+    def fake_run(command, **kwargs):
+        if isinstance(command, list) and command[:2] == ["git", "fetch"]:
+            raise subprocess.CalledProcessError(128, command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(bench_test.subprocess, "run", fake_run)
+    _write_bench_toml(tmp_path)
+    log = _run_log(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, _QUEUE_REF, None, log, fetch_from="origin")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        bench.run("env.yaml", [])
+
+    [checkout] = [m for m in _stage_results(_bench_log_text(log).splitlines()) if m["name"] == "checkout"]
+    assert "checkout" in _stage_started(_bench_log_text(log).splitlines())
+    assert checkout["result"] == "error"
+
+
 def _stub_subprocess(monkeypatch):
     """Stub `bench_test.subprocess.run`, recording every call's command and environment.
 
