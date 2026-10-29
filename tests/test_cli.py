@@ -1,8 +1,10 @@
-"""`main`'s exit-code mapping, against a scripted fake `BenchTest`/`BenchRun`."""
+"""`main`'s exit-code mapping, against a scripted fake `BenchTest`/`BenchRun`, and the
+`bench.log` run lines issue #27 adds around a `bench test` call."""
 
 import contextlib
 import fcntl
 import os
+import re
 import signal
 
 import pytest
@@ -10,16 +12,32 @@ import pytest
 from wisebench import bench_run, bench_test, cli
 from wisebench.lock import Lock
 
+_RUN_STARTED_RE = re.compile(r"^bench: \S+ run started kind=(?P<kind>\S+) ref=(?P<ref>.*)$")
+_RUN_RESULT_RE = re.compile(r"^bench: \S+ run (?P<result>passed|failed|error)$")
+
+
+def _run_dirs(tmp_path):
+    records = tmp_path / "records"
+    if not records.is_dir():
+        return []
+    return [p for p in records.iterdir() if p.is_dir()]
+
+
+def _bench_log_lines(tmp_path):
+    [run_dir] = _run_dirs(tmp_path)
+    return [line for line in (run_dir / "bench.log").read_text().splitlines() if line]
+
 
 class _FakeBenchTest:
-    """Scripted stand-in for `BenchTest.run`."""
+    """Scripted stand-in for `BenchTest.run`; writes no markers of its own."""
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name, skip_build=False):
+    def __init__(self, checkout, ref, set_name, run_log, skip_build=False):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
+        self.run_log = run_log
         self.skip_build = skip_build
         self.run_calls = []
         self.outcome = None
@@ -130,12 +148,84 @@ def _hold_lock(tmp_path):
 
 
 def test_main_test_returns_2_when_the_lock_is_already_held(made, monkeypatch, tmp_path):
-    """main returns 2 for bench test when the lock is already held."""
+    """main returns 2 for bench test when the lock is already held, creating neither a
+    BenchTest nor a run directory."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "BenchTest", _build())
     with _hold_lock(tmp_path):
         assert cli.main(["test", "HEAD"]) == 2
-    assert made[0].run_calls == []
+    assert made == []
+    assert _run_dirs(tmp_path) == []
+
+
+def test_main_test_creates_bench_log_under_the_result_directory(made, monkeypatch, tmp_path):
+    """main creates records/<stamp>/bench.log for every bench test run."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD"]) == 0
+    [run_dir] = _run_dirs(tmp_path)
+    assert (run_dir / "bench.log").is_file()
+    assert made[0].run_log.directory == run_dir
+
+
+def test_main_test_writes_run_started_with_kind_test_and_the_given_ref(
+    made, monkeypatch, tmp_path
+):
+    """main writes `run started kind=test ref=<the given ref>` for bench test."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD"]) == 0
+    [started] = [m for line in _bench_log_lines(tmp_path) if (m := _RUN_STARTED_RE.match(line))]
+    assert started["kind"] == "test"
+    assert started["ref"] == "HEAD"
+
+
+def test_main_test_writes_run_passed_as_the_last_line_on_a_clean_run(made, monkeypatch, tmp_path):
+    """main writes `run passed` as bench.log's last line on a clean bench test run."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build())
+    assert cli.main(["test", "HEAD"]) == 0
+    lines = _bench_log_lines(tmp_path)
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "passed"
+
+
+def test_main_test_writes_run_failed_on_a_candidate_failure(made, monkeypatch, tmp_path):
+    """main writes `run failed` on a candidate failure."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(bench_test.CandidateFailure("build exited 1")))
+    assert cli.main(["test", "HEAD"]) == 1
+    lines = _bench_log_lines(tmp_path)
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "failed"
+
+
+def test_main_test_writes_run_error_on_a_bench_failure(made, monkeypatch, tmp_path):
+    """main writes `run error` on a bench failure."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(bench_test.BenchFailure("precondition exited 2")))
+    assert cli.main(["test", "HEAD"]) == 2
+    lines = _bench_log_lines(tmp_path)
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
+
+
+def test_main_test_writes_run_error_on_a_raw_exception(made, monkeypatch, tmp_path):
+    """main writes `run error`, not `run failed`, on an exception that is neither
+    BenchFailure nor CandidateFailure."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(RuntimeError("tree is dirty: [' M x']")))
+    assert cli.main(["test", "HEAD"]) == 2
+    lines = _bench_log_lines(tmp_path)
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
+
+
+def test_main_test_writes_run_error_on_a_keyboardinterrupt(made, monkeypatch, tmp_path):
+    """main writes `run error` for a KeyboardInterrupt on a hand bench test, then lets it
+    propagate (a hand run's own Ctrl-C is never swallowed into an exit code)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "BenchTest", _build(KeyboardInterrupt()))
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["test", "HEAD"])
+    lines = _bench_log_lines(tmp_path)
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
 
 
 def _write_bench_toml(repo):
@@ -313,7 +403,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
             pass
 
     class _SigtermBenchTest:
-        def __init__(self, checkout, ref, set_name):
+        def __init__(self, checkout, ref, set_name, run_log):
             pass
 
         def run(self, lg_env, pytest_args):

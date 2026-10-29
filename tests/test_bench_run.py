@@ -1,11 +1,21 @@
-"""`BenchRun.run`: `DISABLED`, the queue head, and the posted verdict."""
+"""`BenchRun.run`: `DISABLED`, the queue head, the posted verdict, and the `bench.log` run/stage
+lines issue #27 adds around it -- RunLog created only once a job is taken, `checkout` spanning
+the fetch, and `ref=` carrying the queue ref, not the sha."""
 
+import re
 import subprocess
 
 import pytest
 
 from wisebench import bench_run, bench_test
 from wisebench.config import Config
+
+_RUN_STARTED_RE = re.compile(r"^bench: \S+ run started kind=(?P<kind>\S+) ref=(?P<ref>.*)$")
+_STAGE_RESULT_RE = re.compile(
+    r"^bench: \S+ stage (?P<name>\S+) (?P<result>passed|failed|error|skipped)"
+    r"(?: sha=(?P<sha>\S+))?(?: reason=(?P<reason>.*))?$"
+)
+_RUN_RESULT_RE = re.compile(r"^bench: \S+ run (?P<result>passed|failed|error)$")
 
 
 def _config(run_unit="bench-run"):
@@ -25,6 +35,18 @@ def _make_run(tmp_path, *, run_unit="bench-run"):
     return bench_run.BenchRun(tmp_path, _config(run_unit=run_unit), tmp_path / "records")
 
 
+def _run_dirs(tmp_path):
+    records = tmp_path / "records"
+    if not records.is_dir():
+        return []
+    return [p for p in records.iterdir() if p.is_dir()]
+
+
+def _bench_log_lines(tmp_path):
+    [run_dir] = _run_dirs(tmp_path)
+    return (run_dir / "bench.log").read_text().splitlines()
+
+
 class _FakeQueue:
     """Scripted stand-in for `wisebench.queue.Queue`; `head()` returns or raises."""
 
@@ -38,14 +60,15 @@ class _FakeQueue:
 
 
 class _FakeBenchTest:
-    """Scripted stand-in for `wisebench.bench_test.BenchTest`."""
+    """Scripted stand-in for `wisebench.bench_test.BenchTest`; writes no markers of its own."""
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name):
+    def __init__(self, checkout, ref, set_name, run_log):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
+        self.run_log = run_log
         self.run_calls = []
         _FakeBenchTest.instances.append(self)
 
@@ -143,7 +166,7 @@ def test_init_raises_valueerror_when_run_unit_is_missing(tmp_path):
 
 
 def test_run_exits_quietly_when_no_job_is_queued(made, monkeypatch, tmp_path, capsys):
-    """run exits quietly when the queue has no job."""
+    """run exits quietly when the queue has no job, and creates no run directory at all."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = None
     run = _make_run(tmp_path)
@@ -151,10 +174,11 @@ def test_run_exits_quietly_when_no_job_is_queued(made, monkeypatch, tmp_path, ca
     assert "no job" in capsys.readouterr().out
     assert calls == []
     assert _FakeBenchTest.instances == []
+    assert _run_dirs(tmp_path) == []
 
 
 def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
-    """run refuses while DISABLED exists."""
+    """run refuses while DISABLED exists, creating no run directory."""
     calls = _stub_subprocess(monkeypatch)
     (tmp_path / "records").mkdir()
     (tmp_path / "records" / "DISABLED").write_text("2026-10-12T00:00:00+00:00\nbench failure\n")
@@ -164,6 +188,7 @@ def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
     assert "disabled" in capsys.readouterr().out
     assert calls == []
     assert _FakeBenchTest.instances == []
+    assert _run_dirs(tmp_path) == []
 
 
 def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monkeypatch, tmp_path):
@@ -181,6 +206,58 @@ def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monk
     assert _FakeCheck.posts == [("cafef00d", "success", "PASS", "records")]
 
 
+def test_run_creates_bench_log_only_once_the_job_is_taken(made, monkeypatch, tmp_path):
+    """run creates records/<stamp>/bench.log only after it has a job, and passes that run's
+    log into BenchTest."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    [run_dir] = _run_dirs(tmp_path)
+    assert (run_dir / "bench.log").is_file()
+    assert _FakeBenchTest.instances[0].run_log.directory == run_dir
+
+
+def test_run_writes_run_started_with_kind_run_and_the_queue_ref_not_the_sha(
+    made, monkeypatch, tmp_path
+):
+    """run writes `run started kind=run ref=<the queue ref>` -- not the resolved sha."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    lines = _bench_log_lines(tmp_path)
+    [started] = [m for line in lines if (m := _RUN_STARTED_RE.match(line))]
+    assert started["kind"] == "run"
+    assert started["ref"] == "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
+
+
+def test_run_writes_run_passed_as_the_last_line_on_success(made, monkeypatch, tmp_path):
+    """run writes `run passed` as bench.log's last line on a clean cycle."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    lines = [line for line in _bench_log_lines(tmp_path) if line]
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "passed"
+
+
+def test_run_writes_run_failed_on_a_candidate_failure(made, monkeypatch, tmp_path):
+    """run writes `run failed`, not `run error`, on the candidate's own failure."""
+    _stub_subprocess(monkeypatch)
+    _FakeQueue.result = _QUEUE_HEAD
+    _FakeBenchTest.outcome = bench_test.CandidateFailure("target_suite failed")
+    run = _make_run(tmp_path)
+    run.run("env.yaml")
+
+    lines = _bench_log_lines(tmp_path)
+    [result] = [m for line in lines if (m := _RUN_RESULT_RE.match(line))]
+    assert result["result"] == "failed"
+
+
 def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monkeypatch, tmp_path):
     """run posts failure on a candidate failure, without raising."""
     _stub_subprocess(monkeypatch)
@@ -192,10 +269,11 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(made, monke
     assert _FakeCheck.posts == [("cafef00d", "failure", "target_suite failed", "records")]
 
 
-def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
+def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_reraises_and_writes_run_error(
     made, monkeypatch, tmp_path
 ):
-    """run on a BenchFailure writes DISABLED, disables the timer, and reraises."""
+    """run on a BenchFailure writes DISABLED, disables the timer, reraises, and writes
+    `run error` as bench.log's last line."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     _FakeBenchTest.outcome = bench_test.BenchFailure("precondition exited 9")
@@ -205,25 +283,15 @@ def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
         run.run("env.yaml")
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "precondition exited 9")
+    lines = [line for line in _bench_log_lines(tmp_path) if line]
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
 
 
-def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer(
+def test_run_on_a_failing_fetch_writes_a_stage_checkout_error_marker_then_run_error(
     made, monkeypatch, tmp_path
 ):
-    """run on more than one queue entry writes DISABLED and disables the timer."""
-    calls = _stub_subprocess(monkeypatch)
-    _FakeQueue.outcome = bench_test.BenchFailure("more than one gh-readonly-queue ref")
-    run = _make_run(tmp_path, run_unit="scratch-unit")
-
-    with pytest.raises(bench_test.BenchFailure, match="more than one"):
-        run.run("env.yaml")
-
-    _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "more than one")
-    assert _FakeBenchTest.instances == []
-
-
-def test_run_on_a_failing_fetch_writes_disabled_and_disables_the_timer(made, monkeypatch, tmp_path):
-    """run on a failing fetch writes DISABLED and disables the timer."""
+    """A failing `git fetch` writes `stage checkout error reason=...` then `run error`, and
+    never constructs a BenchTest -- the checkout stage includes bench run's own fetch."""
     calls = _stub_subprocess(monkeypatch, error_on=["git", "fetch"])
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path, run_unit="scratch-unit")
@@ -233,6 +301,27 @@ def test_run_on_a_failing_fetch_writes_disabled_and_disables_the_timer(made, mon
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "returned non-zero exit status")
     assert _FakeBenchTest.instances == []
+    lines = [line for line in _bench_log_lines(tmp_path) if line]
+    [checkout] = [m for line in lines if (m := _STAGE_RESULT_RE.match(line)) and m["name"] == "checkout"]
+    assert checkout["result"] == "error"
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
+
+
+def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer(
+    made, monkeypatch, tmp_path
+):
+    """run on more than one queue entry writes DISABLED and disables the timer, creating no
+    run directory -- no job was taken."""
+    calls = _stub_subprocess(monkeypatch)
+    _FakeQueue.outcome = bench_test.BenchFailure("more than one gh-readonly-queue ref")
+    run = _make_run(tmp_path, run_unit="scratch-unit")
+
+    with pytest.raises(bench_test.BenchFailure, match="more than one"):
+        run.run("env.yaml")
+
+    _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "more than one")
+    assert _FakeBenchTest.instances == []
+    assert _run_dirs(tmp_path) == []
 
 
 def test_run_on_check_construction_failing_writes_disabled_and_disables_the_timer(
@@ -251,10 +340,11 @@ def test_run_on_check_construction_failing_writes_disabled_and_disables_the_time
     assert _FakeBenchTest.instances == []
 
 
-def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disables_the_timer(
+def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_run_error(
     made, monkeypatch, tmp_path
 ):
-    """run on Check.post failing after a candidate failure writes DISABLED, disables the timer."""
+    """run on Check.post failing after a candidate failure writes DISABLED, disables the
+    timer, and writes `run error`, not `run failed`."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     _FakeBenchTest.outcome = bench_test.CandidateFailure("target_suite failed")
@@ -265,6 +355,8 @@ def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disab
         run.run("env.yaml")
 
     _assert_bench_failure_path(tmp_path, calls, "scratch-unit", "github is down")
+    lines = [line for line in _bench_log_lines(tmp_path) if line]
+    assert _RUN_RESULT_RE.match(lines[-1])["result"] == "error"
 
 
 def test_run_on_post_failing_after_a_pass_writes_disabled_and_disables_the_timer(
