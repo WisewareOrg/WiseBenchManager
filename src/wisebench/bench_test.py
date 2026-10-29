@@ -32,7 +32,7 @@ class CandidateFailure(Exception):
 class BenchTest:
     """One `bench test <ref>` run: the checkout, ref, replay set name and skip-build flag."""
 
-    def __init__(self, checkout, ref, set_name, skip_build=False, fetch=None):
+    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test"):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
         Args:
@@ -41,14 +41,13 @@ class BenchTest:
             set_name (str | None): The replay set name from `--set`, or None.
             skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
                 with `bench_candidate` `None`, against the board as it is.
-            fetch (str | None): A ref to `git fetch origin` inside the checkout stage; set by
-                `bench run`, pinning this run's kind to `run` instead of `test`.
+            kind (str): `"test"` or `"run"`, for the run-started line only; set by `BenchRun`.
         """
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name or ""
         self.skip_build = skip_build
-        self.fetch = fetch
+        self.kind = kind
 
     def run(self, lg_env, pytest_args):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
@@ -74,19 +73,8 @@ class BenchTest:
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         log = self._open_log(result_dir)
         try:
-            self._mark(
-                log,
-                f"run started kind={'run' if self.fetch else 'test'} ref={self.fetch or self.ref}",
-            )
+            self._mark(log, f"run started kind={self.kind} ref={self.ref}")
             with self._stage(log, "checkout") as info:
-                if self.fetch:
-                    subprocess.run(
-                        ["git", "fetch", "origin", self.fetch],
-                        cwd=self.checkout,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                        check=True,
-                    )
                 commit = self._checkout_commit(log)
                 config = Config.load(self.checkout / "bench.toml")
                 info["sha"] = commit
