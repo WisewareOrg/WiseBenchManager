@@ -6,7 +6,7 @@
 
 ## Revisions
 
-- **rev 1** — 2026-10-29 — first written.
+- **rev 1** — 2026-10-29 — first written (WisewareOrg/WiseBenchManager PR #31 ADR 0001 as trade studies).
 
 ## Context
 
