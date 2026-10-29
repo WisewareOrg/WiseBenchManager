@@ -1,7 +1,8 @@
 name: CodeQL
 
-# Modelled on WiseKiosk's codeql.yml, minus `merge_group` (no merge queue here). The `process-gates`
-# ruleset's `code_scanning` rule reads these results on every pull request.
+# Analyses `actions` and `python` on every pull request, push to `main`, and weekly; no
+# `merge_group`, since this repository has no merge queue. The `process-gates` ruleset's
+# `code_scanning` rule reads these results on every pull request.
 on:
   pull_request:
     branches: [main]
