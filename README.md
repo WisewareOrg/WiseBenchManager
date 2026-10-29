@@ -106,7 +106,7 @@ A one-time, by-hand step, before `[github]` can be filled in:
 7. Write `[github]` `repo`, `app_id`, `private_key` and `check` into `bench.toml`.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
-`BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output inherited straight to the terminal;
+`BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output appended to that run's `bench.log`;
 its exit status is pass or fail. The suites are ordinary pytest directories, run under the
 runner's own interpreter, so a layer's test helpers may import only labgrid, pytest,
 pytest-reportlog, tenacity, mitmproxy, the standard library and whatever the layer's own
@@ -131,6 +131,9 @@ requirement item it discharges, through pytest's `record_property`, which pytest
 There is no marker and no credit rule of the runner's own.
 
 ## The record
+
+Each run also writes `records/<stamp>/bench.log`: every hook's and suite's output, bracketed by a
+line marking each stage's start and end.
 
 pytest-reportlog's JSON-lines report (`--report-log`, set to `$BENCH_RESULT_DIR/<UTC start
 time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: every test report,
