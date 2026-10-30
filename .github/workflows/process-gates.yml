@@ -1,0 +1,43 @@
+name: process-gates
+
+# Satisfies the `process-gates` ruleset's required-status-check contexts (`check-branch`,
+# `pr-title`, `repo-floor`) from WisewareOrg/.github's repository-floor.yml (PROC-011). Each job is
+# top-level and named for its context, so GitHub reports it bare. `edited` re-runs `pr-title` when
+# the title changes.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: process-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Every job's `name:` equals its id, which is also the required-status-check context the
+  # `process-gates` ruleset names. None checks out: each action carries what it runs.
+  check-branch:
+    name: check-branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: WisewareOrg/wise-ci/check-branch@79c36fe75190c38088a181d2da8461877e7416d3
+
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # reads the PR's current title from the API
+    steps:
+      - uses: WisewareOrg/wise-ci/pr-title@79c36fe75190c38088a181d2da8461877e7416d3
+
+  repo-floor:
+    name: repo-floor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: WisewareOrg/wise-ci/repo-floor@79c36fe75190c38088a181d2da8461877e7416d3
