@@ -42,10 +42,11 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name):
+    def __init__(self, checkout, ref, set_name, kind="test"):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
+        self.kind = kind
         self.run_calls = []
         _FakeBenchTest.instances.append(self)
 
@@ -143,7 +144,7 @@ def test_init_raises_valueerror_when_run_unit_is_missing(tmp_path):
 
 
 def test_run_exits_quietly_when_no_job_is_queued(made, monkeypatch, tmp_path, capsys):
-    """run exits quietly when the queue has no job."""
+    """run exits quietly when the queue has no job, and creates no run directory."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = None
     run = _make_run(tmp_path)
@@ -151,6 +152,7 @@ def test_run_exits_quietly_when_no_job_is_queued(made, monkeypatch, tmp_path, ca
     assert "no job" in capsys.readouterr().out
     assert calls == []
     assert _FakeBenchTest.instances == []
+    assert not (tmp_path / "records").exists()
 
 
 def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
@@ -167,7 +169,7 @@ def test_run_refuses_while_disabled_exists(made, monkeypatch, tmp_path, capsys):
 
 
 def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monkeypatch, tmp_path):
-    """run fetches and tests the queue head's sha, then posts success."""
+    """run fetches and tests the queue head's sha, then posts success; kind=run."""
     calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path)
@@ -177,6 +179,7 @@ def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monk
     assert _FakeBenchTest.instances[0].checkout == tmp_path
     assert _FakeBenchTest.instances[0].ref == "cafef00d"
     assert _FakeBenchTest.instances[0].set_name is None
+    assert _FakeBenchTest.instances[0].kind == "run"
     assert _FakeBenchTest.instances[0].run_calls == [("env.yaml", [])]
     assert _FakeCheck.posts == [("cafef00d", "success", "PASS", "records")]
 

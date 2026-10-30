@@ -72,7 +72,7 @@ class BenchRun:
             summary = os.path.relpath(self._result_dir, self.checkout)
 
             try:
-                BenchTest(self.checkout, sha, None).run(lg_env, [])
+                BenchTest(self.checkout, sha, None, kind="run").run(lg_env, [])
             except CandidateFailure as exc:
                 check.post(sha, "failure", str(exc).splitlines()[0], summary)
                 return
