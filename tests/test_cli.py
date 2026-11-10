@@ -317,7 +317,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
         def __init__(self, checkout, ref, set_name, kind="test", pr=None):
             pass
 
-        def run(self, lg_env, pytest_args):
+        def run(self, lg_env, pytest_args, post=None):
             os.kill(os.getpid(), signal.SIGTERM)
 
     monkeypatch.setattr(bench_run, "Queue", _StubQueue)
