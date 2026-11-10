@@ -174,10 +174,11 @@ def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_pa
 
     output = b""
 
-    def read_for(seconds):
+    def read_until(needles, seconds):
+        """Collect the child's output until every needle appears, it closes, or `seconds` pass."""
         nonlocal output
         deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not all(n in output for n in needles):
             if select.select([fd], [], [], 0.1)[0]:
                 try:
                     chunk = os.read(fd, 65536)
@@ -188,9 +189,9 @@ def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_pa
                 output += chunk
 
     try:
-        read_for(1.5)
+        read_until((b"1 Run", b"0 records"), 5)
         os.write(fd, b"q")
-        read_for(1.0)
+        read_until((b"\0",), 3)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             done, status_code = os.waitpid(pid, os.WNOHANG)
