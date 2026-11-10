@@ -1,5 +1,7 @@
-"""`bench` command line: argument parsing for `bench test`/`bench run`/`bench status` and their
-exit mapping."""
+"""`bench` command line.
+
+Argument parsing for `bench test`/`bench run`/`bench status` and their exit mapping.
+"""
 
 import argparse
 import contextlib
@@ -30,8 +32,7 @@ def _raise_on_sigterm(signum, frame):
 
 
 def main(argv=None):
-    """Parse arguments and run one `bench test`, `bench run` or `bench status --watch` invocation
-    end to end.
+    """Parse arguments and run one `bench test`, `bench run` or `bench status --watch`.
 
     Holds the `Lock` shared between `test` and `run` for the whole of whichever one runs.
 

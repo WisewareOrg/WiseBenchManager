@@ -27,8 +27,10 @@ class Bench:
 
 
 def is_live(directory, run, proc_root):
-    """Whether `run` is executing: it has no result line and a process holds a write `flock` on
-    the records directory's `lock` file.
+    """Whether `run` is executing.
+
+    It is when the run has no result line and a process holds a write `flock` on the records
+    directory's `lock` file.
 
     The lock is matched by inode only; `/proc/locks` prints the superblock's device, which need
     not equal the file's `st_dev`. No lock is taken.

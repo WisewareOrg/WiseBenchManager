@@ -23,8 +23,10 @@ from wisebench.plugin import (
 
 
 class BenchFailure(Exception):
-    """A failure that is this runner's own: a precondition hook, pytest faulting, or a fixture
-    erroring during setup or teardown."""
+    """A failure that is this runner's own.
+
+    A precondition hook, pytest faulting, or a fixture erroring during setup or teardown.
+    """
 
 
 class CandidateFailure(Exception):
@@ -160,14 +162,17 @@ class BenchTest:
         return run_dir, open(run_dir / "bench.log", "ab+")
 
     def _mark(self, log, text):
-        """Append one `bench: <iso> <text>` line, a leading newline first if the log doesn't
-        already end in one."""
+        """Append one `bench: <iso> <text>` line to the log.
+
+        A leading newline goes first if the log doesn't already end in one.
+        """
         write_mark(log.fileno(), text)
 
     @contextmanager
     def _stage(self, log, name):
-        """Bracket one stage with `started`/`passed`/`failed`/`error` lines; yields a dict the
-        body may set `sha` on, appended to the `passed` line.
+        """Bracket one stage with `started`/`passed`/`failed`/`error` lines.
+
+        Yields a dict the body may set `sha` on, appended to the `passed` line.
 
         Raises:
             BaseException: Whatever the body raised, after logging it as the stage's
@@ -187,8 +192,9 @@ class BenchTest:
             self._mark(log, f"stage {name} passed{sha}")
 
     def _checkout_commit(self, log):
-        """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit; git's
-        own output lands in `log`.
+        """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.
+
+        Git's own output lands in `log`.
 
         Returns:
             str: The resolved commit hex.

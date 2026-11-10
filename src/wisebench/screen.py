@@ -98,8 +98,9 @@ class Layout:
 
 
 def layout(rows, cols, prompt_open):
-    """The layout of a `rows` by `cols` screen; an open command line takes the last row and
-    moves the status bar up one.
+    """The layout of a `rows` by `cols` screen.
+
+    An open command line takes the last row and moves the status bar up one.
 
     Args:
         rows (int): Screen height.
@@ -114,8 +115,9 @@ def layout(rows, cols, prompt_open):
 
 
 def plain_top(lay, stage, live):
-    """The first row free for the label and lines of a pane without sections, and the count of
-    running-task rows above it.
+    """The first row free in a pane without sections, and the running-task rows above it.
+
+    The first row is where the label and lines start.
 
     Args:
         lay (Layout): The screen layout.
@@ -186,8 +188,9 @@ def is_open(folds, section):
 
 
 def log_rows(stage, folds, expand=False):
-    """The log rows of a stage: its own lines, then each section's header and, when open, its
-    lines and failure lines.
+    """The log rows of a stage.
+
+    Its own lines, then each section's header and, when open, its lines and failure lines.
 
     Args:
         stage (Stage): The stage.
@@ -216,8 +219,9 @@ def log_rows(stage, folds, expand=False):
 
 
 def locate(rows, cursor):
-    """Index of `cursor` among `rows`; a line folded away resolves to its section's header,
-    anything else to the first row.
+    """Index of `cursor` among `rows`.
+
+    A line folded away resolves to its section's header, anything else to the first row.
 
     Args:
         rows (list[LogRow]): The log rows.
@@ -487,8 +491,10 @@ def _run_header(canvas, shown, newest, bench):
 
 
 def _stage_row(canvas, row, stage, live, selected, now):
-    """One stage row: glyph, name, start and took; a running or failed row keeps its tint over
-    the selection ground."""
+    """Draw one stage row: glyph, name, start and took.
+
+    A running or failed row keeps its tint over the selection ground.
+    """
     name = _display_name(stage.name)
     running = stage.state == "open" and live
     if stage.state in ("not-started", "skipped"):
@@ -598,8 +604,11 @@ def _sectioned_pane(canvas, view, stage, live, now, lay):
 
 
 def _plain_pane(canvas, view, stage, live, now, lay):
-    """A stage without sections: the build header when it has progress, the running tasks, the
-    label and the visible window of its lines, bottom-aligned."""
+    """Draw a stage without sections, bottom-aligned.
+
+    The build header when it has progress, the running tasks, the label and the visible window of
+    its lines.
+    """
     progress = stage.progress
     running = live and stage.state == "open"
     if progress is not None:

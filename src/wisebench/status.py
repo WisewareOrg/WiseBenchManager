@@ -129,9 +129,10 @@ class View:
         return False
 
     def tick(self, runs, bench, size):
-        """Apply a refresh with no key: the opening state on the first refresh with runs, the
-        selection riding the running stage, the summary when the run ends, and the cursor
-        re-found by section id after a re-parse.
+        """Apply a refresh with no key.
+
+        The opening state on the first refresh with runs, the selection riding the running stage,
+        the summary when the run ends, and the cursor re-found by section id after a re-parse.
 
         Args:
             runs (list[Run]): Every run, newest first.
@@ -154,8 +155,11 @@ class View:
         return next((r for r in runs if r.record == self.record), runs[0] if runs else None)
 
     def _opening(self, run, runs, bench):
-        """The stage selected when `run` is opened: the running stage of a live newest run, none
-        for an idle newest run, else the first stage that failed or was left open."""
+        """The stage selected when `run` is opened.
+
+        The running stage of a live newest run, none for an idle newest run, else the first stage
+        that failed or was left open.
+        """
         if run is runs[0] and bench.live:
             return next((s.name for s in run.stages if s.state == "open"), None)
         if run is runs[0] and not bench.disabled:
@@ -169,6 +173,9 @@ class View:
         Args:
             record (str | None): The record to show; None is the newest run.
             follow (bool): Whether the selection rides the running stage afterwards.
+            runs (list[Run]): Every run, newest first.
+            bench (Bench): The bench's state.
+            size (tuple[int, int]): (rows, columns).
         """
         self.tab, self.record, self.focus, self.follow = "run", record, "stages", follow
         shown = self._shown_run(runs)
@@ -176,8 +183,10 @@ class View:
             self._choose(self._opening(shown, runs, bench), runs, bench, size)
 
     def _pane(self, runs, bench, size):
-        """(stage, log rows, rows visible) of the selected stage's pane, or None without log
-        rows."""
+        """The selected stage's pane as (stage, log rows, rows visible).
+
+        None without log rows.
+        """
         shown = self._shown_run(runs)
         stage = next((s for s in shown.stages if s.name == self.stage), None) if shown else None
         if stage is None:
@@ -314,8 +323,10 @@ class View:
         self._reveal(rows, room)
 
     def _fold(self, op, runs, bench, size):
-        """`za` toggles the section holding the cursor (the cursor moves to its header);
-        `zR` and `zM` open or fold every section of the selected stage."""
+        """Fold sections: `za` toggles the one holding the cursor, `zR` and `zM` open or fold all.
+
+        The cursor moves to the toggled section's header.
+        """
         pane = self._pane(runs, bench, size)
         if self.tab != "run" or self.focus != "log" or pane is None:
             return
@@ -332,9 +343,11 @@ class View:
         self._settle(runs, bench, size)
 
     def _search(self, pattern, direction, runs, bench, size):
-        """Move the cursor to the next (1) or previous (-1) line containing `pattern`, wrapping,
-        over every line of the stage including folded bodies; a match unfolds its section and
-        takes focus. Nothing moves on a miss."""
+        """Move the cursor to the next (1) or previous (-1) line containing `pattern`.
+
+        It wraps and covers every line of the stage including folded bodies; a match unfolds its
+        section and takes focus. Nothing moves on a miss.
+        """
         pane = self._pane(runs, bench, size)
         if self.tab != "run" or pane is None or not pattern:
             return
@@ -401,9 +414,11 @@ _REVERSED = {"selection", "inverse", "badge_running", "badge_idle", "badge_disab
 
 
 def _colours(style):
-    """The xterm-256 (foreground, background) indexes for a set of style names. Each index is the
-    nearest to the canvas colour of that name; the tints keep their hue so that a running row, a
-    failed row and the selection stay distinct."""
+    """The xterm-256 (foreground, background) indexes for a set of style names.
+
+    Each index is the nearest to the canvas colour of that name; the tints keep their hue so that
+    a running row, a failed row and the selection stay distinct.
+    """
     for name, pair in _FILLED.items():
         if name in style:
             return pair
@@ -415,8 +430,11 @@ def _colours(style):
 
 
 def _painter():
-    """A function from a style to curses attributes: colour pairs with 256 colours; with fewer,
-    reverse video for the selection, tab, badge and box, bold as bold and the rest plain."""
+    """A function from a style to curses attributes.
+
+    Colour pairs with 256 colours; with fewer, reverse video for the selection, tab, badge and
+    box, bold as bold and the rest plain.
+    """
     if not (curses.has_colors() and curses.COLORS >= 256):
 
         def plain(style):
