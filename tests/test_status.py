@@ -271,9 +271,12 @@ def test_test_rows_follow_queue_order_with_unstarted_tests_emitted_in_place():
         {
             "target_suite": [
                 rep("t.py::a", "call", "passed"),
+                rep("t.py::a", "teardown", "passed"),
                 rep("t.py::b", "setup", "skipped"),
                 rep("t.py::c", "call", "failed"),
+                rep("t.py::c", "teardown", "passed"),
                 rep("t.py::d", "setup", "failed"),
+                rep("t.py::d", "teardown", "passed"),
             ]
         },
     )
@@ -417,7 +420,9 @@ def test_a_failed_test_carries_its_crash_line_and_the_last_traceback_entrys_line
         {
             "target_suite": [
                 rep("t.py::bad", "call", "failed", longrepr),
+                rep("t.py::bad", "teardown", "passed"),
                 rep("t.py::good", "call", "passed"),
+                rep("t.py::good", "teardown", "passed"),
             ]
         },
     )
@@ -607,7 +612,9 @@ def test_suite_reports_are_read_from_each_suites_report_jsonl_and_a_cut_last_lin
     run_dir = write_record(
         tmp_path,
         text=text,
-        reports={"target_suite": [rep("t.py::a", "call", "passed")]},
+        reports={
+            "target_suite": [rep("t.py::a", "call", "passed"), rep("t.py::a", "teardown", "passed")]
+        },
     )
     with open(run_dir / "target_suite" / "report.jsonl", "a") as f:
         f.write('{"$report_type": "TestReport", "nodeid": "t.py::b", "wh')
