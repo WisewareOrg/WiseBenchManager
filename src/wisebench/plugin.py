@@ -1,12 +1,16 @@
 """pytest plugin: the `bench_candidate` and `proxy` fixtures, pytest-reportlog's record, and
 run.json.
 
-Each run writes `report.jsonl` and `run.json` under `<BENCH_RESULT_DIR>/<UTC timestamp>/`.
+Each run writes `report.jsonl` and `run.json` directly into `BENCH_RECORD_DIR` when it is set,
+otherwise under `<BENCH_RESULT_DIR>/<UTC timestamp>/`. With `BENCH_RECORD_DIR` set it also
+writes `bench:` marker lines (`test queued`, `setup`, `test started`) to stdout through
+`write_mark`.
 run.json holds `version`, `command_line`, `start`, `end`, `exit_status`, and each `BENCH_FIELDS`
 field whose environment variable is set.
 """
 
 import json
+import os
 import shlex
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -19,9 +23,11 @@ from wisebench.proxy import proxy as proxy
 
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
 DEFAULT_RESULT_DIR = "records"
+_STDOUT_FD = 1
 
 # Environment variable names.
 BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
+BENCH_RECORD_DIR = "BENCH_RECORD_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
@@ -41,8 +47,24 @@ BENCH_FIELDS = {
 SETUP_ERROR_EXIT_STATUS = 90
 
 
+def write_mark(fd, event):
+    """Append one `bench: <iso> <event>` line to the file behind `fd`, a leading newline first
+    if the file does not already end in one.
+
+    Args:
+        fd (int): A file descriptor open for reading and appending.
+        event (str): The marker's text after the timestamp.
+    """
+    size = os.fstat(fd).st_size
+    if size and os.pread(fd, 1, size - 1) != b"\n":
+        os.write(fd, b"\n")
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+    os.write(fd, f"bench: {timestamp} {event}\n".encode())
+
+
 def _run_dir(config):
-    """The directory this run's records go in: BENCH_RESULT_DIR, then this run's timestamp.
+    """The directory this run's records go in: BENCH_RECORD_DIR when set, otherwise
+    BENCH_RESULT_DIR, then this run's timestamp.
 
     Args:
         config (pytest.Config): The session's pytest configuration.
@@ -50,6 +72,9 @@ def _run_dir(config):
     Returns:
         pathlib.Path: The run's own record directory.
     """
+    record_dir = environ.get(BENCH_RECORD_DIR)
+    if record_dir:
+        return Path(record_dir)
     base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
 
@@ -115,3 +140,39 @@ def pytest_sessionfinish(session, exitstatus):
         if value is not None:
             data[field] = value
     (run_dir / "run.json").write_text(json.dumps(data) + "\n")
+
+
+def pytest_collection_finish(session):
+    """With BENCH_RECORD_DIR set, marks each test the session will run as queued.
+
+    Args:
+        session (pytest.Session): The session whose collection finished.
+    """
+    if environ.get(BENCH_RECORD_DIR):
+        for item in session.items:
+            write_mark(_STDOUT_FD, f"test queued {item.nodeid}")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    """With BENCH_RECORD_DIR set, marks the setup of each fixture that takes `bench_candidate`.
+
+    Args:
+        fixturedef (pytest.FixtureDef): The fixture being set up.
+        request (pytest.FixtureRequest): The request that needs it.
+    """
+    if environ.get(BENCH_RECORD_DIR) and "bench_candidate" in fixturedef.argnames:
+        write_mark(_STDOUT_FD, f"setup {fixturedef.argname} started")
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    """With BENCH_RECORD_DIR set, marks the test whose body is about to run.
+
+    Args:
+        item (pytest.Item): The test about to run.
+    """
+    if environ.get(BENCH_RECORD_DIR):
+        write_mark(_STDOUT_FD, f"test started {item.nodeid}")
+    return (yield)

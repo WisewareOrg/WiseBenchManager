@@ -128,19 +128,40 @@ Everything that names the application under test — its units, its paths on the
 replay sets — lives in the layer's own `conftest.py` and tests, built on labgrid's fixtures and the
 runner's `proxy`. The runner never learns it; a test attaches its own facts, including any
 requirement item it discharges, through pytest's `record_property`, which pytest-reportlog writes.
-There is no marker and no credit rule of the runner's own.
+There is no pytest mark and no credit rule of the runner's own.
 
 ## The record
 
-Each run also writes `records/<stamp>/bench.log`, its stamp taken independently of each suite's
-own record directory, so a suite starting in the same second writes into it too. It holds every
-hook's and suite's output, bracketed by a line marking each stage's start and end.
+A run writes one folder, `records/<stamp>/`. It holds `bench.log` and one folder per suite,
+`host_suite/` and `target_suite/`; each suite folder holds that suite's `report.jsonl` and
+`run.json`. The runner sets `BENCH_RECORD_DIR` to the suite's folder, and the plugin writes there
+directly. Run on its own, outside the runner, the plugin writes `$BENCH_RESULT_DIR/<UTC start
+time>/` instead (`BENCH_RESULT_DIR` defaults to `records/`) and prints no `bench:` line.
 
-pytest-reportlog's JSON-lines report (`--report-log`, set to `$BENCH_RESULT_DIR/<UTC start
-time>/report.jsonl`; `BENCH_RESULT_DIR` defaults to `records/`) is the record: every test report,
-with whatever a layer attaches through `record_property`. Beside it the runner writes one file per
-run, `run.json`, written at session end so a run that fails halfway still leaves everything up to
-that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
+`bench.log` holds every hook's and suite's output, and every test's output, passing or failing:
+the suites run with `--capture=tee-sys` and `PYTHONUNBUFFERED=1`, so a line is in the log as it is
+printed. The runner's own lines start `bench: <ISO time> ` and sit on their own line:
+
+- `run started kind=<test|run> ref=<ref>`, with ` pr=<n>` (the PR its queue entry names) for a
+  `bench run`;
+- `stage <name> started`, then `passed`, `failed` or `error`, for `checkout`, `precondition`,
+  `build`, `bundle`, `host_suite`, `target_suite` and, when the result is posted, `posted`;
+  `stage <name> skipped` for `build`, `bundle` and `host_suite` of a `--skip-build` run;
+- inside a suite, `test queued <nodeid>` once per test it will run, once collection ends;
+  `setup <fixture> started` when a fixture that takes `bench_candidate` is set up, named as the
+  layer named it; and `test started <nodeid>` when a test's body begins. `<nodeid>` is pytest's
+  own node id, relative to pytest's rootdir and not normalised by the runner;
+- `run passed`, `run failed` or `run error`.
+
+A section runs to the next marker. Test outcomes are not marked: they are in `report.jsonl`.
+
+pytest-reportlog's JSON-lines report is the record of the tests: every test report, with
+whatever a layer attaches through `record_property`. pytest-reportlog writes a test only when the
+test ends and names no fixture, and pytest's own output has neither timestamps nor setup names. No
+maintained tool writes these markers, so the plugin does.
+
+Each suite's `run.json` is written at session end, so a run that fails halfway still leaves
+everything up to that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
 line, the start and end times, and the exit status. The plugin reads whichever of a set of
 `BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
 field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
@@ -149,7 +170,7 @@ one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays 
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
-stderr to `proxy-<test>-<n>.log` beside that run's `report.jsonl`, one file per fixture use, with
+stderr to `proxy-<test>-<n>.log` beside that suite's `report.jsonl`, one file per fixture use, with
 the flow file `served()` and `killed()` read back at `proxy-<test>-<n>.flows` beside it. At
 teardown it attaches `served_count` and `killed_count` through `record_property`.
 

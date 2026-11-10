@@ -15,7 +15,8 @@ class BenchRun:
 
     Holds the checkout, the loaded `Config` and the result directory `DISABLED` sits in. Knows
     nothing about the lock shared with `bench test` -- the CLI holds that for this call's whole
-    duration.
+    duration. The verdict is posted by `BenchTest`'s `posted` stage, through a callable this
+    class passes to `BenchTest.run`.
     """
 
     def __init__(self, checkout, config, result_dir):
@@ -59,7 +60,7 @@ class BenchRun:
             if head is None:
                 print("bench run: no job")
                 return
-            ref, sha = head
+            ref, sha, pr = head
 
             subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
 
@@ -71,13 +72,16 @@ class BenchRun:
             )
             summary = os.path.relpath(self._result_dir, self.checkout)
 
-            try:
-                BenchTest(self.checkout, sha, None, kind="run").run(lg_env, [])
-            except CandidateFailure as exc:
-                check.post(sha, "failure", str(exc).splitlines()[0], summary)
-                return
+            def post(failure):
+                if failure is None:
+                    check.post(sha, "success", "PASS", summary)
+                else:
+                    check.post(sha, "failure", str(failure).splitlines()[0], summary)
 
-            check.post(sha, "success", "PASS", summary)
+            try:
+                BenchTest(self.checkout, sha, None, kind="run", pr=pr).run(lg_env, [], post=post)
+            except CandidateFailure:
+                return
         except Exception as exc:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""

@@ -11,12 +11,14 @@ from wisebench.config import Config
 from wisebench.plugin import (
     _TIMESTAMP,
     BENCH_CANDIDATE_OPTION,
+    BENCH_RECORD_DIR,
     BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
     BENCH_SKIP_BUILD,
     BENCH_TREE,
     DEFAULT_RESULT_DIR,
+    write_mark,
 )
 
 
@@ -32,7 +34,7 @@ class CandidateFailure(Exception):
 class BenchTest:
     """One `bench test <ref>` run: the checkout, ref, replay set name and skip-build flag."""
 
-    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test"):
+    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test", pr=None):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
         Args:
@@ -42,18 +44,22 @@ class BenchTest:
             skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
                 with `bench_candidate` `None`, against the board as it is.
             kind (str): `"test"` or `"run"`, for the run-started line only; set by `BenchRun`.
+            pr (int | None): The PR a queue entry names, appended to the run-started line as
+                `pr=<n>` when given; set by `BenchRun`.
         """
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name or ""
         self.skip_build = skip_build
         self.kind = kind
+        self.pr = pr
 
-    def run(self, lg_env, pytest_args):
+    def run(self, lg_env, pytest_args, post=None):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
 
         Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`,
-        `BENCH_RESULT_DIR`, and `BENCH_SKIP_BUILD` when skipping the build. Runs
+        `BENCH_RESULT_DIR`, and `BENCH_SKIP_BUILD` when skipping the build; each suite also gets
+        `BENCH_RECORD_DIR` and `PYTHONUNBUFFERED` (see `_run_suite`). Runs
         `precondition`; unless skipping the build, runs `build`, `bundle` and the host suite,
         and passes the commit to the target suite as `--bench-candidate`. Every hook's and
         suite's output, and a `bench:` marker line per stage, land in
@@ -62,64 +68,85 @@ class BenchTest:
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`).
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
+            post (Callable[[CandidateFailure | None], None] | None): Called in a `posted` stage
+                when the run passes (with `None`) or a `CandidateFailure` ends it (with that
+                failure), before the `run passed|failed` line; the failure is then re-raised.
+                None runs no `posted` stage. A `post` that raises ends the run as `run error`.
 
         Raises:
             BenchFailure: A precondition hook faulted, or pytest itself faulted, including a
                 fixture erroring during setup or teardown.
             CandidateFailure: A `build`/`bundle` hook, or a test's own call (pytest exit 1),
                 failed.
-            Exception: Any other step raised (a dirty tree, git itself), propagated unwrapped.
+            Exception: Any other step raised (a dirty tree, git itself), or `post` raised (the
+                run ends as `run error`), propagated unwrapped.
         """
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
-        log = self._open_log(result_dir)
+        run_dir, log = self._open_log(result_dir)
+        outcome = "error"
         try:
-            self._mark(log, f"run started kind={self.kind} ref={self.ref}")
-            with self._stage(log, "checkout") as info:
-                commit = self._checkout_commit(log)
-                config = Config.load(self.checkout / "bench.toml")
-                info["sha"] = commit
-            env = {
-                **os.environ,
-                BENCH_SHA: commit,
-                BENCH_TREE: str(self.checkout),
-                BENCH_SET: self.set_name,
-                BENCH_RESULT_DIR: result_dir,
-            }
-            if self.skip_build:
-                env[BENCH_SKIP_BUILD] = "true"
+            try:
+                pr = f" pr={self.pr}" if self.pr is not None else ""
+                self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}")
+                with self._stage(log, "checkout") as info:
+                    commit = self._checkout_commit(log)
+                    config = Config.load(self.checkout / "bench.toml")
+                    info["sha"] = commit
+                env = {
+                    **os.environ,
+                    BENCH_SHA: commit,
+                    BENCH_TREE: str(self.checkout),
+                    BENCH_SET: self.set_name,
+                    BENCH_RESULT_DIR: result_dir,
+                }
+                if self.skip_build:
+                    env[BENCH_SKIP_BUILD] = "true"
 
-            with self._stage(log, "precondition"):
-                self._run_hook(config.hooks["precondition"], env, BenchFailure, "precondition", log)
+                with self._stage(log, "precondition"):
+                    self._run_hook(
+                        config.hooks["precondition"], env, BenchFailure, "precondition", log
+                    )
 
-            candidate_args = []
-            if not self.skip_build:
-                with self._stage(log, "build"):
-                    self._run_hook(config.hooks["build"], env, CandidateFailure, "build", log)
-                with self._stage(log, "bundle"):
-                    self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle", log)
-                with self._stage(log, "host_suite"):
-                    self._run_suite(config.host_suite, env, [], log)
-                candidate_args = [BENCH_CANDIDATE_OPTION, commit]
-            else:
-                for name in ("build", "bundle", "host_suite"):
-                    self._mark(log, f"stage {name} skipped")
+                candidate_args = []
+                if not self.skip_build:
+                    with self._stage(log, "build"):
+                        self._run_hook(config.hooks["build"], env, CandidateFailure, "build", log)
+                    with self._stage(log, "bundle"):
+                        self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle", log)
+                    stage = "host_suite"
+                    with self._stage(log, stage):
+                        self._run_suite(stage, run_dir, config.host_suite, env, [], log)
+                    candidate_args = [BENCH_CANDIDATE_OPTION, commit]
+                else:
+                    for name in ("build", "bundle", "host_suite"):
+                        self._mark(log, f"stage {name} skipped")
 
-            target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
-            with self._stage(log, "target_suite"):
-                self._run_suite(config.target_suite, env, target_args, log)
-        except BaseException as exc:
-            self._mark(log, f"run {'failed' if isinstance(exc, CandidateFailure) else 'error'}")
-            raise
-        else:
-            self._mark(log, "run passed")
+                target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
+                stage = "target_suite"
+                with self._stage(log, stage):
+                    self._run_suite(stage, run_dir, config.target_suite, env, target_args, log)
+            except CandidateFailure as failure:
+                if post is not None:
+                    self._post(log, post, failure)
+                outcome = "failed"
+                raise
+            if post is not None:
+                self._post(log, post, None)
+            outcome = "passed"
         finally:
+            self._mark(log, f"run {outcome}")
             log.close()
+
+    def _post(self, log, post, failure):
+        """Call `post(failure)` inside the `posted` stage."""
+        with self._stage(log, "posted"):
+            post(failure)
 
     def _open_log(self, result_dir):
         """Create `result_dir/<stamp>/bench.log`, retrying with `-2`, `-3` on a collision.
 
         Returns:
-            BinaryIO: The log, opened append-binary.
+            tuple[pathlib.Path, BinaryIO]: The run's folder and its log, opened append-binary.
         """
         stamp = datetime.now(UTC).strftime(_TIMESTAMP)
         suffix = 1
@@ -130,20 +157,12 @@ class BenchTest:
                 break
             except FileExistsError:
                 suffix += 1
-        return open(run_dir / "bench.log", "ab+")
+        return run_dir, open(run_dir / "bench.log", "ab+")
 
     def _mark(self, log, text):
         """Append one `bench: <iso> <text>` line, a leading newline first if the log doesn't
         already end in one."""
-        log.flush()
-        size = os.fstat(log.fileno()).st_size
-        if size:
-            log.seek(size - 1)
-            if log.read(1) != b"\n":
-                log.write(b"\n")
-        timestamp = datetime.now(UTC).isoformat(timespec="seconds")
-        log.write(f"bench: {timestamp} {text}\n".encode())
-        log.flush()
+        write_mark(log.fileno(), text)
 
     @contextmanager
     def _stage(self, log, name):
@@ -233,13 +252,18 @@ class BenchTest:
         except subprocess.CalledProcessError as exc:
             raise failure_cls(f"{name} exited {exc.returncode}") from exc
 
-    def _run_suite(self, suite, env, extra_args, log):
+    def _run_suite(self, stage, run_dir, suite, env, extra_args, log):
         """Run pytest on one suite directory, its output appended to `log`.
 
+        The suite's records go in `<run folder>/<stage>/` (`BENCH_RECORD_DIR`).
+        The suite runs unbuffered and with `--capture=tee-sys`, so its output reaches `log` live.
+
         Args:
+            stage (str): The stage's name, which names the suite's record folder.
+            run_dir (pathlib.Path): The run's folder; the suite's records go in `run_dir/<stage>/`.
             suite (str): The suite's path, relative to the checkout.
             env (dict[str, str]): The subprocess environment.
-            extra_args (list[str]): Extra pytest arguments, appended last.
+            extra_args (list[str]): Extra pytest arguments, after the fixed ones.
             log (BinaryIO): The run's bench.log.
 
         Raises:
@@ -249,9 +273,23 @@ class BenchTest:
                 (`plugin.py` substitutes its own exit status whenever the session reports an
                 error).
         """
-        command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            suite,
+            "-o",
+            "addopts=",
+            "--capture=tee-sys",
+            *extra_args,
+        ]
+        suite_env = {
+            **env,
+            "PYTHONUNBUFFERED": "1",
+            BENCH_RECORD_DIR: str((run_dir / stage).resolve()),
+        }
         result = subprocess.run(
-            command, cwd=self.checkout, env=env, stdout=log, stderr=subprocess.STDOUT
+            command, cwd=self.checkout, env=suite_env, stdout=log, stderr=subprocess.STDOUT
         )
         if result.returncode == 1:
             raise CandidateFailure(f"{suite} failed")

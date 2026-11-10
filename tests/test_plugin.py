@@ -2,11 +2,12 @@
 fixture."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from wisebench.plugin import SETUP_ERROR_EXIT_STATUS
+from wisebench.plugin import SETUP_ERROR_EXIT_STATUS, write_mark
 
 
 def _run_one_passing_test(pytester, monkeypatch):
@@ -110,3 +111,49 @@ def test_bench_candidate_reads_the_command_line_option(pytester, monkeypatch):
     """)
     result = pytester.runpytest("--bench-candidate", "deadbeef")
     result.assert_outcomes(passed=1)
+
+
+def test_a_plain_run_records_under_a_stamp_folder_and_prints_no_bench_line(pytester, monkeypatch):
+    """With BENCH_RECORD_DIR unset, records land in records/<stamp>/ and no `bench:` line prints."""
+    monkeypatch.delenv("BENCH_RECORD_DIR", raising=False)
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile("def test_pass():\n    assert True\n")
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(passed=1)
+    (stamp_dir,) = Path("records").iterdir()
+    assert (stamp_dir / "report.jsonl").is_file()
+    assert (stamp_dir / "run.json").is_file()
+    assert not any(line.startswith("bench:") for line in result.outlines)
+
+
+def test_record_dir_receives_the_records_directly_with_no_stamp_folder(pytester, monkeypatch):
+    """With BENCH_RECORD_DIR set, report.jsonl and run.json land directly in it."""
+    record_dir = pytester.path / "direct"
+    monkeypatch.setenv("BENCH_RECORD_DIR", str(record_dir))
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile("def test_pass():\n    assert True\n")
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1)
+    assert sorted(p.name for p in record_dir.iterdir()) == ["report.jsonl", "run.json"]
+    assert not Path("records").exists()
+
+
+def test_write_mark_starts_on_a_fresh_line_only_when_the_file_does_not_end_in_one(tmp_path):
+    """write_mark prepends a newline to a file not ending in one, and adds none to one that does."""
+    unterminated = tmp_path / "unterminated.log"
+    unterminated.write_bytes(b"partial output")
+    terminated = tmp_path / "terminated.log"
+    terminated.write_bytes(b"whole line\n")
+    for path in (unterminated, terminated):
+        fd = os.open(path, os.O_RDWR | os.O_APPEND)
+        try:
+            write_mark(fd, "event")
+        finally:
+            os.close(fd)
+
+    unterminated_lines = unterminated.read_text().split("\n")
+    assert unterminated_lines[0] == "partial output"
+    assert unterminated_lines[1].startswith("bench: ")
+    terminated_lines = terminated.read_text().split("\n")
+    assert terminated_lines[0] == "whole line"
+    assert terminated_lines[1].startswith("bench: ")
