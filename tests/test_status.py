@@ -916,7 +916,8 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
         runs = status.Records(records).runs()
         status.is_live(records, runs[0], proc)
         status.timer_state("bench-run")
-        status.read_bench(records, runs[0], "bench-run", proc)
+        bench = status.read_bench(records, runs[0], "bench-run", proc)
+        status.render(status.View(), runs, bench, 24, 80, STARTED)
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
