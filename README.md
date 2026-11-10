@@ -224,8 +224,7 @@ exists, the holder of the `lock` file from `/proc/locks`, the run timer's state 
 reads the runner's markers or joins them to pytest-reportlog's outcomes, so the view is the
 runner's own, on stdlib `curses`. Bitbake shows its task progress only on the terminal that ran the
 build, so the view reads bitbake's `NOTE:` lines from the log; and it asks the kernel's `/proc/locks`
-who holds the lock rather than `lslocks`, which resolves holders by path through `/proc/<pid>/fd`
-and adds a process per refresh.
+who holds the lock rather than `lslocks`, which resolves holders by path through `/proc/<pid>/fd`.
 
 ### Installing `bench run`
 
