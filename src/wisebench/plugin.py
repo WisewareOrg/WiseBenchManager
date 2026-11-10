@@ -2,7 +2,9 @@
 run.json.
 
 Each run writes `report.jsonl` and `run.json` directly into `BENCH_RECORD_DIR` when it is set,
-otherwise under `<BENCH_RESULT_DIR>/<UTC timestamp>/`.
+otherwise under `<BENCH_RESULT_DIR>/<UTC timestamp>/`. With `BENCH_RECORD_DIR` set it also
+writes `bench:` marker lines (`test queued`, `setup`, `test started`) to stdout through
+`write_mark`.
 run.json holds `version`, `command_line`, `start`, `end`, `exit_status`, and each `BENCH_FIELDS`
 field whose environment variable is set.
 """

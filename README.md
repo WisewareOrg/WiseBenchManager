@@ -153,9 +153,9 @@ printed. The runner's own lines start `bench: <ISO time> ` and sit on their own 
 A section runs to the next marker. Outcomes are not marked: they are in `report.jsonl`.
 
 pytest-reportlog's JSON-lines report is the record of the tests: every test report, with
-whatever a layer attaches through `record_property`. It is not enough for `bench.log`: it writes a
-test only when the test ends and names no fixture, and pytest's own output has neither
-timestamps nor setup names, so the plugin writes the markers itself.
+whatever a layer attaches through `record_property`. It writes a test only when the test ends and
+names no fixture, and pytest's own output has neither timestamps nor setup names. No maintained
+tool writes these markers, so the plugin does.
 
 Each suite's `run.json` is written at session end, so a run that fails halfway still leaves everything up to
 that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command

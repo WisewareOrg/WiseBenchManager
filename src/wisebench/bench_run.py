@@ -15,7 +15,8 @@ class BenchRun:
 
     Holds the checkout, the loaded `Config` and the result directory `DISABLED` sits in. Knows
     nothing about the lock shared with `bench test` -- the CLI holds that for this call's whole
-    duration.
+    duration. The verdict is posted by `BenchTest`'s `posted` stage, through a callable this
+    class passes to `BenchTest.run`.
     """
 
     def __init__(self, checkout, config, result_dir):

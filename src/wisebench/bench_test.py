@@ -58,7 +58,8 @@ class BenchTest:
         """Check out the ref, run the hooks, then run both suites, logging every stage.
 
         Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`,
-        `BENCH_RESULT_DIR`, and `BENCH_SKIP_BUILD` when skipping the build. Runs
+        `BENCH_RESULT_DIR`, and `BENCH_SKIP_BUILD` when skipping the build; each suite also gets
+        `BENCH_RECORD_DIR` and `PYTHONUNBUFFERED` (see `_run_suite`). Runs
         `precondition`; unless skipping the build, runs `build`, `bundle` and the host suite,
         and passes the commit to the target suite as `--bench-candidate`. Every hook's and
         suite's output, and a `bench:` marker line per stage, land in
@@ -77,7 +78,8 @@ class BenchTest:
                 fixture erroring during setup or teardown.
             CandidateFailure: A `build`/`bundle` hook, or a test's own call (pytest exit 1),
                 failed.
-            Exception: Any other step raised (a dirty tree, git itself), propagated unwrapped.
+            Exception: Any other step raised (a dirty tree, git itself), or `post` raised (the
+                run ends as `run error`), propagated unwrapped.
         """
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         log = self._open_log(result_dir)
@@ -133,8 +135,7 @@ class BenchTest:
         """Call `post(failure)` inside the `posted` stage.
 
         Raises:
-            BaseException: Whatever `post` raised, after the stage's `error` line and a
-                `run error` line.
+            BaseException: Whatever `post` raised, after a `run error` line.
         """
         try:
             with self._stage(log, "posted"):
