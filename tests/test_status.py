@@ -337,6 +337,20 @@ def test_a_started_test_with_no_report_yet_is_open():
     assert section.outcome == "open"
 
 
+def test_a_test_is_open_until_its_teardown_report():
+    """A passed setup report with the call still running is `open`, not `passed`."""
+    run = parse(
+        suite_log(
+            mark("test queued t.py::a", 1, 1),
+            mark("test started t.py::a", 1, 2),
+        ),
+        {"target_suite": [rep("t.py::a", "setup", "passed")]},
+    )
+
+    (section,) = stage_of(run, "target_suite").sections
+    assert section.outcome == "open"
+
+
 @pytest.mark.parametrize(
     ("setup_outcome", "expected"), [("passed", "passed"), ("failed", "failed")]
 )
