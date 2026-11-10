@@ -1,10 +1,12 @@
-"""Isolates every test's HOME, and supplies the autospec `BenchTest` the runner tests share."""
+"""Isolates every test from the host (HOME, `systemctl`, `gh`, GitHub), and supplies the autospec
+`BenchTest` the runner tests share."""
 
+import os
 from unittest.mock import create_autospec
 
 import pytest
 
-from wisebench import bench_run, cli
+from wisebench import bench_run, check, cli
 from wisebench.bench_test import BenchTest
 
 
@@ -17,6 +19,41 @@ def _isolated_home(monkeypatch, tmp_path):
         tmp_path (pathlib.Path): The test's own temporary directory.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
+
+
+_SHIM = """#!/bin/sh
+echo "$0 $*" >> "{log}"
+exit 0
+"""
+
+
+@pytest.fixture(autouse=True)
+def _no_host_side_effects(monkeypatch, tmp_path_factory):
+    """Fail a test that runs the host's `systemctl` or `gh`, or builds a GitHub client.
+
+    `systemctl` and `gh` resolve to shims that log their argv and exit 0; teardown fails
+    naming every logged call. `check.GithubIntegration` raises unless a test replaces it.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores PATH and `check.GithubIntegration`.
+        tmp_path_factory (pytest.TempPathFactory): Makes the shim directory outside `tmp_path`.
+    """
+    shim_dir = tmp_path_factory.mktemp("shims")
+    log = shim_dir / "calls.log"
+    log.touch()
+    for name in ("systemctl", "gh"):
+        shim = shim_dir / name
+        shim.write_text(_SHIM.format(log=log))
+        shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test reached GithubIntegration without replacing it")
+
+    monkeypatch.setattr(check, "GithubIntegration", refuse)
+    yield
+    calls = log.read_text().splitlines()
+    assert not calls, f"a test reached the host's systemctl or gh: {calls}"
 
 
 @pytest.fixture

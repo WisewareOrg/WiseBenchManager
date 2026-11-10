@@ -354,17 +354,6 @@ def test_run_prints_a_failing_systemctl_call_but_still_reraises(
     assert "systemctl failed" in capsys.readouterr().err
 
 
-def _refuse_systemctl(monkeypatch):
-    """Fail the test, rather than touch the host's units, if BenchRun reaches systemctl."""
-    real_run = subprocess.run
-
-    def run(command, **kwargs):
-        assert command[0] != "systemctl", f"bench failure path reached: {command}"
-        return real_run(command, **kwargs)
-
-    monkeypatch.setattr(bench_run.subprocess, "run", run)
-
-
 def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_run_failed(
     made, monkeypatch, tmp_path
 ):
@@ -380,7 +369,6 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
     _FakeQueue.result = ("HEAD", sha, 14)
-    _refuse_systemctl(monkeypatch)
     seen = []
     monkeypatch.setattr(
         _FakeCheck,
