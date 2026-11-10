@@ -239,7 +239,7 @@ def test_a_real_pytest_subprocess_clears_addopts(tmp_path, monkeypatch):
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
     bench._run_dir = tmp_path / "run"
-    with open(tmp_path / "bench.log", "w") as log:
+    with open(tmp_path / "bench.log", "ab+") as log:
         bench._run_suite(
             "suite_stage", "suite", {**os.environ}, [], log
         )  # no raise means the suite passed
@@ -316,8 +316,12 @@ def test_hook_output_and_every_marker_land_in_bench_log_in_order(monkeypatch, tm
         "stage bundle started",
         "stage bundle passed",
         "stage host_suite started",
+        "test queued host_suite/test_one.py::test_one",
+        "test started host_suite/test_one.py::test_one",
         "stage host_suite passed",
         "stage target_suite started",
+        "test queued target_suite/test_one.py::test_one",
+        "test started target_suite/test_one.py::test_one",
         "stage target_suite passed",
         "run passed",
     ]
@@ -337,7 +341,9 @@ def test_stage_names_are_fixed_regardless_of_the_configured_suite_paths(monkeypa
     bench.run(lg_env, [])
 
     log_text = next((tmp_path / "records").rglob("bench.log")).read_text()
-    marker_lines = [line for line in log_text.splitlines() if line.startswith("bench: ")]
+    marker_lines = [
+        line for line in log_text.splitlines() if line.startswith("bench: ") and " stage " in line
+    ]
     assert any(line.endswith("stage host_suite started") for line in marker_lines)
     assert any(line.endswith("stage target_suite started") for line in marker_lines)
     assert not any("suites/host" in line or "suites/target" in line for line in marker_lines)
