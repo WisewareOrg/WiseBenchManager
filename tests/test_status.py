@@ -648,7 +648,7 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
         bench_state.is_live(records, runs[0], proc)
         bench_state.timer_state("bench-run")
         bench = bench_state.read_bench(records, runs[0], "bench-run", proc)
-        frame = view.resolve(view.State(), view.Snapshot(runs, bench, STARTED), 24, 80)
+        frame = view.resolve(view.State(), view.Snapshot(runs, bench, STARTED, "records"), 24, 80)
         screen.draw(Grid(24, 80), frame)
     finally:
         for path in paths:

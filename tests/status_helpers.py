@@ -13,6 +13,7 @@ OLDEST = "20261108T030715Z"
 SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")
 SIZE = (24, 80)
+DIRECTORY = "records"
 LIVE = bench_state.Bench(live=True, disabled=False, timer="on")
 IDLE = bench_state.Bench(live=False, disabled=False, timer="on")
 DISABLED = bench_state.Bench(live=False, disabled=True, timer="off")

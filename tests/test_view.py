@@ -2,6 +2,7 @@
 
 import pytest
 from status_helpers import (
+    DIRECTORY,
     DISABLED,
     IDLE,
     LIVE,
@@ -34,7 +35,7 @@ PLAIN_BUILD = live("build", build=plain("build", 40))
 def resolve(runs, bench=IDLE, state=None, size=SIZE):
     """Resolve the frame for `runs` in `state` (a fresh State by default)."""
     state = view.State() if state is None else state
-    return view.resolve(state, view.Snapshot(runs, bench, NOW), *size)
+    return view.resolve(state, view.Snapshot(runs, bench, NOW, DIRECTORY), *size)
 
 
 def press(state, runs, keys, bench=IDLE, size=SIZE):

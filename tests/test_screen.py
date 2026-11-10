@@ -4,6 +4,7 @@ import re
 
 import pytest
 from status_helpers import (
+    DIRECTORY,
     DISABLED,
     IDLE,
     LIVE,
@@ -26,7 +27,7 @@ from status_helpers import (
     t,
 )
 
-from wisebench import screen, view
+from wisebench import runlog, screen, status, view
 
 pytestmark = pytest.mark.usefixtures("local_zone")
 
@@ -46,7 +47,7 @@ def lc(hour, minute=0, second=0):
 
 def drawn(runs, bench=IDLE, now=NOW, **state):
     """`runs` resolved through a State built from `state` and drawn on a Grid: (grid, frame)."""
-    frame = view.resolve(view.State(**state), view.Snapshot(runs, bench, now), *SIZE)
+    frame = view.resolve(view.State(**state), view.Snapshot(runs, bench, now, DIRECTORY), *SIZE)
     grid = Grid(*SIZE)
     screen.draw(grid, frame)
     return grid, frame
@@ -57,9 +58,21 @@ def stage_row(glyph, name, start="", took=""):
     return f"{glyph} {name}".ljust(17) + start.ljust(10) + took
 
 
-def test_the_meaning_colours_are_distinct():
-    meanings = ("GREEN", "AMBER", "RED", "BLUE", "RUNNING_TINT", "FAILED_TINT", "SELECTION")
-    assert len({getattr(screen, name) for name in meanings}) == len(meanings)
+def test_the_meaning_colours_map_to_distinct_256_colour_indices():
+    meanings = [
+        getattr(screen, name)
+        for name in (
+            "GROUND",
+            "GREEN",
+            "AMBER",
+            "RED",
+            "BLUE",
+            "RUNNING_TINT",
+            "FAILED_TINT",
+            "SELECTION",
+        )
+    ]
+    assert len({status._XTERM[colour] for colour in meanings}) == len(meanings)
 
 
 SCENES = {
@@ -202,7 +215,9 @@ def test_the_idle_summary_is_the_result_its_end_and_length_and_a_row_per_suite()
 
 def test_the_log_rows_drawn_are_the_frames_window_and_only_the_cursor_row_is_selected():
     anchor = (
-        view.resolve(view.State(stage="host_suite"), view.Snapshot([LONG], IDLE, NOW), *SIZE)
+        view.resolve(
+            view.State(stage="host_suite"), view.Snapshot([LONG], IDLE, NOW, DIRECTORY), *SIZE
+        )
         .rows[25]
         .anchor
     )
@@ -290,3 +305,66 @@ def test_a_failed_test_with_only_failure_lines_still_shows_its_fold_glyph():
     failed = suite("host_suite", ["failed"], failures={0: ("t.py:1: AssertionError",)})
     grid, _ = drawn([run(host_suite=failed)], IDLE, stage="host_suite")
     grid.find(r"▾ ✗ case_00")
+
+
+def test_the_history_footer_counts_the_records_and_names_the_directory():
+    grid, _ = drawn(HISTORY, LIVE, tab="history")
+    grid.find(rf"^{len(HISTORY)} records in {DIRECTORY}/")
+
+
+def test_the_stage_list_is_34_wide_with_its_divider_at_column_35_and_the_pane_at_column_37():
+    grid, _ = drawn([live("build", build=stage("build", "open", t(3, 10), lines=["marker"]))], LIVE)
+    assert grid.text(3).index("│") == 35
+    assert grid.find("marker")[1] == 37
+
+
+def past_build():
+    """A run whose build passed, with bitbake progress and two output lines."""
+    tasks = tuple(runlog.Task(f"r{i}", "do_compile", t(3, 11, i)) for i in range(3))
+    progress = runlog.BuildProgress(1204, 3311, tasks)
+    done = stage(
+        "build", "passed", t(3, 10), t(3, 40), lines=["NOTE: one", "NOTE: two"], progress=progress
+    )
+    return run(build=done)
+
+
+def test_a_past_builds_drawn_head_rows_are_the_frames_head_height():
+    grid, frame = drawn([past_build()], IDLE, stage="build")
+    top = frame.layout.pane_top
+    head_rows = 0
+    while grid.text(top + head_rows)[37:].strip():
+        head_rows += 1
+    assert head_rows == frame.head_height
+
+
+def test_a_passed_past_builds_head_is_not_drawn_amber():
+    grid, _ = drawn([past_build()], IDLE, stage="build")
+    head = [*grid.span(r"build  task"), *grid.span(r"█+")]
+    assert screen.AMBER not in {cell[1] for cell in head}
+
+
+def test_changing_the_stage_resets_the_scroll_so_the_new_stages_rows_above_the_cursor_show():
+    outcomes = ["passed"] * 5 + ["failed"] + ["passed"] * 24
+    runs = [
+        run(
+            host_suite=suite("host_suite", ["passed"] * 30),
+            target_suite=suite("target_suite", outcomes),
+        )
+    ]
+    first = resolve_frame(runs, view.State(stage="host_suite"))
+    state = view.State(stage="host_suite", focus="log", cursor=first.rows[25].anchor, scroll=0)
+    scrolled = resolve_frame(runs, state)
+    state.scroll = scrolled.scroll
+    assert scrolled.scroll > 0
+
+    view.handle(state, "\x1b", scrolled)
+    view.handle(state, "j", resolve_frame(runs, state))
+    frame = resolve_frame(runs, state)
+
+    assert (frame.stage.name, frame.cursor) == ("target_suite", 5)
+    assert frame.scroll == 0
+
+
+def resolve_frame(runs, state):
+    """The frame for `runs` in `state` at the default size."""
+    return view.resolve(state, view.Snapshot(runs, IDLE, NOW, DIRECTORY), *SIZE)
