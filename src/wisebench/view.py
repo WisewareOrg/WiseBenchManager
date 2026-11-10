@@ -265,12 +265,13 @@ def _head(stage, live, lay):
     if not (live and stage.state == "open"):
         return "build", 3, ()
     spare = lay.pane_bottom - lay.pane_top - 4 - MIN_LOG_ROWS
-    tasks = sorted(
-        stage.progress.tasks,
-        key=lambda task: (task.started is None, task.started.timestamp() if task.started else 0),
-    )
-    listed = tuple(tasks[: max(0, spare)])
+    listed = tuple(sorted(stage.progress.tasks, key=_by_start)[: max(0, spare)])
     return "build", 4 + len(listed), listed
+
+
+def _by_start(task):
+    """Sort key for running tasks: by start time, a task without one last."""
+    return (task.started is None, task.started.timestamp() if task.started else 0)
 
 
 def _is_open(folds, section):
@@ -298,13 +299,7 @@ def _rows(stage, folds, expand=False):
         list[Row]: The rows in display order.
     """
     rows = [Row((stage.name, None, i), "line", line) for i, line in enumerate(stage.lines)]
-    ends = []
-    following = stage.ended
-    for section in reversed(stage.sections):
-        ends.append(following)
-        if section.started is not None:
-            following = section.started
-    for section, end in zip(stage.sections, reversed(ends), strict=True):
+    for section, end in zip(stage.sections, _section_ends(stage), strict=True):
         opened = _is_open(folds, section)
         rows.append(Row((stage.name, section.id, 0), "head", section.name, section, opened, end))
         if opened or expand:
@@ -314,6 +309,20 @@ def _rows(stage, folds, expand=False):
                 for i, line in enumerate(body, 1)
             )
     return rows
+
+
+def _section_ends(stage):
+    """When each section of a stage ended: the next started section's start, else the stage's end.
+
+    Returns:
+        list[datetime | None]: One end per section, in section order.
+    """
+    ends, following = [], stage.ended
+    for section in reversed(stage.sections):
+        ends.append(following)
+        if section.started is not None:
+            following = section.started
+    return ends[::-1]
 
 
 def _cursor(chosen, stage, rows):
@@ -330,8 +339,10 @@ def _cursor(chosen, stage, rows):
     anchors = [row.anchor for row in rows]
     if chosen in anchors:
         return anchors.index(chosen)
-    if chosen is not None and chosen[1] is not None and (header := (*chosen[:2], 0)) in anchors:
-        return anchors.index(header)
+    if chosen is not None and chosen[1] is not None:
+        header = (chosen[0], chosen[1], 0)
+        if header in anchors:
+            return anchors.index(header)
     if not stage.sections:
         return len(rows) - 1
     wanted = next((s for s in stage.sections if s.outcome == "failed"), None) or next(
@@ -457,7 +468,7 @@ def _enter(state, frame):
         state.focus = "log"
 
 
-def _moved(kind, at, count, half):
+def _index_after(kind, at, count, half):
     """The index a `kind` of movement reaches from `at` (None: no selection) among `count` rows."""
     if kind == "top":
         return 0
@@ -477,18 +488,20 @@ def _move(state, kind, frame):
     """
     if state.tab == "history":
         if frame.history:
-            index = _moved(kind, frame.history_cursor, len(frame.history), frame.history_room // 2)
+            index = _index_after(
+                kind, frame.history_cursor, len(frame.history), frame.history_room // 2
+            )
             state.history_record = frame.history[index].record
     elif state.focus == "log" and frame.rows:
         if kind == "bottom":
             state.cursor = TAIL
         else:
-            index = _moved(kind, frame.cursor, len(frame.rows), frame.room // 2)
+            index = _index_after(kind, frame.cursor, len(frame.rows), frame.room // 2)
             state.cursor = frame.rows[index].anchor
     elif frame.run is not None:
         names = [stage.name for stage in frame.run.stages]
         at = names.index(frame.stage.name) if frame.stage is not None else None
-        state.stage = names[_moved(kind, at, len(names), frame.room // 2)]
+        state.stage = names[_index_after(kind, at, len(names), frame.room // 2)]
 
 
 def _fold(state, op, frame):

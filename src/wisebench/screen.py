@@ -163,6 +163,25 @@ def _took(started, ended, running, now):
     return DASH
 
 
+def _run_took(run, running, now):
+    """A run's length in whole minutes: since its start while running, else start to end."""
+    if run.started is None:
+        return DASH
+    if running:
+        return _minutes(now - run.started)
+    return _minutes(run.ended - run.started) if run.ended else DASH
+
+
+def _what(run):
+    """What a run tested: `PR #n`, else its ref."""
+    return f"PR #{run.pr}" if run.pr is not None else run.ref
+
+
+def _running(frame, stage):
+    """Whether `stage` is running: open in the live run."""
+    return frame.live and stage.state == "open"
+
+
 def _put_parts(surface, y, x, parts, bg=None, stop=None):
     """Write consecutive `(text, fg, bold)` parts from (y, x) on `bg`, clipped at column `stop`."""
     for text, fg, bold in parts:
@@ -210,7 +229,7 @@ def _status_bar(surface, frame):
     surface.put(lay.bar, lay.cols - 5, " keys", TEXT)
 
 
-def _footer(frame):
+def _record_count(frame):
     """The `N records in <directory>/` line."""
     return f"{len(frame.history)} records in {frame.directory}/"
 
@@ -219,10 +238,12 @@ def _run(surface, frame):
     """The Run tab: the header, the stage list, the divider and the pane of the stage shown."""
     lay = frame.layout
     if frame.run is None:
-        surface.put(1, 0, _footer(frame), DIM)
+        surface.put(1, 0, _record_count(frame), DIM)
         return
     _run_header(surface, frame)
-    surface.put(lay.pane_top, 0, f"{'stage':<{_START_COL}}{'start':<10}took", DIM)
+    surface.put(
+        lay.pane_top, 0, f"{'stage':<{_START_COL}}{'start':<{_TOOK_COL - _START_COL}}took", DIM
+    )
     for index, stage in enumerate(frame.run.stages):
         y = lay.pane_top + 1 + index
         if y > lay.pane_bottom:
@@ -243,7 +264,7 @@ def _run(surface, frame):
 def _run_header(surface, frame):
     """Row 1: the title and `<sha7>  record <id>`; a prefix when idle, the result when past."""
     run, bench = frame.run, frame.bench
-    title = f"PR #{run.pr}" if run.pr is not None else run.ref
+    title = _what(run)
     rest = f"{_sha7(run)}  record {run.record}"
     if not frame.newest:
         word, colour = _RESULT_WORDS[run.result]
@@ -266,7 +287,7 @@ def _stage_row(surface, y, stage, frame):
 
     The ground is the running tint, else the failed tint, else the selection when shown.
     """
-    running = frame.live and stage.state == "open"
+    running = _running(frame, stage)
     glyph, colour, bold = _tone(stage.state, running)
     text = f"{glyph} {_display_name(stage.name)}".ljust(_START_COL)
     if stage.started is not None and stage.state not in ("not-started", "skipped"):
@@ -286,13 +307,14 @@ def _stage_row(surface, y, stage, frame):
 def _summary(surface, frame):
     """The pane with no stage shown: the result, its end and length, a row per suite."""
     run, lay = frame.run, frame.layout
-    if run.result is None and frame.live:
+    running = run.result is None and frame.live
+    took = _run_took(run, running, frame.now)
+    if running:
         word, colour = "running", AMBER
-        rest = f"  took {_minutes(frame.now - run.started) if run.started else DASH}"
+        rest = f"  took {took}"
     else:
         word, colour = _RESULT_WORDS[run.result]
         ended = _clock(run.ended) if run.ended else DASH
-        took = _minutes(run.ended - run.started) if run.ended and run.started else DASH
         rest = f"  ended {ended}, took {took}"
     _put_parts(surface, lay.pane_top, _PANE, [(word, colour, True), (rest, DIM, False)])
     y = lay.pane_top + 1
@@ -313,7 +335,7 @@ def _summary(surface, frame):
 def _suite_head(surface, frame):
     """A suite's counts line: its name in its colour, started of queued, passed and failed."""
     stage = frame.stage
-    _, colour, _ = _tone(stage.state, frame.live and stage.state == "open")
+    _, colour, _ = _tone(stage.state, _running(frame, stage))
     done, queued, passed, failed = _counts(stage)
     parts = [
         (_display_name(stage.name), colour, True),
@@ -344,7 +366,7 @@ def _plain_head(surface, frame):
             _PANE,
             [("█" * filled, AMBER, False), ("█" * (_BAR_CELLS - filled), RULE, False)],
         )
-        if frame.live and stage.state == "open":
+        if _running(frame, stage):
             surface.put(top + 2, _PANE, "running now", DIM)
             for offset, task in enumerate(frame.tasks):
                 took = _duration(frame.now - task.started) if task.started else DASH
@@ -360,7 +382,7 @@ def _plain_head(surface, frame):
 def _log_window(surface, frame, top):
     """The log rows the frame scrolled to, from row `top`, the cursor's row selected."""
     cols = frame.layout.cols
-    running = frame.live and frame.stage.state == "open"
+    running = _running(frame, frame.stage)
     for offset, row in enumerate(frame.rows[frame.scroll : frame.scroll + frame.room]):
         y = top + offset
         bg = SELECTION if frame.scroll + offset == frame.cursor else None
@@ -399,22 +421,17 @@ def _history(surface, frame):
     for offset, run in enumerate(window):
         index = frame.history_scroll + offset
         _history_row(surface, lay.pane_top + offset, run, index, frame, width)
-    surface.put(lay.pane_bottom, 0, _footer(frame), DIM)
+    surface.put(lay.pane_bottom, 0, _record_count(frame), DIM)
 
 
 def _history_row(surface, y, run, index, frame, width):
     """One History row: record, what, sha, result, took, then the failing stage or `by hand`."""
     running = index == 0 and frame.bench.live
-    if running:
-        word, colour = "running", AMBER
-        took = _minutes(frame.now - run.started) if run.started else DASH
-    else:
-        word, colour = _RESULT_WORDS[run.result]
-        took = _minutes(run.ended - run.started) if run.ended and run.started else DASH
-    what = f"PR #{run.pr}" if run.pr is not None else run.ref
+    word, colour = ("running", AMBER) if running else _RESULT_WORDS[run.result]
+    took = _run_took(run, running, frame.now)
     parts = [
         (run.record.ljust(width), TEXT, False),
-        (what[:20].ljust(22), TEXT, False),
+        (_what(run)[:20].ljust(22), TEXT, False),
         (_sha7(run).ljust(9), TEXT, False),
         (word.ljust(13), colour, False),
         (f"{took:>4}  ", TEXT, False),

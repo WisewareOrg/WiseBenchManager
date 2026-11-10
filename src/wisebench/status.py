@@ -15,6 +15,8 @@ from wisebench import screen, view
 from wisebench.bench_state import read_bench, read_run_unit
 from wisebench.records import Records
 
+# The three grounds are not the nearest index to the canvas: that is 235 for all three, which
+# would make the running row, the failed row and the selection look the same.
 _XTERM = {
     screen.GROUND: 232,
     screen.TEXT: 252,
