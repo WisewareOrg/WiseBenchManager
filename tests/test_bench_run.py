@@ -51,10 +51,15 @@ class _FakeBenchTest:
         self.run_calls = []
         _FakeBenchTest.instances.append(self)
 
-    def run(self, lg_env, pytest_args):
+    def run(self, lg_env, pytest_args, post=None):
         self.run_calls.append((lg_env, pytest_args))
-        if isinstance(_FakeBenchTest.outcome, Exception):
-            raise _FakeBenchTest.outcome
+        outcome = _FakeBenchTest.outcome
+        if post is not None and (
+            outcome is None or isinstance(outcome, bench_test.CandidateFailure)
+        ):
+            post(outcome)
+        if isinstance(outcome, Exception):
+            raise outcome
 
 
 class _FakeCheck:

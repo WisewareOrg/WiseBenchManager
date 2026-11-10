@@ -349,6 +349,75 @@ def test_run_started_line_carries_the_pr_number_when_one_is_given(monkeypatch, t
     assert lines[0] == "run started kind=run ref=HEAD pr=7"
 
 
+def _marker_lines(tmp_path):
+    """Return the run's `bench:` lines from bench.log, timestamp stripped."""
+    log_text = next((tmp_path / "records").rglob("bench.log")).read_text()
+    return [
+        re.sub(r"^bench: \S+ ", "", line)
+        for line in log_text.splitlines()
+        if line.startswith("bench: ")
+    ]
+
+
+def _recording_post(tmp_path):
+    """Return `(post, calls)`; each call records its argument and the marker lines so far."""
+    calls = []
+
+    def post(outcome):
+        calls.append((outcome, _marker_lines(tmp_path)))
+
+    return post, calls
+
+
+def test_a_passing_run_posts_none_in_a_posted_stage_before_run_passed(monkeypatch, tmp_path):
+    """A passing run calls post(None) inside `stage posted`, before `run passed`."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=True)
+    lg_env = _write_lg_env(tmp_path)
+    post, calls = _recording_post(tmp_path)
+
+    bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [], post=post)
+
+    assert len(calls) == 1
+    assert calls[0][0] is None
+    assert calls[0][1][-1] == "stage posted started"
+    assert _marker_lines(tmp_path)[-4:] == [
+        "stage target_suite passed",
+        "stage posted started",
+        "stage posted passed",
+        "run passed",
+    ]
+
+
+def test_a_target_suite_failure_posts_the_failure_then_reraises_after_run_failed(
+    monkeypatch, tmp_path
+):
+    """A target-suite failure is posted inside `stage posted`, then `run failed`, then raised."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=False)
+    lg_env = _write_lg_env(tmp_path)
+    post, calls = _recording_post(tmp_path)
+
+    with pytest.raises(bench_test.CandidateFailure, match="target_suite failed") as raised:
+        bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [], post=post)
+
+    assert len(calls) == 1
+    assert calls[0][0] is raised.value
+    assert calls[0][1][-1] == "stage posted started"
+    lines = _marker_lines(tmp_path)
+    assert lines[-3] == "stage posted started"
+    assert lines[-2] == "stage posted passed"
+    assert lines[-1] == "run failed"
+
+
 def test_stage_names_are_fixed_regardless_of_the_configured_suite_paths(monkeypatch, tmp_path):
     """Stage names in bench.log are the fixed host_suite/target_suite, not the configured paths."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
