@@ -359,12 +359,13 @@ def _plain_head(surface, frame):
         percent = progress.done * 100 // progress.total
         filled = round(_BAR_CELLS * progress.done / progress.total)
         task_line = f"  task {progress.done} of {progress.total}  {percent}%"
-        _put_parts(surface, top, _PANE, [("build", AMBER, True), (task_line, TEXT, False)])
+        _, colour, _ = _tone(stage.state, _running(frame, stage))
+        _put_parts(surface, top, _PANE, [("build", colour, True), (task_line, TEXT, False)])
         _put_parts(
             surface,
             top + 1,
             _PANE,
-            [("█" * filled, AMBER, False), ("█" * (_BAR_CELLS - filled), RULE, False)],
+            [("█" * filled, colour, False), ("█" * (_BAR_CELLS - filled), RULE, False)],
         )
         if _running(frame, stage):
             surface.put(top + 2, _PANE, "running now", DIM)

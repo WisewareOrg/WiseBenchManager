@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from wisebench.bench_state import Bench
-from wisebench.plugin import DEFAULT_RESULT_DIR
 from wisebench.runlog import Run, Section, Stage, Task
 
 TAIL = "tail"
@@ -37,7 +36,7 @@ class Snapshot:
     runs: list[Run]
     bench: Bench
     now: datetime
-    directory: str = DEFAULT_RESULT_DIR
+    directory: str
 
 
 @dataclass
@@ -484,7 +483,7 @@ def _move(state, kind, frame):
     """Move the History selection, the log cursor or the stage, by the tab and focus.
 
     In the log, `G` follows its tail. The log focus acts on the stage list while the log has no
-    rows.
+    rows. A stage change resets the scroll memo, as opening a run does.
     """
     if state.tab == "history":
         if frame.history:
@@ -502,6 +501,7 @@ def _move(state, kind, frame):
         names = [stage.name for stage in frame.run.stages]
         at = names.index(frame.stage.name) if frame.stage is not None else None
         state.stage = names[_index_after(kind, at, len(names), frame.room // 2)]
+        state.scroll = 0
 
 
 def _fold(state, op, frame):
