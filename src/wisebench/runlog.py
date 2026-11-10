@@ -157,14 +157,14 @@ def _failure(phases):
         longrepr = report.get("longrepr")
         if report.get("outcome") != "failed" or not isinstance(longrepr, dict):
             continue
+        lines = []
         crash = longrepr.get("reprcrash")
-        lines = (
-            [f"{crash.get('path')}:{crash.get('lineno')}: {crash.get('message')}"] if crash else []
-        )
+        if crash:
+            lines.append(f"{crash.get('path')}:{crash.get('lineno')}: {crash.get('message')}")
         entries = (longrepr.get("reprtraceback") or {}).get("reprentries") or []
-        return tuple(
-            lines + ((entries[-1].get("data") or {}).get("lines") or [] if entries else [])
-        )
+        if entries:
+            lines.extend((entries[-1].get("data") or {}).get("lines") or [])
+        return tuple(lines)
     return ()
 
 
@@ -288,9 +288,15 @@ class _StageBuilder:
             )
         progress = _progress(self.lines) if self.name == "build" else None
         return Stage(
-            self.name, self.state, self.started, self.ended, self.sha,
-            tuple(self.lines), tuple(sections), progress,
-        )  # fmt: skip
+            self.name,
+            self.state,
+            self.started,
+            self.ended,
+            self.sha,
+            tuple(self.lines),
+            tuple(sections),
+            progress,
+        )
 
 
 def parse_run(record, text, reports):

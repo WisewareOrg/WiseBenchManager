@@ -683,7 +683,9 @@ def _history(canvas, view, runs, bench, now, lay):
             (f"{took:>4}  ", _NONE),
         ]
         for index, part in enumerate(trailing):
-            parts += [("  ", _NONE)] * bool(index) + [part]
+            if index:
+                parts.append(("  ", _NONE))
+            parts.append(part)
         canvas.put_all(row, 0, parts)
         if run.record == view.history_record:
             canvas.tint(row, 0, canvas.cols, _SELECTION)
