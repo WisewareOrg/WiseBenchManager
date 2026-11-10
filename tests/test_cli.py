@@ -304,7 +304,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
             pass
 
         def head(self):
-            return ("main", "deadbeef")
+            return ("main", "deadbeef", 1)
 
     class _StubCheck:
         def __init__(self, *a, **kw):
@@ -314,7 +314,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
             pass
 
     class _SigtermBenchTest:
-        def __init__(self, checkout, ref, set_name, kind="test"):
+        def __init__(self, checkout, ref, set_name, kind="test", pr=None):
             pass
 
         def run(self, lg_env, pytest_args):
