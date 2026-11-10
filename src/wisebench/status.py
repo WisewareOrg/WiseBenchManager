@@ -1525,7 +1525,7 @@ _FOREGROUND = {
     "lightgrey": 248,
     "bar_empty": 237,
 }
-_BACKGROUND = {"running_tint": 235, "failed_tint": 235, "selection": 235}
+_BACKGROUND = {"running_tint": 58, "failed_tint": 52, "selection": 17}
 _FILLED = {
     "badge_running": (_GROUND, 180),
     "badge_idle": (231, 237),
