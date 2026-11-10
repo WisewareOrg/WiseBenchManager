@@ -66,9 +66,6 @@ def write_record(directory, name=STAMP, text="", reports=None, raw=None):
     return run_dir
 
 
-# ---------------------------------------------------------------- marker grammar
-
-
 def secs(n, micro=0):
     return STARTED + timedelta(seconds=n, microseconds=micro)
 
@@ -148,9 +145,6 @@ GRAMMAR = {
 @pytest.mark.parametrize(("text", "read", "expected"), GRAMMAR.values(), ids=GRAMMAR)
 def test_the_marker_grammar_is_read_into_the_run(text, read, expected):
     assert read(parse(text)) == expected
-
-
-# ---------------------------------------------------------------- sections
 
 
 def test_sections_split_at_markers_and_ids_are_stable_across_a_re_parse():
@@ -268,9 +262,6 @@ def test_a_failed_test_carries_its_crash_line_and_the_last_traceback_entrys_line
     assert good.failure == ()
 
 
-# ---------------------------------------------------------------- records on disk
-
-
 def test_crlf_and_invalid_utf8_are_read_without_raising(tmp_path):
     raw = (
         TEST_STARTED.replace("\n", "\r\n")
@@ -385,9 +376,6 @@ def test_a_same_size_rewrite_with_the_old_mtime_is_not_reread_but_a_size_change_
     assert [r.ref for r in records.runs()] == ["bbbb"]
 
 
-# ---------------------------------------------------------------- build progress
-
-
 KAS = "2026-11-10 03:10:00 - INFO     - NOTE: "
 
 
@@ -421,9 +409,6 @@ def test_build_progress_reads_the_last_task_count_and_the_tasks_still_running():
 def test_build_progress_is_none_without_a_running_task_line_or_outside_the_build_stage():
     assert build("NOTE: recipe x-1-r0: task do_x: Started") is None
     assert build("NOTE: Running task 1 of 2 (/l/a.bb:do_x)", stage="precondition") is None
-
-
-# ---------------------------------------------------------------- liveness and bench state
 
 
 def proc_tree(tmp_path, holders):
@@ -546,9 +531,6 @@ def test_read_bench_combines_disabled_presence_liveness_and_timer(tmp_path, monk
     assert first_launch == bench_state.Bench(live=False, disabled=True, timer="on")
 
 
-# ---------------------------------------------------------------- read-only tick
-
-
 def snapshot(root):
     """Every entry under root: kind, mode-independent mtime_ns, and file bytes."""
     seen = {}
@@ -611,9 +593,6 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
     assert snapshot(tmp_path) == before
     assert popen_argv == [["systemctl", "--user", "is-active", "bench-run.timer"]] * len(popen_argv)
     assert popen_argv
-
-
-# ---------------------------------------------------------------- writer/parser agreement
 
 
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")
@@ -728,9 +707,6 @@ def test_a_log_written_by_a_real_bench_test_run_parses_into_the_model(
         found = stage_of(run, name).sections
         assert [(s.kind, s.name, s.outcome) for s in found] == sections.get(name, [])
         assert all(bool(s.failure) == (s.outcome == "failed") for s in found)
-
-
-# ---------------------------------------------------------------- a real record
 
 
 def test_a_committed_real_host_record_parses_into_the_model():

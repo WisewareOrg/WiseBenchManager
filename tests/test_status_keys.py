@@ -80,9 +80,6 @@ MANY = run(host_suite=suite("host_suite", ["passed"] * 30, {i: (f"out {i}",) for
 RUNS = [MANY]
 
 
-# ---------------------------------------------------------------- focus and Enter / Esc
-
-
 PLAIN = [run(build=stage("build", "passed", t(3, 10), lines=("one", "two")))]
 
 
@@ -100,9 +97,6 @@ def test_enter_moves_focus_into_a_log_that_has_rows_and_nowhere_else(runs, name,
     assert view.focus == focus
     keys(view, runs, ESC, bench=bench)
     assert view.focus == "stages"
-
-
-# ---------------------------------------------------------------- stage list movement
 
 
 @pytest.mark.parametrize(
@@ -137,9 +131,6 @@ def test_every_stage_list_movement_key_ends_follow(press):
 def growing(count, stage_name="host_suite"):
     outcomes = ["passed"] * (count - 1) + ["open"]
     return live(stage_name, **{stage_name: suite(stage_name, outcomes, state="open")})
-
-
-# ---------------------------------------------------------------- log movement and the cursor
 
 
 @pytest.mark.parametrize(
@@ -189,9 +180,6 @@ def test_the_cursor_is_drawn_on_the_pane_s_last_row_at_the_last_case():
     assert cursor(view, RUNS)[0] == 21
 
 
-# ---------------------------------------------------------------- default cursor
-
-
 FAILED_SUITE = suite(
     "host_suite",
     ["passed", "failed", "passed"],
@@ -216,9 +204,6 @@ def running(outcomes):
 def test_the_default_cursor_is_the_first_failed_section_else_the_running_one(runs, bench, case):
     view = in_log(runs, "host_suite", bench=bench)
     assert case in shown(view, runs, bench)
-
-
-# ---------------------------------------------------------------- folds
 
 
 FOLD_RUNS = [run(host_suite=FAILED_SUITE, target_suite=suite("target_suite", ["passed", "passed"]))]
@@ -285,9 +270,6 @@ def test_a_cursor_on_a_line_folded_away_by_a_reparse_lands_on_its_header():
     view.tick(after, IDLE, SIZE)
     assert "case_00" in shown(view, after)
     assert shown(view, after).startswith("▸")
-
-
-# ---------------------------------------------------------------- opening states and follow
 
 
 @pytest.mark.parametrize(
@@ -370,9 +352,6 @@ def test_the_g_follow_carries_across_a_followed_stage_change():
     assert view.stage == "target_suite"
     assert view.focus == "log"
     assert "case_03" in shown(view, [moved], LIVE)
-
-
-# ---------------------------------------------------------------- [ ] 1 and History
 
 
 PAST = [live("host_suite"), failing_at(OLDER, "build"), run(OLDEST)]
@@ -497,9 +476,6 @@ def test_history_enter_on_the_newest_run_opens_its_current_form_without_followin
     assert view.follow is False
 
 
-# ---------------------------------------------------------------- Help, quit and the command line
-
-
 @pytest.mark.parametrize("origin", ["run", "history"])
 def test_question_mark_opens_help_and_question_mark_or_esc_returns_to_the_origin(origin):
     view = status.View()
@@ -566,9 +542,6 @@ def test_slash_opens_only_with_a_selected_stage_on_run(setup, presses, prompt):
         keys(view, PAST, "3", bench=LIVE)
     keys(view, PAST, *([presses] if isinstance(presses, str) else presses), bench=LIVE)
     assert view.prompt == prompt
-
-
-# ---------------------------------------------------------------- search
 
 
 NEEDLE = suite(
@@ -643,9 +616,6 @@ def test_n_and_capital_n_do_nothing_without_a_selection_a_pattern_or_on_history(
     assert (searched.tab, searched.history_record) == ("history", record)
 
 
-# ---------------------------------------------------------------- plain panes
-
-
 LONG = run(
     build=stage("build", "passed", t(3, 10), lines=tuple(f"line_{i:02d}" for i in range(60)))
 )
@@ -705,9 +675,6 @@ def test_a_plain_pane_follows_new_lines_until_a_log_movement_key_is_pressed():
     more = [build_lines(50)]
     view.tick(more, LIVE, SIZE)
     assert shown(view, more, LIVE) == "line_43"
-
-
-# ---------------------------------------------------------------- real-shaped logs
 
 
 def build_prefix(*, build_open=False):

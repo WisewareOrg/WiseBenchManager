@@ -53,10 +53,12 @@ def finished(nodeid, outcome="passed", longrepr=None):
 def stage(
     name, state="passed", started=None, ended=None, sha=None, lines=(), sections=(), progress=None
 ):
+    """A run stage with the given state, times and content."""
     return runlog.Stage(name, state, started, ended, sha, tuple(lines), tuple(sections), progress)
 
 
 def section(stage_name, kind, name, outcome, started=None, lines=(), failure=()):
+    """A `setup` or `test` section of `stage_name`, with occurrence 0."""
     return runlog.Section(
         (stage_name, kind, name, 0), kind, name, outcome, started, tuple(lines), tuple(failure)
     )
@@ -122,6 +124,7 @@ def live(open_name, record=STAMP, **replaced):
 
 
 def failing_at(record, name):
+    """A finished run whose stage `name` failed, the stages after it never started."""
     cut = NAMES.index(name)
     states = ["passed"] * cut + ["failed"] + ["not-started"] * (6 - cut)
     return run(record, states=states, result="failed")

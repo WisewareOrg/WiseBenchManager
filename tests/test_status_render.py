@@ -27,18 +27,12 @@ def lc(hour, minute=0, second=0):
     return f"{(hour + 3) % 24:02d}:{minute:02d}:{second:02d}"
 
 
-# ---------------------------------------------------------------- layout
-
-
 def test_the_stage_list_rule_and_log_pane_sit_at_the_canvas_columns():
     """The canvas of record puts the rule at column 39 and the right pane at column 42."""
     live = run(result=None, build=stage("build", "open", t(3, 0, 15), lines=["marker"]))
     shown = draw([live], LIVE, stage="build")
     assert shown.text(3).index("│") == 39
     assert shown.text(22).index("marker") == 42
-
-
-# ---------------------------------------------------------------- tab line and status bar
 
 
 def test_the_tab_line_names_the_active_tab_in_inverse_and_a_past_runs_record():
@@ -94,9 +88,6 @@ def test_an_open_prompt_takes_the_last_row_and_moves_the_status_bar_up_one():
         assert opened.style(23, len(typed)) == frozenset({"inverse"})
         assert opened.text(22).startswith(" IDLE ")
         assert opened.text(21).startswith("1 records in records/")
-
-
-# ---------------------------------------------------------------- Run header and stage list
 
 
 def test_the_run_header_has_four_forms_and_a_missing_sha_reads_a_dash():
@@ -177,9 +168,6 @@ def test_durations_are_unbounded_minutes_and_a_stage_left_open_in_a_dead_run_rea
     shown = draw([run(kind="test", result=None, build=stuck, bundle=long)], IDLE)
     assert shown.text(5, 0, LEFT).rstrip() == f"{'? build':<17}{lc(3, 0, 15)}  —"
     assert shown.text(6, 0, LEFT).rstrip() == f"{'✓ bundle':<17}{lc(3, 5, 0)}  62m05s"
-
-
-# ---------------------------------------------------------------- Run right pane
 
 
 def target_suite_open():
@@ -343,9 +331,6 @@ def test_the_summary_shows_the_result_word_end_time_floored_minutes_and_one_row_
     assert clean.right(4) == ""
 
 
-# ---------------------------------------------------------------- History
-
-
 def hist(record, ref="main", pr=31, kind="run", result="passed", minutes=58, fail=None, state=""):
     """A run lasting `minutes` whole minutes plus 59 s; `fail` names its failing stage."""
     replaced = {fail: stage(fail, state or "failed")} if fail else {}
@@ -422,9 +407,6 @@ def test_the_record_column_widens_for_a_suffixed_id_and_the_what_column_clips_at
     assert {"selection" in shown.style(3, c) for c in range(80)} == {False}
 
 
-# ---------------------------------------------------------------- Help, empty, text
-
-
 def test_help_lists_the_built_keys_and_none_of_the_unbuilt_commands():
     shown = draw([run()], IDLE, tab="help", size=(24, 120))
     body = [shown.text(r).rstrip() for r in range(1, 23)]
@@ -462,9 +444,6 @@ def test_tabs_expand_to_eight_column_stops_and_other_controls_become_caret_pairs
     assert shown.right(22) == "x" * (pane - 1) + "^"
 
 
-# ---------------------------------------------------------------- size
-
-
 @pytest.mark.parametrize(("rows", "cols"), [(24, 79), (23, 80)])
 def test_a_terminal_below_eighty_by_twenty_four_draws_one_line_and_blank_rows(rows, cols):
     shown = draw([run()], LIVE, size=(rows, cols))
@@ -478,9 +457,6 @@ def test_a_long_ref_is_clipped_to_the_eighty_columns_in_every_tab():
     for tab in ("run", "history", "help"):
         assert "terminal too small" not in draw(runs, LIVE, tab=tab).text(0)
     assert draw(runs, LIVE).text(1) == (long_ref + "  a1b2c3d").ljust(80)[:80]
-
-
-# ---------------------------------------------------------------- a parsed real log
 
 
 def test_a_parsed_real_log_draws_its_stage_list_and_suite_summaries():
