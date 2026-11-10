@@ -150,6 +150,7 @@ def _stub_subprocess(monkeypatch):
 def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     """A normal run calls the hooks, both suites and --bench-candidate, in order."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
     monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
     _write_bench_toml(tmp_path)
@@ -171,6 +172,9 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     assert commands[7][commands[7].index("--lg-env") + 1] == "env.yaml"
     assert commands[7][commands[7].index("--bench-candidate") + 1] == "deadbeef"
     assert commands[7][-2:] == ["-k", "x"]
+    for suite_command in (commands[6], commands[7]):
+        assert "--capture=tee-sys" in suite_command
+    assert commands[7].index("--capture=tee-sys") < commands[7].index("-k")
 
     precondition_env = calls[3][1]
     assert precondition_env["BENCH_RESULT_DIR"] == "records"
@@ -178,6 +182,8 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 
     target_env = calls[7][1]
     assert target_env["BENCH_SHA"] == "deadbeef"
+    assert calls[6][1]["PYTHONUNBUFFERED"] == "1"
+    assert target_env["PYTHONUNBUFFERED"] == "1"
 
 
 def test_each_suite_gets_its_own_record_dir_inside_the_run_folder(monkeypatch, tmp_path):
@@ -378,3 +384,60 @@ def test_suite_records_land_in_the_run_folder_and_nowhere_else(monkeypatch, tmp_
         assert (run_dir / stage / "run.json").is_file()
     assert [p.name for p in (tmp_path / "records").iterdir()] == [run_dir.name]
     assert sorted(p.name for p in run_dir.iterdir()) == ["bench.log", "host_suite", "target_suite"]
+
+
+_MARKER = r"bench: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00 "
+
+
+def test_a_suite_writes_queued_setup_and_started_markers_around_its_live_output(
+    monkeypatch, tmp_path
+):
+    """A suite's tests are queued, its bench_candidate fixture set up once, and output follows."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=60))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    _write_suite(tmp_path, "host_suite", passing=True)
+    target = tmp_path / "target_suite"
+    target.mkdir()
+    (target / "conftest.py").write_text(
+        "import pytest\n"
+        "@pytest.fixture(scope='session')\n"
+        "def installs_candidate(bench_candidate):\n"
+        "    return bench_candidate\n"
+        "@pytest.fixture(scope='session')\n"
+        "def plain_fixture():\n"
+        "    return 1\n"
+    )
+    (target / "test_marked.py").write_text(
+        "def test_prints(installs_candidate, plain_fixture):\n"
+        "    print('distinctive-output-line')\n"
+        "def test_second():\n"
+        "    pass\n"
+    )
+    lg_env = _write_lg_env(tmp_path)
+
+    bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [])
+
+    lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
+    begin = next(i for i, line in enumerate(lines) if line.endswith("stage target_suite started"))
+    end = next(i for i, line in enumerate(lines) if line.endswith("stage target_suite passed"))
+    section = lines[begin:end]
+    marks = [re.sub(rf"^{_MARKER}", "", line) for line in section if re.match(rf"^{_MARKER}", line)]
+    queued = [m for m in marks if m.startswith("test queued ")]
+    assert [q.rsplit("::", 1)[1] for q in queued] == ["test_prints", "test_second"]
+    assert all(
+        q.split(" ", 2)[2].endswith("test_marked.py::" + q.rsplit("::", 1)[1]) for q in queued
+    )
+    setups = [m for m in marks if m.startswith("setup ")]
+    assert setups == ["setup installs_candidate started"]
+    started = [m for m in marks if m.startswith("test started ")]
+    prints_id = queued[0].split(" ", 2)[2]
+    assert started[0] == f"test started {prints_id}"
+    started_at = next(
+        i for i, line in enumerate(section) if line.endswith(f"test started {prints_id}")
+    )
+    assert section.index("distinctive-output-line") > started_at
+    first_queued = next(i for i, line in enumerate(section) if " test queued " in line)
+    setup_at = next(i for i, line in enumerate(section) if " setup " in line)
+    assert first_queued < setup_at < started_at
