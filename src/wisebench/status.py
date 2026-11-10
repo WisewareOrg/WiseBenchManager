@@ -295,7 +295,7 @@ class _StageBuilder:
                 outcome = setup[0]["outcome"] if setup else "open"
                 failure = ()
             else:
-                if phases:
+                if any(r.get("when") == "teardown" for r in phases):
                     outcome = _worst([r["outcome"] for r in phases])
                 elif row["started"] is not None:
                     outcome = "open"
