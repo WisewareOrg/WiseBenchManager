@@ -34,7 +34,7 @@ class CandidateFailure(Exception):
 class BenchTest:
     """One `bench test <ref>` run: the checkout, ref, replay set name and skip-build flag."""
 
-    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test"):
+    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test", pr=None):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
         Args:
@@ -44,12 +44,15 @@ class BenchTest:
             skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
                 with `bench_candidate` `None`, against the board as it is.
             kind (str): `"test"` or `"run"`, for the run-started line only; set by `BenchRun`.
+            pr (int | None): The PR a queue entry names, appended to the run-started line as
+                `pr=<n>` when given; set by `BenchRun`.
         """
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name or ""
         self.skip_build = skip_build
         self.kind = kind
+        self.pr = pr
 
     def run(self, lg_env, pytest_args):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
@@ -75,7 +78,8 @@ class BenchTest:
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         log = self._open_log(result_dir)
         try:
-            self._mark(log, f"run started kind={self.kind} ref={self.ref}")
+            pr = f" pr={self.pr}" if self.pr is not None else ""
+            self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}")
             with self._stage(log, "checkout") as info:
                 commit = self._checkout_commit(log)
                 config = Config.load(self.checkout / "bench.toml")
