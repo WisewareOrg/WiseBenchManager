@@ -238,10 +238,9 @@ def test_a_real_pytest_subprocess_clears_addopts(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text(ini)
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    bench._run_dir = tmp_path / "run"
     with open(tmp_path / "bench.log", "ab+") as log:
         bench._run_suite(
-            "suite_stage", "suite", {**os.environ}, [], log
+            "suite_stage", tmp_path / "run", "suite", {**os.environ}, [], log
         )  # no raise means the suite passed
 
 
@@ -250,12 +249,13 @@ def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monk
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    bench._run_dir = tmp_path / "run"
     with (
         open(tmp_path / "bench.log", "w") as log,
         pytest.raises(bench_test.BenchFailure, match="pytest exited"),
     ):
-        bench._run_suite("suite_stage", "suite", {**os.environ}, ["--no-such-flag"], log)
+        bench._run_suite(
+            "suite_stage", tmp_path / "run", "suite", {**os.environ}, ["--no-such-flag"], log
+        )
 
 
 def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_path, monkeypatch):
@@ -272,12 +272,11 @@ def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_pa
         "    pass\n"
     )
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
-    bench._run_dir = tmp_path / "run"
     with (
         open(tmp_path / "bench.log", "w") as log,
         pytest.raises(bench_test.BenchFailure, match="pytest exited"),
     ):
-        bench._run_suite("suite_stage", "suite", {**os.environ}, [], log)
+        bench._run_suite("suite_stage", tmp_path / "run", "suite", {**os.environ}, [], log)
 
 
 def test_hook_output_and_every_marker_land_in_bench_log_in_order(monkeypatch, tmp_path, capsys):
