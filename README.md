@@ -142,24 +142,26 @@ time>/` instead (`BENCH_RESULT_DIR` defaults to `records/`) and prints no `bench
 the suites run with `--capture=tee-sys` and `PYTHONUNBUFFERED=1`, so a line is in the log as it is
 printed. The runner's own lines start `bench: <ISO time> ` and sit on their own line:
 
-- `run started kind=<test|run> ref=<ref>`, with ` pr=<n>`, the PR its queue entry names, for a `bench run`;
+- `run started kind=<test|run> ref=<ref>`, with ` pr=<n>` (the PR its queue entry names) for a
+  `bench run`;
 - `stage <name> started`, then `passed`, `failed` or `error`, for `checkout`, `precondition`,
   `build`, `bundle`, `host_suite`, `target_suite` and, when the result is posted, `posted`;
+  `stage <name> skipped` for `build`, `bundle` and `host_suite` of a `--skip-build` run;
 - inside a suite, `test queued <nodeid>` once per test it will run, once collection ends;
   `setup <fixture> started` when a fixture that takes `bench_candidate` is set up, named as the
-  layer named it; and `test started <nodeid>` when a test's body begins, where `<nodeid>` is pytest's own node id,
-  relative to pytest's rootdir and not normalised by the runner;
+  layer named it; and `test started <nodeid>` when a test's body begins. `<nodeid>` is pytest's
+  own node id, relative to pytest's rootdir and not normalised by the runner;
 - `run passed`, `run failed` or `run error`.
 
-A section runs to the next marker. Outcomes are not marked: they are in `report.jsonl`.
+A section runs to the next marker. Test outcomes are not marked: they are in `report.jsonl`.
 
 pytest-reportlog's JSON-lines report is the record of the tests: every test report, with
-whatever a layer attaches through `record_property`. pytest-reportlog writes a test only when the test ends and
-names no fixture, and pytest's own output has neither timestamps nor setup names. No maintained
-tool writes these markers, so the plugin does.
+whatever a layer attaches through `record_property`. pytest-reportlog writes a test only when the
+test ends and names no fixture, and pytest's own output has neither timestamps nor setup names. No
+maintained tool writes these markers, so the plugin does.
 
-Each suite's `run.json` is written at session end, so a run that fails halfway still leaves everything up to
-that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
+Each suite's `run.json` is written at session end, so a run that fails halfway still leaves
+everything up to that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
 line, the start and end times, and the exit status. The plugin reads whichever of a set of
 `BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
 field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
