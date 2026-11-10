@@ -153,7 +153,7 @@ printed. The runner's own lines start `bench: <ISO time> ` and sit on their own 
 A section runs to the next marker. Outcomes are not marked: they are in `report.jsonl`.
 
 pytest-reportlog's JSON-lines report is the record of the tests: every test report, with
-whatever a layer attaches through `record_property`. It writes a test only when the test ends and
+whatever a layer attaches through `record_property`. pytest-reportlog writes a test only when the test ends and
 names no fixture, and pytest's own output has neither timestamps nor setup names. No maintained
 tool writes these markers, so the plugin does.
 
