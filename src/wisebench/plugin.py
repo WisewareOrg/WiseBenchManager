@@ -8,6 +8,7 @@ field whose environment variable is set.
 """
 
 import json
+import os
 import shlex
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -20,6 +21,7 @@ from wisebench.proxy import proxy as proxy
 
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
 DEFAULT_RESULT_DIR = "records"
+_STDOUT_FD = 1
 
 # Environment variable names.
 BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
@@ -41,6 +43,21 @@ BENCH_FIELDS = {
 # Exit status substituted for pytest's own when the session reports any error: a collection
 # error, or a fixture erroring during setup or teardown.
 SETUP_ERROR_EXIT_STATUS = 90
+
+
+def write_mark(fd, event):
+    """Append one `bench: <iso> <event>` line to the file behind `fd`, a leading newline first
+    if the file does not already end in one.
+
+    Args:
+        fd (int): A file descriptor open for reading and appending.
+        event (str): The marker's text after the timestamp.
+    """
+    size = os.fstat(fd).st_size
+    if size and os.pread(fd, 1, size - 1) != b"\n":
+        os.write(fd, b"\n")
+    timestamp = datetime.now(UTC).isoformat(timespec="seconds")
+    os.write(fd, f"bench: {timestamp} {event}\n".encode())
 
 
 def _run_dir(config):
@@ -121,3 +138,39 @@ def pytest_sessionfinish(session, exitstatus):
         if value is not None:
             data[field] = value
     (run_dir / "run.json").write_text(json.dumps(data) + "\n")
+
+
+def pytest_collection_finish(session):
+    """With BENCH_RECORD_DIR set, marks each test the session will run as queued.
+
+    Args:
+        session (pytest.Session): The session whose collection finished.
+    """
+    if environ.get(BENCH_RECORD_DIR):
+        for item in session.items:
+            write_mark(_STDOUT_FD, f"test queued {item.nodeid}")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    """With BENCH_RECORD_DIR set, marks the setup of each fixture that takes `bench_candidate`.
+
+    Args:
+        fixturedef (pytest.FixtureDef): The fixture being set up.
+        request (pytest.FixtureRequest): The request that needs it.
+    """
+    if environ.get(BENCH_RECORD_DIR) and "bench_candidate" in fixturedef.argnames:
+        write_mark(_STDOUT_FD, f"setup {fixturedef.argname} started")
+    return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    """With BENCH_RECORD_DIR set, marks the test whose body is about to run.
+
+    Args:
+        item (pytest.Item): The test about to run.
+    """
+    if environ.get(BENCH_RECORD_DIR):
+        write_mark(_STDOUT_FD, f"test started {item.nodeid}")
+    return (yield)

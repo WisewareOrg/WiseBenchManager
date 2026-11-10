@@ -18,6 +18,7 @@ from wisebench.plugin import (
     BENCH_SKIP_BUILD,
     BENCH_TREE,
     DEFAULT_RESULT_DIR,
+    write_mark,
 )
 
 
@@ -140,14 +141,7 @@ class BenchTest:
         """Append one `bench: <iso> <text>` line, a leading newline first if the log doesn't
         already end in one."""
         log.flush()
-        size = os.fstat(log.fileno()).st_size
-        if size:
-            log.seek(size - 1)
-            if log.read(1) != b"\n":
-                log.write(b"\n")
-        timestamp = datetime.now(UTC).isoformat(timespec="seconds")
-        log.write(f"bench: {timestamp} {text}\n".encode())
-        log.flush()
+        write_mark(log.fileno(), text)
 
     @contextmanager
     def _stage(self, log, name):
@@ -241,12 +235,13 @@ class BenchTest:
         """Run pytest on one suite directory, its output appended to `log`.
 
         The suite's records go in `<run folder>/<stage>/` (`BENCH_RECORD_DIR`).
+        The suite runs unbuffered and with `--capture=tee-sys`, so its output reaches `log` live.
 
         Args:
             stage (str): The stage's name, which names the suite's record folder.
             suite (str): The suite's path, relative to the checkout.
             env (dict[str, str]): The subprocess environment.
-            extra_args (list[str]): Extra pytest arguments, appended last.
+            extra_args (list[str]): Extra pytest arguments, after the fixed ones.
             log (BinaryIO): The run's bench.log.
 
         Raises:
@@ -256,8 +251,21 @@ class BenchTest:
                 (`plugin.py` substitutes its own exit status whenever the session reports an
                 error).
         """
-        command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
-        suite_env = {**env, BENCH_RECORD_DIR: str((self._run_dir / stage).resolve())}
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            suite,
+            "-o",
+            "addopts=",
+            "--capture=tee-sys",
+            *extra_args,
+        ]
+        suite_env = {
+            **env,
+            "PYTHONUNBUFFERED": "1",
+            BENCH_RECORD_DIR: str((self._run_dir / stage).resolve()),
+        }
         result = subprocess.run(
             command, cwd=self.checkout, env=suite_env, stdout=log, stderr=subprocess.STDOUT
         )
