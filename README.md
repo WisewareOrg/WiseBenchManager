@@ -5,7 +5,7 @@ Yocto layer through build and test to a verdict, and it knows nothing about the 
 runs — installing a candidate on the board is the layer's own job, through its own fixture. Design
 decisions are in [`docs/decisions/`](docs/decisions/README.md).
 
-## Two commands
+## Three commands
 
 ```sh
 bench run                      # on a timer: if the merge queue has an entry, build it, run the
@@ -16,6 +16,7 @@ bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: the same path, results on the terminal;
                                # --set names a replay set for tests that use one; --skip-build tests
                                # the board as it already is, with no build and no install
+bench status --watch           # read-only: the run in progress and every run on disk
 ```
 
 `bench test` resolves the ref to a commit and refuses a dirty tree, then builds from that commit --
@@ -214,9 +215,17 @@ tag. `bench run` is started by a systemd user timer; the lock it shares with `be
 refuses rather than clashing with it, and `bench run` itself backs off with exit 0 if the lock is
 already held. It asks `Queue.head()` for the merge queue's head entry -- the `gh-readonly-queue`
 ref whose own base is `origin/main`'s current tip, read with `git ls-remote` -- and posts the
-verdict as a GitHub check run (`Check.post`). `bench status --watch`, on `rich`, reads `run.json`,
-`report.jsonl` and the hook logs: the queue head, the timer and lock state, the current phase and
-its elapsed time, the build's progress tail, the test running now, and recent verdicts.
+verdict as a GitHub check run (`Check.post`). `bench status --watch` is the read-only view of all of it, run from the directory `bench run` runs
+in. It is a curses screen refreshed once a second: Run shows the newest run's stages and the selected
+stage's log, headed by bitbake's task progress while a build runs, and History lists every run on
+disk. It reads `records/*/bench.log`, each suite's `report.jsonl`, whether `records/DISABLED`
+exists, the holder of the `lock` file from `/proc/locks`, the run timer's state from `systemctl
+--user`, and `bench.toml`. It writes nothing, takes no lock and runs no git. No maintained viewer
+reads the runner's markers or joins them to pytest-reportlog's outcomes, so the view is the
+runner's own, on stdlib `curses`. Bitbake shows its task progress only on the terminal that ran the
+build, so the view reads bitbake's `NOTE:` lines from the log; and it asks the kernel's `/proc/locks`
+who holds the lock rather than `lslocks`, which resolves holders by path through `/proc/<pid>/fd`
+and adds a process per refresh.
 
 ### Installing `bench run`
 
