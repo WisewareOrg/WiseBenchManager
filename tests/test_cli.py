@@ -16,11 +16,12 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name, skip_build=False):
+    def __init__(self, checkout, ref, set_name, skip_build=False, pr=None):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
         self.skip_build = skip_build
+        self.pr = pr
         self.run_calls = []
         self.outcome = None
         _FakeBenchTest.instances.append(self)

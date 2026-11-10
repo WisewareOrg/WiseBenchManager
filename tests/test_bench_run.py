@@ -42,11 +42,12 @@ class _FakeBenchTest:
 
     instances = []
 
-    def __init__(self, checkout, ref, set_name, kind="test"):
+    def __init__(self, checkout, ref, set_name, kind="test", pr=None):
         self.checkout = checkout
         self.ref = ref
         self.set_name = set_name
         self.kind = kind
+        self.pr = pr
         self.run_calls = []
         _FakeBenchTest.instances.append(self)
 
@@ -123,7 +124,7 @@ def _stub_subprocess(monkeypatch, *, error_on=None):
     return calls
 
 
-_QUEUE_HEAD = ("refs/heads/gh-readonly-queue/main/pr-14-cafef00d", "cafef00d")
+_QUEUE_HEAD = ("refs/heads/gh-readonly-queue/main/pr-14-cafef00d", "cafef00d", 14)
 
 
 def _assert_bench_failure_path(tmp_path, calls, run_unit, reason_substring):

@@ -327,6 +327,28 @@ def test_hook_output_and_every_marker_land_in_bench_log_in_order(monkeypatch, tm
     ]
 
 
+def test_run_started_line_carries_the_pr_number_when_one_is_given(monkeypatch, tmp_path):
+    """BenchTest(pr=7, kind=run) writes `run started kind=run ref=<ref> pr=7`."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path, precondition="true")
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=True)
+    lg_env = _write_lg_env(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, kind="run", pr=7)
+
+    bench.run(lg_env, [])
+
+    log_text = next((tmp_path / "records").rglob("bench.log")).read_text()
+    lines = [
+        re.sub(r"^bench: \S+ ", "", line)
+        for line in log_text.splitlines()
+        if line.startswith("bench: ")
+    ]
+    assert lines[0] == "run started kind=run ref=HEAD pr=7"
+
+
 def test_stage_names_are_fixed_regardless_of_the_configured_suite_paths(monkeypatch, tmp_path):
     """Stage names in bench.log are the fixed host_suite/target_suite, not the configured paths."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
