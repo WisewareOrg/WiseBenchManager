@@ -185,16 +185,19 @@ class Grid:
     """A draw surface for tests: a grid of (char, fg, bg, bold) cells, clipped at the right edge."""
 
     def __init__(self, rows, cols):
+        """An empty grid of blank cells."""
         self.rows, self.cols = rows, cols
         self.cells = [[(" ", None, None, False)] * cols for _ in range(rows)]
 
     def put(self, y, x, text, fg, bg=None, bold=False):
+        """Write `text` at (y, x), clipped at the right edge."""
         assert 0 <= y < self.rows, f"row {y} is off a {self.rows}-row screen"
         for offset, char in enumerate(text):
             if 0 <= x + offset < self.cols:
                 self.cells[y][x + offset] = (char, fg, bg, bold)
 
     def text(self, y):
+        """The characters of row `y` as a string."""
         return "".join(cell[0] for cell in self.cells[y])
 
     def find(self, pattern):

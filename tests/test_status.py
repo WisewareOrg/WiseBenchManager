@@ -29,14 +29,17 @@ ROOT = os.geteuid() == 0
 
 
 def log(*parts):
+    """The parts joined into one log text."""
     return "".join(parts)
 
 
 def parse(text, reports=None, record=STAMP):
+    """Parse a log text and its suite reports into a `Run`."""
     return runlog.parse_run(record, text, reports or {})
 
 
 def stage_of(run, name):
+    """The stage of `run` called `name`."""
     return next(s for s in run.stages if s.name == name)
 
 
@@ -52,6 +55,7 @@ def target(*body, reports=None):
 
 
 def queued(*ids):
+    """One `test queued` marker per node id."""
     return [mark(f"test queued {i}", 1, 1) for i in ids]
 
 
@@ -68,6 +72,7 @@ def write_record(directory, name=STAMP, text="", reports=None, raw=None):
 
 
 def secs(n, micro=0):
+    """The run's start time plus `n` seconds and `micro` microseconds."""
     return STARTED + timedelta(seconds=n, microseconds=micro)
 
 
@@ -284,9 +289,11 @@ def test_a_last_line_without_its_newline_is_held_until_the_newline_lands(tmp_pat
     records = Records(tmp_path)
 
     def build():
+        """A reader of the build stage of the log as it stands."""
         return stage_of(records.runs()[0], "build")
 
     def append(data):
+        """Append raw bytes to the record's bench.log."""
         with open(run_dir / "bench.log", "ab") as f:
             f.write(data)
 
@@ -381,6 +388,7 @@ KAS = "2026-11-10 03:10:00 - INFO     - NOTE: "
 
 
 def build(*lines, stage="build"):
+    """The build stage's progress parsed from output `lines` under `stage`."""
     run = parse(log(TEST_STARTED, mark(f"stage {stage} started", 1), *(f"{x}\n" for x in lines)))
     return stage_of(run, stage).progress
 
@@ -451,6 +459,7 @@ def proc_tree(tmp_path, holders):
 
 
 def lock_file(tmp_path):
+    """Create the records directory's lock file; return the directory and the file's inode."""
     lock = tmp_path / "records" / "lock"
     lock.parent.mkdir(exist_ok=True)
     lock.touch()
@@ -458,6 +467,7 @@ def lock_file(tmp_path):
 
 
 def live_run(*extra):
+    """A `kind=run` run with only a start marker, then `extra` log text."""
     return parse(log(mark("run started kind=run ref=main pr=1"), *extra))
 
 
@@ -529,9 +539,11 @@ def test_the_timer_is_asked_with_is_active_and_a_one_second_timeout(
 
 
 def stub_systemctl(monkeypatch, returncode=None, raises=None):
+    """Replace the timer query with a stub; return the (command, kwargs) calls it records."""
     calls = []
 
     def run(command, **kwargs):
+        """Record the call; return the configured exit code, or raise."""
         calls.append((command, kwargs))
         if raises is not None:
             raise raises
@@ -616,10 +628,12 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
     popen_argv = []
 
     def refuse_lock(*args, **kwargs):
+        """Fail the test: no lock may be taken."""
         forbidden.append(args)
         raise AssertionError("a lock was taken")
 
     def record_popen(argv, *args, **kwargs):
+        """Record the argv of a started process; the process then fails to start."""
         popen_argv.append(list(argv))
         raise FileNotFoundError(argv[0])
 
@@ -654,25 +668,30 @@ CANDIDATE_SUITE = (
 
 
 def passing(path):
+    """Write a passing host suite and a passing target suite."""
     write_suite(path, "host_suite")
     write_suite(path, "target_suite")
 
 
 def failing_host(path):
+    """Write a failing host suite."""
     write_suite(path, "host_suite", passing=False)
 
 
 def candidate_fixture(path):
+    """Write a passing host suite and a target suite whose fixture takes `bench_candidate`."""
     write_suite(path, "host_suite")
     (path / "target_suite").mkdir()
     (path / "target_suite" / "test_one.py").write_text(CANDIDATE_SUITE)
 
 
 def states(*of_each):
+    """Map the stage names in order to the given states."""
     return dict(zip(NAMES, of_each, strict=True))
 
 
 def one(stage, outcome="passed"):
+    """The (kind, name, outcome) rows of the one test a `write_suite` suite holds."""
     return [("test", f"{stage}/test_one.py::test_one", outcome)]
 
 

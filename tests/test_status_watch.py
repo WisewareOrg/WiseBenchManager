@@ -11,6 +11,7 @@ ROWS, COLS = 24, 80
 
 def test_watch_returns_0_on_ctrl_c(monkeypatch, tmp_path):
     def interrupted(*args):
+        """Stand-in for curses.wrapper that raises Ctrl-C."""
         raise KeyboardInterrupt
 
     monkeypatch.setattr(curses, "wrapper", interrupted)
@@ -29,6 +30,7 @@ class FakeScreen:
     """A curses window. As in curses, a write reaching the bottom-right cell lands, then raises."""
 
     def __init__(self, keys=(), fail_on_row=None):
+        """A window that feeds `keys` to get_wch and fails writes on row `fail_on_row`."""
         self.keys = list(keys)
         self.fail_on_row = fail_on_row
         self.events = []
@@ -36,9 +38,11 @@ class FakeScreen:
         self.corner = 0
 
     def getmaxyx(self):
+        """The window's size."""
         return ROWS, COLS
 
     def _write(self, row, col, text, attr):
+        """Record a write; the bottom-right cell lands, then raises, as in curses."""
         if row == self.fail_on_row:
             raise curses.error("addwstr() returned ERR")
         self.writes.append((row, col, text, attr))
@@ -47,15 +51,19 @@ class FakeScreen:
             raise curses.error("addwstr() returned ERR")
 
     def addstr(self, row, col, text, attr=0):
+        """Write `text` at (row, col)."""
         self._write(row, col, text, attr)
 
     def addnstr(self, row, col, text, n, attr=0):
+        """Write at most `n` characters of `text` at (row, col)."""
         self._write(row, col, text[:n], attr)
 
     def refresh(self):
+        """Record that a frame was drawn."""
         self.events.append("frame")
 
     def get_wch(self):
+        """The next fed key; an exception in the feed is raised."""
         self.events.append("key")
         key = self.keys.pop(0)
         if isinstance(key, Exception):
@@ -63,6 +71,7 @@ class FakeScreen:
         return key
 
     def __getattr__(self, name):
+        """Any other curses window call does nothing."""
         return lambda *args, **kwargs: None
 
 

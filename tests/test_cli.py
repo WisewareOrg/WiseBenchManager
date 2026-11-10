@@ -297,9 +297,6 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
         pass
 
 
-# ---------------------------------------------------------------- bench status
-
-
 @pytest.fixture
 def watched(monkeypatch, tmp_path):
     """Record `status.watch`'s argument, return 7 from it, and unset `LG_ENV`."""

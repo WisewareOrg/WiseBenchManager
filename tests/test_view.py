@@ -31,6 +31,7 @@ PLAIN_BUILD = live("build", build=plain("build", 40))
 
 
 def resolve(runs, bench=IDLE, state=None, size=SIZE):
+    """Resolve the frame for `runs` in `state` (a fresh State by default)."""
     state = view.State() if state is None else state
     return view.resolve(state, view.Snapshot(runs, bench, NOW), *size)
 
@@ -49,6 +50,7 @@ def press(state, runs, keys, bench=IDLE):
 
 
 def stage_name(frame):
+    """The name of the frame's selected stage, or None."""
     return None if frame.stage is None else frame.stage.name
 
 
@@ -58,14 +60,13 @@ def head(frame, name):
 
 
 def texts(frame):
+    """The text of every row of the frame."""
     return [row.text for row in frame.rows]
 
 
 def host_rows():
+    """The rows of the host suite of the long run."""
     return resolve([LONG], state=view.State(stage="host_suite")).rows
-
-
-# ---------------------------------------------------------------- resolve: the stage shown
 
 
 @pytest.mark.parametrize(
@@ -120,9 +121,6 @@ def test_live_is_the_live_bench_and_the_newest_run_shown():
     assert (newest.run is runs[0], newest.newest, newest.live) == (True, True, True)
     assert (past.run is runs[1], past.newest, past.live) == (True, False, False)
     assert (idle.newest, idle.live) == (True, False)
-
-
-# ---------------------------------------------------------------- resolve: the log cursor
 
 
 @pytest.mark.parametrize(
@@ -212,9 +210,6 @@ def test_scroll_moves_only_as_far_as_keeps_the_cursor_on_screen(memo, at, expect
     assert frame.scroll == expected(frame.room)
 
 
-# ---------------------------------------------------------------- resolve: pane head and room
-
-
 @pytest.mark.parametrize(
     ("runs", "bench", "kind"),
     [
@@ -262,9 +257,6 @@ def test_history_selects_the_shown_run_until_a_record_is_chosen():
     assert resolve(runs, state=view.State(tab="history", record=OLDER)).history_cursor == 1
     chosen = view.State(tab="history", history_record=OLDEST)
     assert resolve(runs, state=chosen).history_cursor == 2
-
-
-# ---------------------------------------------------------------- handle
 
 
 @pytest.mark.parametrize(
@@ -403,6 +395,7 @@ def test_search_unfolds_a_match_and_n_and_capital_n_step_between_matches():
     state = view.State(stage="host_suite", focus="log", cursor=host_rows()[0].anchor)
 
     def under_cursor():
+        """The text of the row under the cursor."""
         frame = resolve([LONG], state=state)
         return frame.rows[frame.cursor].text
 
