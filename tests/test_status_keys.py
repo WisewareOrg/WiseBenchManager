@@ -238,7 +238,7 @@ def test_stage_half_pages_clamp_at_the_ends_of_a_seven_row_list():
 
 
 def test_stage_list_movement_ends_follow_and_a_log_key_does_not():
-    runs = [live("host_suite")]
+    runs = [growing(5)]
     view = status.View()
     view.tick(runs, LIVE, SIZE)
     assert view.follow is True
