@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from wisebench.bench_state import Bench
+from wisebench.plugin import DEFAULT_RESULT_DIR
 from wisebench.runlog import Run, Section, Stage, Task
 
 TAIL = "tail"
@@ -30,11 +31,13 @@ class Snapshot:
         runs (list[Run]): Every run, newest first.
         bench (Bench): The bench's live, disabled and timer state.
         now (datetime): The current time.
+        directory (str): The records directory as the History footer names it.
     """
 
     runs: list[Run]
     bench: Bench
     now: datetime
+    directory: str = DEFAULT_RESULT_DIR
 
 
 @dataclass
@@ -127,6 +130,7 @@ class Frame:
         prompt (str | None): The command line's text while it is open.
         bench (Bench): The bench's state.
         now (datetime): The time of the refresh.
+        directory (str): The records directory as the History footer names it.
         layout (Layout): Where the regions sit.
         run (Run | None): The run shown in Run.
         newest (bool): The run shown is the newest.
@@ -149,6 +153,7 @@ class Frame:
     prompt: str | None
     bench: Bench
     now: datetime
+    directory: str
     layout: Layout
     run: Run | None
     newest: bool
@@ -200,6 +205,7 @@ def resolve(state, snap, rows, cols):
         prompt=state.prompt,
         bench=snap.bench,
         now=snap.now,
+        directory=snap.directory,
         layout=lay,
         run=run,
         newest=newest,

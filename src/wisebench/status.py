@@ -6,6 +6,7 @@ a lock.
 """
 
 import curses
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -59,11 +60,14 @@ def _loop(window, directory):
     records = Records(directory)
     run_unit = read_run_unit(Path.cwd())
     state = view.State()
+    shown_directory = os.path.relpath(directory)
     while True:
         runs = records.runs()
         bench = read_bench(directory, runs[0] if runs else None, run_unit, Path("/proc"))
         rows, cols = window.getmaxyx()
-        frame = view.resolve(state, view.Snapshot(runs, bench, datetime.now(UTC)), rows, cols)
+        frame = view.resolve(
+            state, view.Snapshot(runs, bench, datetime.now(UTC), shown_directory), rows, cols
+        )
         state.scroll, state.history_scroll = frame.scroll, frame.history_scroll
         window.erase()
         screen.draw(_Surface(window, rows, cols, attributes), frame)

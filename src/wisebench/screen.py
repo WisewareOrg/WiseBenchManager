@@ -211,8 +211,8 @@ def _status_bar(surface, frame):
 
 
 def _footer(frame):
-    """The `N records` line."""
-    return f"{len(frame.history)} records"
+    """The `N records in <directory>/` line."""
+    return f"{len(frame.history)} records in {frame.directory}/"
 
 
 def _run(surface, frame):
