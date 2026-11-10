@@ -16,9 +16,9 @@ from helpers import (
     write_lg_env,
     write_suite,
 )
-from status_helpers import mark, real_run, rep
+from status_helpers import Grid, mark, real_run, rep
 
-from wisebench import bench_state, bench_test, runlog, screen, status
+from wisebench import bench_state, bench_test, runlog
 from wisebench.lock import Lock
 from wisebench.records import Records
 
@@ -593,9 +593,11 @@ def snapshot(root):
 def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
     tmp_path, monkeypatch
 ):
-    """Records.runs, is_live and timer_state over a read-only tree: bytes and mtimes unchanged,
-    no flock/lockf call, and the only process started is the `systemctl` timer query."""
+    """Records.runs, is_live, timer_state and a drawn frame over a read-only tree: bytes and mtimes
+    unchanged, no flock/lockf call, and the only process started is the `systemctl` timer query."""
     import fcntl
+
+    from wisebench import screen, view
 
     records = tmp_path / "records"
     write_record(
@@ -632,7 +634,8 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
         bench_state.is_live(records, runs[0], proc)
         bench_state.timer_state("bench-run")
         bench = bench_state.read_bench(records, runs[0], "bench-run", proc)
-        screen.render(status.View(), runs, bench, 24, 80, STARTED)
+        frame = view.resolve(view.State(), view.Snapshot(runs, bench, STARTED), 24, 80)
+        screen.draw(Grid(24, 80), frame)
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)

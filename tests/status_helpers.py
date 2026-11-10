@@ -1,10 +1,11 @@
-"""Builders shared by the status tests: marker text, run models and the drawn screen."""
+"""Builders shared by the status tests: marker text, run models and a test draw surface."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from wisebench import bench_state, runlog, screen, status
+from wisebench import bench_state, runlog
 
 STAMP = "20261110T030715Z"
 OLDER = "20261109T030715Z"
@@ -15,7 +16,6 @@ SIZE = (24, 80)
 LIVE = bench_state.Bench(live=True, disabled=False, timer="on")
 IDLE = bench_state.Bench(live=False, disabled=False, timer="on")
 DISABLED = bench_state.Bench(live=False, disabled=True, timer="off")
-TINTS = {"running_tint", "failed_tint", "selection"}
 
 
 def t(hour, minute=0, second=0):
@@ -130,56 +130,86 @@ def failing_at(record, name):
     return run(record, states=states, result="failed")
 
 
-class Screen:
-    """A rendered screen expanded to per-cell characters and styles."""
+TESTS = tuple(f"t.py::test_{i}" for i in range(6))
+
+
+def sid(name, stage_name="target_suite", kind="test"):
+    """The id `section` gives a section called `name`."""
+    return (stage_name, kind, name, 0)
+
+
+def target_suite(running, failed=()):
+    """A target suite left open: a passed setup, then the six TESTS.
+
+    Those before `running` passed (failed when their position is in `failed`), `running` is open
+    and the rest have not started; each started test has one line, `out <position>`.
+    """
+    sections = [
+        section("target_suite", "setup", "install_candidate", "passed", t(3, 25), ["booted slot B"])
+    ]
+    for position, name in enumerate(TESTS):
+        if position > running:
+            sections.append(section("target_suite", "test", name, "not-started"))
+            continue
+        outcome = "open" if position == running else "passed"
+        outcome = "failed" if position in failed else outcome
+        lines = [f"out {position}"]
+        sections.append(section("target_suite", "test", name, outcome, t(3, 26 + position), lines))
+    return stage("target_suite", "open", t(3, 25), sections=sections)
+
+
+def running_test(running, failed=()):
+    """A run executing its target suite, as `target_suite` builds it."""
+    return live("target_suite", target_suite=target_suite(running, failed))
+
+
+def plain(name, count, state="open"):
+    """A stage with `count` output lines and no sections."""
+    return stage(name, state, t(3, 10), lines=[f"{name} line {i}" for i in range(count)])
+
+
+def building(tasks):
+    """A run executing its build: bitbake at task 1204 of 3311 with `tasks` tasks running,
+    `r<i>` started at 03:11:<i>."""
+    running = tuple(runlog.Task(f"r{i}", "do_compile", t(3, 11, i)) for i in range(tasks))
+    progress = runlog.BuildProgress(1204, 3311, running)
+    lines = ["NOTE: Running task 1204 of 3311"]
+    return live("build", build=stage("build", "open", t(3, 10), lines=lines, progress=progress))
+
+
+LONG = run(host_suite=suite("host_suite", ["passed"] * 30, {3: ("boot one",), 7: ("boot two",)}))
+MANY = [run(record=f"2026{i:04d}") for i in range(40, 0, -1)]
+
+
+class Grid:
+    """A draw surface for tests: a grid of (char, fg, bg, bold) cells, clipped at the right edge."""
 
     def __init__(self, rows, cols):
-        self.cells = []
-        for row in rows:
-            cells = []
-            for text, style in row:
-                assert isinstance(style, frozenset), style
-                cells.extend((ch, style) for ch in text)
-            assert len(cells) == cols
-            self.cells.append(cells)
+        self.rows, self.cols = rows, cols
+        self.cells = [[(" ", None, None, False)] * cols for _ in range(rows)]
 
-    def __len__(self):
-        return len(self.cells)
+    def put(self, y, x, text, fg, bg=None, bold=False):
+        assert 0 <= y < self.rows, f"row {y} is off a {self.rows}-row screen"
+        for offset, char in enumerate(text):
+            if 0 <= x + offset < self.cols:
+                self.cells[y][x + offset] = (char, fg, bg, bold)
 
-    def text(self, row, start=0, end=None):
-        return "".join(ch for ch, _ in self.cells[row][start:end])
+    def text(self, y):
+        return "".join(cell[0] for cell in self.cells[y])
 
-    def style(self, row, col):
-        return self.cells[row][col][1]
+    def find(self, pattern):
+        """(row, start, end) of the first match of `pattern`; the span of group 1 if it has one."""
+        for y in range(self.rows):
+            found = re.search(pattern, self.text(y))
+            if found:
+                group = 1 if found.re.groups else 0
+                return y, found.start(group), found.end(group)
+        raise AssertionError(f"{pattern!r} is not drawn")
 
-    def tone(self, row, col):
-        """The style at a cell without tint or selection ground."""
-        return self.style(row, col) - TINTS
-
-    def right(self, row):
-        return self.text(row, screen.RIGHT).rstrip()
-
-    def cursor(self):
-        """(row, text) of the one log row drawn with the selection style across the right pane."""
-        right = range(screen.RIGHT, len(self.cells[0]))
-        rows = range(3, len(self) - 1)
-        selected = [r for r in rows if all("selection" in self.style(r, c) for c in right)]
-        assert len(selected) == 1, selected
-        stray = [
-            r
-            for r in rows
-            if r != selected[0] and any("selection" in self.style(r, c) for c in right)
-        ]
-        assert stray == []
-        return selected[0], self.right(selected[0]).strip()
-
-
-def draw(runs, bench=IDLE, *, view=None, size=SIZE, now=NOW, **fields):
-    """Render `runs` through `view`, or through a new View built from `fields`."""
-    rows, cols = size
-    shown = screen.render(view or status.View(**fields), runs, bench, rows, cols, now)
-    assert len(shown) == rows
-    return Screen(shown, cols)
+    def span(self, pattern):
+        """The cells of the first match of `pattern`."""
+        y, start, end = self.find(pattern)
+        return self.cells[y][start:end]
 
 
 REAL_RUN = Path(__file__).parent / "fixtures" / "real_run"
