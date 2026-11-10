@@ -562,3 +562,20 @@ def test_a_post_that_raises_ends_the_log_with_posted_error_then_run_error_and_pr
     assert lines[-3] == "stage posted started"
     assert lines[-2].startswith("stage posted error")
     assert lines[-1] == "run error"
+
+
+def test_a_bench_failure_is_never_posted_and_ends_the_log_with_run_error(monkeypatch, tmp_path):
+    """A failing precondition never calls post, writes no `stage posted`, and ends `run error`."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path, precondition="exit 9")
+    post, calls = _recording_post(tmp_path)
+
+    with pytest.raises(bench_test.BenchFailure, match="precondition exited 9"):
+        bench_test.BenchTest(tmp_path, "HEAD", None).run("env.yaml", [], post=post)
+
+    assert calls == []
+    lines = _marker_lines(tmp_path)
+    assert not any(line.startswith("stage posted") for line in lines)
+    assert lines[-1] == "run error"
