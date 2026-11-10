@@ -334,7 +334,7 @@ Manifest Hash:  'de460a394c8047c00d769f82086a36f5a627656fdb98f9a22ab8ded971826bb
 Certificate Chain:
  0 Subject: CN = WiseKiosk Signing Key 2026, O = WiseKiosk, C = US
    Issuer: CN = WiseKiosk Signing Key 2026, O = WiseKiosk, C = US
-   SPKI sha256: 0D:10:E8:40:C1:B3:37:C6:68:44:D5:25:E3:C3:0F:63:A6:C8:BD:BD:1C:C7:40:2D:3C:6B:84:45:FF:38:ED:42
+   SPKI sha256: 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
    Not Before: Aug 15 02:56:16 2026 GMT
    Not After:  Aug 12 02:56:16 2036 GMT
 
