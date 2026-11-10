@@ -57,6 +57,11 @@ def stage_row(glyph, name, start="", took=""):
     return f"{glyph} {name}".ljust(17) + start.ljust(10) + took
 
 
+def test_the_meaning_colours_are_distinct():
+    meanings = ("GREEN", "AMBER", "RED", "BLUE", "RUNNING_TINT", "FAILED_TINT", "SELECTION")
+    assert len({getattr(screen, name) for name in meanings}) == len(meanings)
+
+
 SCENES = {
     "live build": lambda: drawn([building(3)], LIVE),
     "live suite": lambda: drawn([running_test(3, failed=(1,))], LIVE),
