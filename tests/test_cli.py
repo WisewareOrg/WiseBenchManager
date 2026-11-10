@@ -246,17 +246,18 @@ def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_pa
 
 
 def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
-    bench_test_class, monkeypatch, tmp_path
+    bench_test_class, timer_disable, monkeypatch, tmp_path
 ):
     """main exits 2 on SIGTERM, writing DISABLED and disabling the timer."""
     _write_bench_toml(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LG_ENV", "unused.yaml")
 
-    calls = []
+    disable_run = bench_run.subprocess.run
 
     def fake_subprocess_run(command, **kwargs):
-        calls.append(command)
+        if command[0] == "systemctl":
+            return disable_run(command, **kwargs)
 
         class _Result:
             returncode = 0
@@ -290,7 +291,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
 
     disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
     assert "TimeoutStartSec" in disabled[1]
-    assert calls[-1] == ["systemctl", "--user", "disable", "--now", "bench-run.timer"]
+    assert timer_disable == ["bench-run"]
 
     with Lock(tmp_path / "records"):
         pass

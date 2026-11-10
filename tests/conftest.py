@@ -1,5 +1,6 @@
 """Isolates every test's HOME, and supplies the autospec `BenchTest` the runner tests share."""
 
+import subprocess
 from unittest.mock import create_autospec
 
 import pytest
@@ -37,3 +38,30 @@ def bench_test_class(monkeypatch):
     monkeypatch.setattr(cli, "BenchTest", mock)
     monkeypatch.setattr(bench_run, "BenchTest", mock)
     return mock
+
+
+@pytest.fixture
+def timer_disable(monkeypatch):
+    """Fake BenchRun's timer-disable call and record the unit it names.
+
+    Only `systemctl --user disable --now <unit>.timer` is faked (it succeeds); any other
+    command runs as before. A test that stubs `subprocess.run` further must pass `systemctl`
+    commands on to the `bench_run.subprocess.run` it finds in place.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores `subprocess.run` at teardown.
+
+    Returns:
+        list[str]: The unit name of each disable call, in order.
+    """
+    real_run = subprocess.run
+    units = []
+
+    def run(command, **kwargs):
+        if command[:4] == ["systemctl", "--user", "disable", "--now"]:
+            units.append(command[4].removesuffix(".timer"))
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(bench_run.subprocess, "run", run)
+    return units
