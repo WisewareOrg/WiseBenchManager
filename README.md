@@ -147,7 +147,8 @@ printed. The runner's own lines start `bench: <ISO time> ` and sit on their own 
   `build`, `bundle`, `host_suite`, `target_suite` and, when the result is posted, `posted`;
 - inside a suite, `test queued <nodeid>` once per test it will run, once collection ends;
   `setup <fixture> started` when a fixture that takes `bench_candidate` is set up, named as the
-  layer named it; and `test started <nodeid>` when a test's body begins;
+  layer named it; and `test started <nodeid>` when a test's body begins, where `<nodeid>` is pytest's own node id,
+  relative to pytest's rootdir and not normalised by the runner;
 - `run passed`, `run failed` or `run error`.
 
 A section runs to the next marker. Outcomes are not marked: they are in `report.jsonl`.
