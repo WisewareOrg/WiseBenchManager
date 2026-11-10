@@ -1,7 +1,8 @@
 """pytest plugin: the `bench_candidate` and `proxy` fixtures, pytest-reportlog's record, and
 run.json.
 
-Each run writes `report.jsonl` and `run.json` under `<BENCH_RESULT_DIR>/<UTC timestamp>/`.
+Each run writes `report.jsonl` and `run.json` directly into `BENCH_RECORD_DIR` when it is set,
+otherwise under `<BENCH_RESULT_DIR>/<UTC timestamp>/`.
 run.json holds `version`, `command_line`, `start`, `end`, `exit_status`, and each `BENCH_FIELDS`
 field whose environment variable is set.
 """
@@ -22,6 +23,7 @@ DEFAULT_RESULT_DIR = "records"
 
 # Environment variable names.
 BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
+BENCH_RECORD_DIR = "BENCH_RECORD_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
@@ -42,7 +44,8 @@ SETUP_ERROR_EXIT_STATUS = 90
 
 
 def _run_dir(config):
-    """The directory this run's records go in: BENCH_RESULT_DIR, then this run's timestamp.
+    """The directory this run's records go in: BENCH_RECORD_DIR when set, otherwise
+    BENCH_RESULT_DIR, then this run's timestamp.
 
     Args:
         config (pytest.Config): The session's pytest configuration.
@@ -50,6 +53,9 @@ def _run_dir(config):
     Returns:
         pathlib.Path: The run's own record directory.
     """
+    record_dir = environ.get(BENCH_RECORD_DIR)
+    if record_dir:
+        return Path(record_dir)
     base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
     return base / config._wisebench_timestamp
 

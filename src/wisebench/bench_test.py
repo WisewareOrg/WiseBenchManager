@@ -11,6 +11,7 @@ from wisebench.config import Config
 from wisebench.plugin import (
     _TIMESTAMP,
     BENCH_CANDIDATE_OPTION,
+    BENCH_RECORD_DIR,
     BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
@@ -98,7 +99,7 @@ class BenchTest:
                 with self._stage(log, "bundle"):
                     self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle", log)
                 with self._stage(log, "host_suite"):
-                    self._run_suite(config.host_suite, env, [], log)
+                    self._run_suite("host_suite", config.host_suite, env, [], log)
                 candidate_args = [BENCH_CANDIDATE_OPTION, commit]
             else:
                 for name in ("build", "bundle", "host_suite"):
@@ -106,7 +107,7 @@ class BenchTest:
 
             target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
             with self._stage(log, "target_suite"):
-                self._run_suite(config.target_suite, env, target_args, log)
+                self._run_suite("target_suite", config.target_suite, env, target_args, log)
         except BaseException as exc:
             self._mark(log, f"run {'failed' if isinstance(exc, CandidateFailure) else 'error'}")
             raise
@@ -117,6 +118,8 @@ class BenchTest:
 
     def _open_log(self, result_dir):
         """Create `result_dir/<stamp>/bench.log`, retrying with `-2`, `-3` on a collision.
+
+        Sets `self._run_dir` to the run's folder.
 
         Returns:
             BinaryIO: The log, opened append-binary.
@@ -130,6 +133,7 @@ class BenchTest:
                 break
             except FileExistsError:
                 suffix += 1
+        self._run_dir = run_dir
         return open(run_dir / "bench.log", "ab+")
 
     def _mark(self, log, text):
@@ -233,10 +237,13 @@ class BenchTest:
         except subprocess.CalledProcessError as exc:
             raise failure_cls(f"{name} exited {exc.returncode}") from exc
 
-    def _run_suite(self, suite, env, extra_args, log):
+    def _run_suite(self, stage, suite, env, extra_args, log):
         """Run pytest on one suite directory, its output appended to `log`.
 
+        The suite's records go in `<run folder>/<stage>/` (`BENCH_RECORD_DIR`).
+
         Args:
+            stage (str): The stage's name, which names the suite's record folder.
             suite (str): The suite's path, relative to the checkout.
             env (dict[str, str]): The subprocess environment.
             extra_args (list[str]): Extra pytest arguments, appended last.
@@ -250,8 +257,9 @@ class BenchTest:
                 error).
         """
         command = [sys.executable, "-m", "pytest", suite, "-o", "addopts=", *extra_args]
+        suite_env = {**env, BENCH_RECORD_DIR: str((self._run_dir / stage).resolve())}
         result = subprocess.run(
-            command, cwd=self.checkout, env=env, stdout=log, stderr=subprocess.STDOUT
+            command, cwd=self.checkout, env=suite_env, stdout=log, stderr=subprocess.STDOUT
         )
         if result.returncode == 1:
             raise CandidateFailure(f"{suite} failed")
