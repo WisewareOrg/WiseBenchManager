@@ -314,7 +314,7 @@ def watched(monkeypatch, tmp_path):
     monkeypatch.delenv("LG_ENV", raising=False)
     monkeypatch.delenv(cli.BENCH_RESULT_DIR, raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(status, "watch", fake, raising=False)
+    monkeypatch.setattr(status, "watch", fake)
     return calls
 
 

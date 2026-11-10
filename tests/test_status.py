@@ -19,6 +19,7 @@ from helpers import (
 from status_helpers import mark, real_run, rep
 
 from wisebench import bench_state, bench_test, runlog, screen, status
+from wisebench.lock import Lock
 from wisebench.records import Records
 
 STAMP = "20261110T030715Z"
@@ -455,6 +456,27 @@ def test_a_run_is_live_only_with_no_result_line_and_a_write_flock_on_the_lock_in
     run = live_run(*([mark(result, 0, 9)] if result else []))
 
     assert bench_state.is_live(directory, run, proc) is expected
+
+
+def test_is_live_agrees_with_the_real_lock_and_the_real_proc(tmp_path):
+    """The fake /proc is backed: `Lock` takes a real flock and the real /proc/locks shows it."""
+    if not Path("/proc/locks").exists():
+        pytest.skip("no /proc/locks")
+    with Lock(tmp_path):
+        assert bench_state.is_live(tmp_path, live_run(), Path("/proc")) is True
+    assert bench_state.is_live(tmp_path, live_run(), Path("/proc")) is False
+
+
+def test_garbage_lines_in_proc_locks_are_skipped_before_a_valid_holder(tmp_path):
+    directory, inode = lock_file(tmp_path)
+    proc = proc_tree(tmp_path, [("WRITE", 4242, "00:2c", inode)])
+    valid = (proc / "locks").read_text()
+    (proc / "locks").write_text(
+        "\n1: FLOCK ADVISORY\n2: FLOCK  ADVISORY  WRITE 9 00:2c:notanumber 0 EOF\n"
+        "3: FLOCK  ADVISORY  WRITE 9 nocolon 0 EOF\n" + valid
+    )
+
+    assert bench_state.is_live(directory, live_run(), proc) is True
 
 
 @pytest.mark.parametrize(

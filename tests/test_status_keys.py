@@ -510,6 +510,8 @@ PROMPTS = [
     ((curses.KEY_RESIZE,), "run", None),
     (("?", ":"), "help", ":"),
     ((":", "q"), "run", ":q"),
+    ((":q", "\x01"), "run", ":q"),
+    ((":q", curses.KEY_UP), "run", ":q"),
     ((":q", "j"), "run", ":qj"),
     ((":run", ENTER), "run", None),
     ((":", ENTER), "run", None),
