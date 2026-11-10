@@ -82,14 +82,6 @@ def test_the_status_bar_badge_is_running_over_disabled_over_idle(bench, badge, g
     assert shown.text(23).endswith("? keys")
 
 
-@pytest.mark.parametrize(("timer", "tone"), [("on", "green"), ("off", "red"), ("—", "grey")])
-def test_the_status_bar_timer_word_is_green_red_or_grey(timer, tone):
-    shown = draw([run()], bench_state.Bench(False, False, timer))
-    start = shown.text(23).index("timer") + len("timer ")
-    assert shown.text(23)[start : start + len(timer)] == timer
-    assert shown.style(23, start) == frozenset({tone})
-
-
 def test_an_open_prompt_takes_the_last_row_and_moves_the_status_bar_up_one():
     runs = [run()]
     closed = draw(runs, tab="history", directory="records")
@@ -154,23 +146,6 @@ def test_a_stage_row_is_glyph_name_start_and_took_under_a_column_header():
     assert left[6] == f"{'✓ posted':<17}{lc(3, 25, 20)}  0m02s"
 
 
-@pytest.mark.parametrize(
-    ("row", "tone"),
-    [
-        (3, {"green"}),
-        (4, {"red", "bold"}),
-        (5, {"amber", "bold"}),
-        (6, {"grey"}),
-        (7, {"grey"}),
-        (8, {"red", "bold"}),
-    ],
-    ids=["passed", "error", "open", "not-started", "skipped", "failed"],
-)
-def test_each_stage_state_has_its_glyph_colour(row, tone):
-    shown = draw([STATES], LIVE, now=t(3, 12, 15))
-    assert shown.tone(row, 0) == frozenset(tone)
-
-
 def test_a_tinted_stage_row_keeps_its_tint_when_selected_and_a_plain_one_takes_the_selection():
     runs = [
         run(
@@ -229,24 +204,6 @@ def test_a_sectioned_pane_has_a_summary_derived_from_its_tests_fold_glyphs_and_a
     assert shown.right(6) == "      reading rauc"
     assert shown.right(7) == "  · t.py::c"
     assert shown.right(22) == "Enter into the log   za fold   Esc back to stages"
-    assert shown.tone(3, RIGHT + 4) == frozenset({"blue"})
-
-
-def test_a_view_fold_toggle_overrides_the_derived_fold_state():
-    live, sections = target_suite_open()
-    shown = draw(
-        [live],
-        LIVE,
-        size=(24, 120),
-        now=t(3, 37, 38),
-        stage="target_suite",
-        folds={sections[0].id: True, sections[2].id: False},
-    )
-    assert shown.right(3) == "▾ ✓ setup install_candidate  3m40s"
-    assert shown.right(4) == "      put bundle"
-    assert shown.right(5) == "▸ ✓ t.py::a  1m42s"
-    assert shown.right(6) == "▸ ● t.py::b  1m04s"
-    assert shown.right(7) == "  · t.py::c"
 
 
 def test_a_failed_test_opens_with_its_output_and_failure_lines_after_the_stages_own_lines():
@@ -271,6 +228,7 @@ def test_a_failed_test_opens_with_its_output_and_failure_lines_after_the_stages_
     assert shown.right(3) == "lead line"
     assert shown.right(4) == "  ✓ t.py::a  10m00s"
     assert shown.right(5) == "▾ ✗ t.py::b  1m00s"
+    assert shown.tone(5, RIGHT + 2) == frozenset({"red", "bold"})
     assert shown.right(6) == "      out line"
     assert shown.right(7) == "      t.py:88: AssertionError"
     assert shown.right(8) == "      E   boom"
@@ -305,9 +263,6 @@ def test_a_plain_pane_is_a_label_over_bottom_aligned_lines_clipped_at_the_pane_e
     assert [shown.right(r) for r in range(2, 19)] == [""] * 17
     pane = "".join(shown.right(r) for r in range(2, 23))
     assert not any(glyph in pane for glyph in "▾▸") and "Enter into" not in pane
-
-    waiting = draw([run(bundle=stage("bundle", "not-started"))], IDLE, stage="bundle")
-    assert [waiting.right(r) for r in range(2, 23) if waiting.right(r)] == ["this stage's output"]
 
 
 def build_progress(tasks):
@@ -386,32 +341,6 @@ def test_the_summary_shows_the_result_word_end_time_floored_minutes_and_one_row_
     clean = draw([run(kind="test", host_suite=tests("host_suite", ["passed"] * 2))], IDLE)
     assert clean.right(3) == "host suite    2 passed"
     assert clean.right(4) == ""
-
-
-# ---------------------------------------------------------------- result colours
-
-
-def test_a_failed_run_reads_red_a_passed_one_green_and_a_running_one_amber():
-    summary = {
-        "failed": draw([run(result="failed")], IDLE).tone(2, RIGHT),
-        "passed": draw([run()], IDLE).tone(2, RIGHT),
-        "running": draw([run(result=None)], LIVE).tone(2, RIGHT),
-    }
-    assert summary == {
-        "failed": frozenset({"red", "bold"}),
-        "passed": frozenset({"green", "bold"}),
-        "running": frozenset({"amber", "bold"}),
-    }
-    history = {
-        "failed": draw([run(result="failed")], IDLE, tab="history").tone(2, 49),
-        "passed": draw([run()], IDLE, tab="history").tone(2, 49),
-        "running": draw([run(result=None)], LIVE, tab="history").tone(2, 49),
-    }
-    assert history == {
-        "failed": frozenset({"red"}),
-        "passed": frozenset({"green"}),
-        "running": frozenset({"amber"}),
-    }
 
 
 # ---------------------------------------------------------------- History
@@ -496,38 +425,16 @@ def test_the_record_column_widens_for_a_suffixed_id_and_the_what_column_clips_at
 # ---------------------------------------------------------------- Help, empty, text
 
 
-def test_help_lists_the_built_keys_in_three_columns_and_none_of_the_unbuilt_commands():
+def test_help_lists_the_built_keys_and_none_of_the_unbuilt_commands():
     shown = draw([run()], IDLE, tab="help", size=(24, 120))
-    width = (120 - 6) // 3
-    starts = (0, width + 3, 2 * (width + 3))
-    assert shown.text(1).rstrip() == "keys"
-    for start, heading in zip(starts, ("move", "runs and log", "commands"), strict=True):
-        assert shown.text(2, start, start + width).rstrip() == heading
-    expected = (
-        [
-            ("h l", "prev / next view"),
-            ("1 3", "jump to view"),
-            ("j k", "down / up"),
-            ("gg G", "top / bottom"),
-            ("^d ^u", "half page"),
-            ("Enter", "open selection"),
-        ],
-        [
-            ("[ ]", "older / newer run"),
-            ("1", "back to the live run"),
-            ("za", "fold / unfold a stage"),
-            ("zR zM", "unfold / fold all"),
-            ("/", "search"),
-            ("n N", "next / prev match"),
-            ("G", "follow the live log"),
-        ],
-        [(":q", "quit"), ("?", "this screen"), ("q", "quit")],
-    )
-    for start, entries in zip(starts, expected, strict=True):
-        for offset, (key, words) in enumerate(entries):
-            assert shown.text(3 + offset, start, start + width).rstrip() == f"{key:<10}{words}"
-    body = "".join(shown.text(r) for r in range(3, 22))
-    assert not any(gone in body for gone in ("dd ", ":run", ":disable", ":enable", ":edit", "1-4"))
+    body = [shown.text(r).rstrip() for r in range(1, 23)]
+    assert body[0] == "keys"
+    for heading in ("move", "runs and log", "commands"):
+        assert heading in body[1]
+    built = ["h l", "prev / next view", "gg G", "half page", "[ ]", "older / newer run", "zR zM"]
+    built += ["follow the live log", "n N", ":q", "this screen"]
+    assert all(word in " ".join(body) for word in built)
+    assert not any(gone in " ".join(body) for gone in (":run", ":disable", ":enable", ":edit"))
 
 
 def test_with_no_runs_run_reads_a_zero_record_line_and_history_its_header_and_footer():

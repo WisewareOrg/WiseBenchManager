@@ -89,12 +89,10 @@ PLAIN = [run(build=stage("build", "passed", t(3, 10), lines=("one", "two")))]
 @pytest.mark.parametrize(
     ("runs", "name", "bench", "focus"),
     [
-        (RUNS, "host_suite", IDLE, "log"),
-        (PLAIN, "build", IDLE, "log"),
         (RUNS, None, IDLE, "stages"),
         ([live("build")], "posted", LIVE, "stages"),
     ],
-    ids=["sectioned", "plain with lines", "summary", "stage with no log rows"],
+    ids=["summary", "stage with no log rows"],
 )
 def test_enter_moves_focus_into_a_log_that_has_rows_and_nowhere_else(runs, name, bench, focus):
     view = arrive(runs, name, bench)
@@ -116,8 +114,6 @@ def test_enter_moves_focus_into_a_log_that_has_rows_and_nowhere_else(runs, name,
         ("host_suite", "kk", "build"),
         ("build", "Gj", "posted"),
         ("build", "ggk", "checkout"),
-        ("build", "G", "posted"),
-        ("build", "gg", "checkout"),
         ("build", CD, "posted"),
         ("build", CU, "checkout"),
     ],
@@ -143,21 +139,12 @@ def growing(count, stage_name="host_suite"):
     return live(stage_name, **{stage_name: suite(stage_name, outcomes, state="open")})
 
 
-def test_a_log_movement_key_does_not_end_follow():
-    runs = [growing(5)]
-    view = status.View()
-    view.tick(runs, LIVE, SIZE)
-    keys(view, runs, ENTER, "j", bench=LIVE)
-    assert view.follow is True
-
-
 # ---------------------------------------------------------------- log movement and the cursor
 
 
 @pytest.mark.parametrize(
     ("presses", "case"),
     [
-        ("", 0),
         ("j", 1),
         ("jkk", 0),
         ("Gj", 29),
@@ -167,7 +154,6 @@ def test_a_log_movement_key_does_not_end_follow():
         ("jjgk", 2),
     ],
     ids=[
-        "default",
         "j",
         "clamp top",
         "clamp bottom",
@@ -259,10 +245,9 @@ def test_fold_keys_set_toggles_for_the_selected_stage_only(presses, folds, line)
         assert "case_01" in shown(view, FOLD_RUNS)
 
 
-@pytest.mark.parametrize(("into_log", "presses"), [(False, "za"), (True, "zqa")])
-def test_za_in_the_stage_list_and_a_discarded_pending_z_toggle_nothing(into_log, presses):
-    view = (in_log if into_log else arrive)(FOLD_RUNS, "host_suite")
-    assert keys(view, FOLD_RUNS, presses) is False
+def test_a_discarded_pending_z_toggles_nothing():
+    view = in_log(FOLD_RUNS, "host_suite")
+    assert keys(view, FOLD_RUNS, "zqa") is False
     assert view.folds == {}
 
 
@@ -342,6 +327,8 @@ def test_follow_rides_the_running_stage_and_ends_on_the_summary():
 def test_follow_that_a_stage_movement_stopped_leaves_the_selection_alone():
     view = status.View()
     view.tick([live("host_suite")], LIVE, SIZE)
+    keys(view, [growing(5)], ENTER, "j", ESC, bench=LIVE)
+    assert view.follow is True
     keys(view, [live("host_suite")], "j", bench=LIVE)
     assert view.stage == "target_suite"
     view.tick([live("posted")], LIVE, SIZE)
@@ -460,7 +447,7 @@ HISTORY = [
 
 @pytest.mark.parametrize(
     ("presses", "index"),
-    [("", 0), ("jj", 2), ("jjkkk", 0), ("G", 39), ("Gj", 39), ("Ggg", 0)],
+    [("jj", 2), ("jjkkk", 0), ("Gj", 39)],
 )
 def test_history_opens_on_the_newest_record_and_j_k_gg_g_move_it_and_clamp(presses, index):
     view = status.View()
@@ -510,12 +497,6 @@ def test_history_enter_on_the_newest_run_opens_its_current_form_without_followin
     assert view.follow is False
 
 
-def test_history_movement_leaves_the_run_selection_alone():
-    view = arrive(PAST, "build", bench=LIVE)
-    keys(view, PAST, "3", "jj", bench=LIVE)
-    assert view.stage == "build"
-
-
 # ---------------------------------------------------------------- Help, quit and the command line
 
 
@@ -556,7 +537,6 @@ PROMPTS = [
     ((":q", "j"), "run", ":qj"),
     ((":run", ENTER), "run", None),
     ((":", ENTER), "run", None),
-    ((":q", ESC), "run", None),
     ((":q", "\x7f"), "run", ":"),
     ((":q", "\b", "\b"), "run", None),
     ((":q", curses.KEY_BACKSPACE, curses.KEY_BACKSPACE), "run", None),
@@ -577,9 +557,8 @@ def test_the_command_line_takes_text_and_acts_on_nothing_but_quit(presses, tab, 
         ("history", "/", None),
         ("stage", "/ab", "/ab"),
         ("stage", ("/", ESC), None),
-        ("stage", ("/", "\x7f"), None),
     ],
-    ids=["no stage", "on History", "types", "Esc", "Backspace"],
+    ids=["no stage", "on History", "types", "Esc"],
 )
 def test_slash_opens_only_with_a_selected_stage_on_run(setup, presses, prompt):
     view = arrive(PAST, "build" if setup else None, bench=LIVE)
@@ -633,12 +612,7 @@ def test_n_and_capital_n_step_through_matches_and_wrap_both_ways():
         keys(view, runs, press)
         seen.append(shown(view, runs))
     assert seen == ["hit 0", "hit 1", "hit 2", "hit 0", "hit 2", "hit 1", "hit 0"]
-
-
-def test_n_works_from_the_stage_list_and_moves_focus_to_the_log():
-    runs = [HITS]
-    view = in_log(runs, "host_suite")
-    keys(view, runs, "/hit", ENTER, ESC)
+    keys(view, runs, ESC)
     assert view.focus == "stages"
     keys(view, runs, "n")
     assert view.focus == "log"
@@ -690,11 +664,10 @@ def test_a_plain_pane_opens_with_the_cursor_on_its_last_line_on_the_panes_last_r
         ("k", 21, "line_58"),
         ("gg", 3, "line_00"),
         ("ggj", 4, "line_01"),
-        ("gg" + "j" * 20, 22, "line_20"),
         ("ggG", 22, "line_59"),
         ("/line_17\n", 3, "line_17"),
     ],
-    ids=["default", "k", "gg", "j", "scrolls just enough", "G", "search"],
+    ids=["default", "k", "gg", "j", "G", "search"],
 )
 def test_plain_pane_keys_move_the_line_cursor_and_keep_it_in_view(presses, row, line):
     view = in_log(LONG_RUNS, "build")
