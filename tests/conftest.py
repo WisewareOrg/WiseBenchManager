@@ -31,7 +31,7 @@ def bench_test_class(monkeypatch):
         monkeypatch (pytest.MonkeyPatch): Restores the real class at teardown.
 
     Returns:
-        unittest.mock.NonCallableMagicMock: The mocked class; its `return_value` is the instance.
+        unittest.mock.MagicMock: The mocked class, callable; its `return_value` is the instance.
     """
     mock = create_autospec(BenchTest)
     monkeypatch.setattr(cli, "BenchTest", mock)

@@ -17,10 +17,10 @@ def made(monkeypatch, bench_test_class):
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
-        bench_test_class (unittest.mock.NonCallableMagicMock): The shared autospec.
+        bench_test_class (unittest.mock.MagicMock): The shared autospec.
 
     Yields:
-        unittest.mock.NonCallableMagicMock: The mocked class; `.return_value.run` is the run.
+        unittest.mock.MagicMock: The mocked class; `.return_value.run` is the run.
     """
     monkeypatch.setenv("LG_ENV", "unused.yaml")
     yield bench_test_class

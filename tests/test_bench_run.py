@@ -4,13 +4,13 @@ import subprocess
 from unittest.mock import ANY
 
 import pytest
-from test_bench_test import (
-    _git,
-    _marker_lines,
-    _repo_with_one_commit,
-    _write_bench_toml,
-    _write_lg_env,
-    _write_suite,
+from helpers import (
+    git,
+    marker_lines,
+    repo_with_one_commit,
+    write_bench_toml,
+    write_lg_env,
+    write_suite,
 )
 
 from wisebench import bench_run, bench_test
@@ -370,12 +370,12 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
 ):
     """BenchRun on the real BenchTest posts a target-suite failure once, in `stage posted`."""
     monkeypatch.chdir(tmp_path)
-    _repo_with_one_commit(tmp_path)
-    _git(tmp_path, "remote", "add", "origin", str(tmp_path))
-    _write_bench_toml(tmp_path)
-    _write_suite(tmp_path, "host_suite", passing=True)
-    _write_suite(tmp_path, "target_suite", passing=False)
-    lg_env = _write_lg_env(tmp_path)
+    repo_with_one_commit(tmp_path)
+    git(tmp_path, "remote", "add", "origin", str(tmp_path))
+    write_bench_toml(tmp_path)
+    write_suite(tmp_path, "host_suite", passing=True)
+    write_suite(tmp_path, "target_suite", passing=False)
+    lg_env = write_lg_env(tmp_path)
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -386,7 +386,7 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
         _FakeCheck,
         "post",
         lambda self, sha, conclusion, title, summary: seen.append(
-            (conclusion, title, _marker_lines(tmp_path))
+            (conclusion, title, marker_lines(tmp_path))
         ),
     )
 
@@ -396,5 +396,5 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
     conclusion, title, lines_at_post = seen[0]
     assert (conclusion, title) == ("failure", "target_suite failed")
     assert lines_at_post[-1] == "stage posted started"
-    final = _marker_lines(tmp_path)
+    final = marker_lines(tmp_path)
     assert final[-3:] == ["stage posted started", "stage posted passed", "run failed"]
