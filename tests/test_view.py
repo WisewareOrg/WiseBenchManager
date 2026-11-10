@@ -13,6 +13,7 @@ from status_helpers import (
     SIZE,
     STAMP,
     TESTS,
+    Grid,
     building,
     failing_at,
     live,
@@ -23,7 +24,7 @@ from status_helpers import (
     suite,
 )
 
-from wisebench import view
+from wisebench import screen, view
 
 ENTER, ESC, HALF_DOWN, HALF_UP = "\n", "\x1b", "\x04", "\x15"
 THREE = [live("build"), failing_at(OLDER, "bundle"), run(OLDEST)]
@@ -36,14 +37,14 @@ def resolve(runs, bench=IDLE, state=None, size=SIZE):
     return view.resolve(state, view.Snapshot(runs, bench, NOW), *size)
 
 
-def press(state, runs, keys, bench=IDLE):
+def press(state, runs, keys, bench=IDLE, size=SIZE):
     """Resolve, write the scroll back and handle each key in turn, as the loop does.
 
     Returns the last key's quit flag.
     """
     quits = False
     for key in keys:
-        frame = resolve(runs, bench, state)
+        frame = resolve(runs, bench, state, size)
         state.scroll, state.history_scroll = frame.scroll, frame.history_scroll
         quits = view.handle(state, key, frame)
     return quits
@@ -246,9 +247,12 @@ def test_running_tasks_are_capped_so_that_three_log_rows_remain():
     assert resolve([building(40)], LIVE).room == 3
 
 
-def test_a_screen_below_the_drawable_size_is_too_small():
-    assert resolve([run()], size=(10, 40)).layout.too_small
-    assert not resolve([run()], size=(24, 80)).layout.too_small
+@pytest.mark.parametrize(
+    ("size", "too_small"),
+    [((10, 40), True), ((23, 80), True), ((24, 79), True), ((24, 80), False)],
+)
+def test_a_screen_below_the_drawable_size_is_too_small(size, too_small):
+    assert resolve([run()], size=size).layout.too_small is too_small
 
 
 def test_history_selects_the_shown_run_until_a_record_is_chosen():
@@ -433,3 +437,220 @@ def test_history_scrolls_only_as_far_as_keeps_the_selection_on_screen():
     assert (bottom.history_cursor, bottom.history_scroll) == (39, 40 - bottom.history_room)
     press(state, MANY, "gg")
     assert resolve(MANY, state=state).history_scroll == 0
+
+
+EVERY_KEY = "jkGgg[]\n/za:q\x1bzRnN?"
+
+
+@pytest.mark.parametrize("tab", ["run", "history"])
+@pytest.mark.parametrize("size", [SIZE, (10, 40), (3, 5)])
+@pytest.mark.parametrize("runs", [[], [run()]], ids=["no runs", "one run"])
+def test_no_key_raises_on_no_runs_or_a_tiny_terminal(runs, size, tab):
+    state = view.State(tab=tab)
+    screen.draw(Grid(*size), resolve(runs, state=state, size=size))
+    for key in EVERY_KEY:
+        press(state, runs, key, size=size)
+        screen.draw(Grid(*size), resolve(runs, state=state, size=size))
+
+
+def test_no_runs_says_so_and_a_tiny_terminal_says_too_small():
+    empty = Grid(*SIZE)
+    screen.draw(empty, resolve([]))
+    assert "0 records in" in "".join(empty.text(y) for y in range(SIZE[0]))
+
+    tiny = Grid(10, 40)
+    screen.draw(tiny, resolve([run()], size=(10, 40)))
+    assert "terminal too small" in tiny.text(0)
+
+
+@pytest.mark.parametrize(
+    ("start", "key"), [(None, "]"), (OLDEST, "[")], ids=["newest ]", "oldest ["]
+)
+def test_bracket_keys_at_either_end_leave_the_state_as_it_was(start, key):
+    state = view.State(record=start, stage="build", focus="log")
+    press(state, THREE, key, LIVE)
+    assert (state.record, state.tab, state.stage, state.focus) == (start, "run", "build", "log")
+
+
+def test_a_pending_g_or_z_is_discarded_with_the_next_key():
+    state = view.State(stage="host_suite", focus="log", cursor=host_rows()[10].anchor)
+    press(state, [LONG], "gj")
+    assert (state.cursor, state.pending) == (host_rows()[10].anchor, None)
+
+    assert press(state, [LONG], "zq") is False
+    assert (state.folds, state.pending) == ({}, None)
+    press(state, [LONG], "j")
+    assert state.cursor == host_rows()[11].anchor
+
+
+@pytest.mark.parametrize("key", list("jk13hl/[]G") + [ENTER, HALF_DOWN])
+def test_help_swallows_every_key_except_back_quit_and_colon(key):
+    state = view.State(tab="help", back="history")
+    assert press(state, [LONG], key) is False
+    assert (state.tab, state.prompt) == ("help", None)
+
+
+def test_in_help_colon_opens_the_command_line_and_q_quits():
+    state = view.State(tab="help")
+    press(state, [run()], ":")
+    assert (state.tab, state.prompt) == ("help", ":")
+    assert press(view.State(tab="help"), [run()], "q") is True
+
+
+@pytest.mark.parametrize(
+    ("keys", "prompt"),
+    [
+        (":ab\x7f", ":a"),
+        (":ab\b", ":a"),
+        (":\x7f", None),
+        ("/\x7f", None),
+        (":" + ENTER, None),
+        ("/" + ENTER, None),
+        (":run" + ENTER, None),
+        (":q\x01", ":q"),
+        (":q\x1b[A", None),
+    ],
+    ids=[
+        "DEL",
+        "BS",
+        "last char closes",
+        "last char closes /",
+        "bare :",
+        "bare /",
+        ":run",
+        "control",
+        "Esc then keys",
+    ],
+)
+def test_the_command_line_edits_one_character_and_runs_only_a_real_command(keys, prompt):
+    state = view.State(stage="host_suite", focus="log")
+    assert press(state, [LONG], keys) is False
+    assert state.prompt == prompt
+    assert state.pattern is None
+
+
+def test_an_unmapped_key_code_leaves_the_command_line_text_alone():
+    state = view.State(prompt=":q")
+    assert view.handle(state, 259, resolve([run()], state=state)) is False
+    assert state.prompt == ":q"
+
+
+@pytest.mark.parametrize(
+    ("runs", "state", "opens"),
+    [
+        ([LONG], {"stage": "host_suite"}, True),
+        ([LONG], {"stage": "host_suite", "tab": "history"}, False),
+        ([LONG], {}, False),
+        ([live("build")], {"stage": "build"}, False),
+    ],
+    ids=["a stage with rows", "History", "the summary", "a stage with no rows"],
+)
+def test_slash_opens_only_on_run_with_rows(runs, state, opens):
+    chosen = view.State(**state)
+    press(chosen, runs, "/")
+    assert chosen.prompt == ("/" if opens else None)
+
+
+@pytest.mark.parametrize("search", ["/BOOT", "/nothing"], ids=["case-sensitive", "unmatched"])
+def test_a_search_that_misses_moves_nothing(search):
+    anchor = host_rows()[5].anchor
+    state = view.State(stage="host_suite", focus="log", cursor=anchor)
+    press(state, [LONG], search + ENTER)
+    assert (state.cursor, state.folds, state.focus, state.prompt) == (anchor, {}, "log", None)
+
+
+def test_n_and_capital_n_do_nothing_without_a_pattern_or_on_history():
+    anchor = host_rows()[5].anchor
+    state = view.State(stage="host_suite", focus="stages", cursor=anchor)
+    press(state, [LONG], "nN")
+    assert (state.cursor, state.focus) == (anchor, "stages")
+
+    history = view.State(tab="history", pattern="boot", stage="host_suite")
+    press(history, [LONG], "nN")
+    assert (history.cursor, history.history_record) == (None, None)
+
+
+def test_search_wraps_past_the_last_match_to_the_first_and_back():
+    state = view.State(stage="host_suite", focus="log", cursor=host_rows()[0].anchor)
+
+    def under_cursor():
+        """The text of the row under the cursor."""
+        frame = resolve([LONG], state=state)
+        return frame.rows[frame.cursor].text
+
+    press(state, [LONG], "/boot" + ENTER)
+    seen = [under_cursor()]
+    for key in "nnN":
+        press(state, [LONG], key)
+        seen.append(under_cursor())
+    assert seen == ["boot one", "boot two", "boot one", "boot two"]
+
+
+@pytest.mark.parametrize(
+    ("runs", "state"),
+    [([run()], {}), ([live("build")], {"stage": "build"})],
+    ids=["the summary", "a stage with no rows"],
+)
+def test_enter_with_no_log_rows_keeps_focus_on_the_stages(runs, state):
+    chosen = view.State(**state)
+    press(chosen, runs, ENTER, LIVE)
+    assert chosen.focus == "stages"
+
+
+def test_log_focus_with_no_rows_moves_the_stage_list_instead():
+    state = view.State(stage="build", focus="log")
+    press(state, [live("build")], "j", LIVE)
+    assert (state.stage, state.cursor) == ("bundle", None)
+
+
+@pytest.mark.parametrize(
+    ("stage_name", "key", "expected"),
+    [("checkout", "k", "checkout"), ("posted", "j", "posted"), (None, "k", "posted")],
+    ids=["clamps at the top", "clamps at the bottom", "k from the summary"],
+)
+def test_the_stage_list_clamps_and_k_from_the_summary_lands_on_the_last_stage(
+    stage_name, key, expected
+):
+    state = view.State(stage=stage_name)
+    press(state, [run()], key)
+    assert state.stage == expected
+
+
+LEAD = run(host_suite=suite("host_suite", ["passed"] * 2, {0: ("body",)}, lead=("preamble",)))
+
+
+@pytest.mark.parametrize(
+    ("keys", "focus"),
+    [("za", "log"), ("za", "stages"), ("zR", "stages"), ("zM", "stages")],
+    ids=["za on a lead line", "za", "zR", "zM"],
+)
+def test_fold_keys_do_nothing_on_a_lead_line_or_with_focus_on_the_stages(keys, focus):
+    rows = resolve([LEAD], state=view.State(stage="host_suite")).rows
+    assert rows[0].section is None
+    state = view.State(stage="host_suite", focus=focus, cursor=rows[0].anchor)
+    press(state, [LEAD], keys)
+    assert state.folds == {}
+
+
+@pytest.mark.parametrize(
+    ("at", "keys", "row"),
+    [(0, "k", 0), (29, "j", 29), (28, HALF_DOWN, 29), (1, HALF_UP, 0)],
+    ids=["k at the top", "j at the bottom", "^d past the end", "^u past the start"],
+)
+def test_log_movement_clamps_at_the_first_and_last_row(at, keys, row):
+    state = view.State(stage="host_suite", focus="log", cursor=host_rows()[at].anchor)
+    press(state, [LONG], keys)
+    assert state.cursor == host_rows()[row].anchor
+
+
+@pytest.mark.parametrize("keys", [ENTER, "j", "k", "G", "gg", HALF_DOWN, HALF_UP])
+def test_history_keys_on_no_records_do_nothing(keys):
+    state = view.State(tab="history")
+    press(state, [], keys)
+    assert (state.tab, state.history_record) == ("history", None)
+
+
+def test_l_on_history_keeps_the_selection():
+    state = view.State(tab="history", history_record=OLDER)
+    press(state, THREE, "l", LIVE)
+    assert (state.tab, state.history_record) == ("history", OLDER)

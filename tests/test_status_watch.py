@@ -1,6 +1,15 @@
 """`status.watch` and its curses shell: exit codes, the corner cell, the loop and the palette."""
 
 import curses
+import fcntl
+import os
+import select
+import shutil
+import struct
+import subprocess
+import sys
+import termios
+import time
 
 import pytest
 
@@ -134,3 +143,67 @@ def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkey
     assert attribute(fake, "1 Run") & curses.A_REVERSE
     assert attribute(fake, "IDLE") & curses.A_REVERSE
     assert not attribute(fake, "3 History") & curses.A_REVERSE
+
+
+def test_a_surface_write_is_clipped_at_the_right_edge_and_dropped_past_it():
+    fake = FakeScreen()
+    surface = status._Surface(fake, ROWS, COLS, lambda fg, bg, bold: 7)
+    surface.put(0, COLS - 10, "x" * 30, "#ffffff")
+    surface.put(1, COLS, "gone", "#ffffff")
+    assert fake.writes == [(0, COLS - 10, "x" * 10, 7)]
+
+
+def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_path):
+    """Real curses on a pty: the corner-cell behaviour the fake window imitates."""
+    if (
+        shutil.which("infocmp") is None
+        or subprocess.run(["infocmp", "xterm-256color"], capture_output=True).returncode
+    ):
+        pytest.skip("no xterm-256color terminfo entry")
+    import pty
+
+    code = f"import sys; from wisebench import status; sys.exit(status.watch({str(tmp_path)!r}))"
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+            os.environ["TERM"] = "xterm-256color"
+            os.execv(sys.executable, [sys.executable, "-c", code])
+        finally:
+            os._exit(127)
+
+    output = b""
+
+    def read_for(seconds):
+        nonlocal output
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if select.select([fd], [], [], 0.1)[0]:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    return
+                if not chunk:
+                    return
+                output += chunk
+
+    try:
+        read_for(1.5)
+        os.write(fd, b"q")
+        read_for(1.0)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            done, status_code = os.waitpid(pid, os.WNOHANG)
+            if done:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+            pytest.fail("the shell did not exit after q")
+    finally:
+        os.close(fd)
+
+    assert os.waitstatus_to_exitcode(status_code) == 0
+    assert b"1 Run" in output
+    assert b"0 records" in output

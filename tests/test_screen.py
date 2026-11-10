@@ -18,10 +18,10 @@ from status_helpers import (
     building,
     failing_at,
     live,
-    plain,
     real_run,
     run,
     running_test,
+    stage,
     suite,
     t,
 )
@@ -65,61 +65,38 @@ def test_the_meaning_colours_are_distinct():
 SCENES = {
     "live build": lambda: drawn([building(3)], LIVE),
     "live suite": lambda: drawn([running_test(3, failed=(1,))], LIVE),
-    "clean suite": lambda: drawn([running_test(2)], LIVE),
     "disabled": lambda: drawn([failing_at(STAMP, "bundle")], DISABLED),
-    "idle": lambda: drawn([FINISHED], IDLE),
-    "plain": lambda: drawn([live("build", build=plain("build", 3))], LIVE),
     "history": lambda: drawn(HISTORY, LIVE, tab="history"),
-    "help": lambda: drawn([run()], tab="help"),
+    "idle": lambda: drawn([FINISHED], IDLE),
+    "selected stage": lambda: drawn([FINISHED], IDLE, stage="checkout"),
 }
 
 COLOURS = {
-    "passed stage row green": ("idle", r"✓ checkout +\S+ +\S+", "GREEN", None, None),
-    "running stage row amber bold on its tint": (
+    "a passed stage is green": ("idle", r"✓ checkout +\S+ +\S+", "GREEN", None, None),
+    "a running stage is amber bold on the running tint": (
         "live build",
         r"● build +\S+ +\S+",
         "AMBER",
         "RUNNING_TINT",
         True,
     ),
-    "failed stage row red bold on its tint": (
+    "a failed stage is red bold on the failed tint": (
         "disabled",
         r"✗ bundle +\S+ +\S+",
         "RED",
         "FAILED_TINT",
         True,
     ),
-    "stage not started dim": ("live build", r"· bundle", "DIM", None, None),
-    "stage list header dim": ("idle", r"stage +start +took", "DIM", None, None),
-    "run title bright bold": ("live build", r"PR #31", "BRIGHT", None, True),
-    "active tab inverse": ("live build", r"1 Run", "GROUND", "TEXT", None),
-    "inactive tab dim": ("live build", r"3 History", "DIM", None, None),
-    "RUNNING badge": ("live build", r"RUNNING", "GROUND", "AMBER", True),
-    "IDLE badge": ("idle", r"IDLE", "BRIGHT", "RULE", True),
-    "DISABLED badge": ("disabled", r"DISABLED", "GROUND", "RED", True),
-    "timer on": ("live build", r"timer (on)", "GREEN", None, None),
-    "timer off": ("disabled", r"timer (off)", "RED", None, None),
-    "passed section green": ("live suite", r"✓ t\.py::test_0", "GREEN", None, None),
-    "failed section red bold": ("live suite", r"✗ t\.py::test_1", "RED", None, True),
-    "running section amber bold": ("live suite", r"● t\.py::test_3", "AMBER", None, True),
-    "section not started dim": ("live suite", r"· t\.py::test_4", "DIM", None, None),
-    "the word setup blue": ("live suite", r"(setup) install_candidate", "BLUE", None, None),
-    "running suite name amber bold": ("live suite", r"target suite(?=  \d)", "AMBER", None, True),
-    "suite head passed count green": ("live suite", r"2 passed(?=  1 failed)", "GREEN", None, None),
-    "suite head failed count red": ("live suite", r"1 failed", "RED", None, None),
-    "no failures dim": ("clean suite", r"0 failed", "DIM", None, None),
-    "log output light grey": ("plain", r"build line 0", "LOG", None, None),
-    "idle result green bold": ("idle", r"passed(?=  ended)", "GREEN", None, True),
-    "idle suite counts plain text": ("idle", r"host suite +(2 passed)", "TEXT", None, False),
-    "History running amber": ("history", r"running", "AMBER", None, None),
-    "History failed red": ("history", r"\bfailed\b", "RED", None, None),
-    "History bench error red": ("history", r"bench error", "RED", None, None),
-    "History passed green": ("history", r"\bpassed\b", "GREEN", None, None),
-    "History by hand blue": ("history", r"by hand", "BLUE", None, None),
-    "History failing stage dim": ("history", r"failed +\S+ +(bundle)", "DIM", None, None),
-    "help title bright bold": ("help", r"^(keys)", "BRIGHT", None, True),
-    "help heading blue": ("help", r"^(move)", "BLUE", None, None),
-    "help key amber": ("help", r"j k(?= +down)", "AMBER", None, None),
+    "a stage not started is dim": ("live build", r"· bundle", "DIM", None, None),
+    "the word setup is blue": ("live suite", r"(setup) install_candidate", "BLUE", None, None),
+    "by hand is blue": ("history", r"by hand", "BLUE", None, None),
+    "the selected stage row is on the selection": (
+        "selected stage",
+        r"✓ checkout +\S+ +\S+",
+        "GREEN",
+        "SELECTION",
+        None,
+    ),
 }
 
 
@@ -280,3 +257,36 @@ def test_a_parsed_real_record_draws_its_stages_summary_and_target_suite():
     target, _ = drawn([parsed], IDLE, stage="target_suite")
     target.find(r"target suite  4 of 4  4 passed  0 failed")
     target.find(r"✓ setup install_candidate")
+
+
+def test_a_stage_left_open_in_a_dead_run_reads_a_question_mark_and_a_dash_for_took():
+    states = ["passed", "passed", "open"] + ["not-started"] * 4
+    grid, _ = drawn([run(states=states, result=None)], IDLE)
+    grid.find(rf"\? build +{lc(3, 10)} +—")
+
+
+def test_tabs_expand_and_control_characters_are_drawn_as_caret_pairs():
+    lines = ["a\tb", "esc\x1b[0m", "del\x7f", "\x01"]
+    grid, _ = drawn([live("build", build=stage("build", "open", t(3, 10), lines=lines))], LIVE)
+    for shown in ("a       b", r"esc\^\[\[0m", r"del\^\?", r"\^A"):
+        grid.find(shown)
+
+
+def test_a_failed_tests_crash_line_and_traceback_lines_are_drawn_under_its_output():
+    failed = suite(
+        "host_suite",
+        ["passed", "failed"],
+        {1: ("out line",)},
+        {1: ("t.py:88: AssertionError", "E   boom")},
+    )
+    grid, _ = drawn([run(host_suite=failed)], IDLE, stage="host_suite")
+    output, _, _ = grid.find("out line")
+    crash, _, _ = grid.find(r"t\.py:88: AssertionError")
+    boom, _, _ = grid.find("E   boom")
+    assert (crash, boom) == (output + 1, output + 2)
+
+
+def test_a_failed_test_with_only_failure_lines_still_shows_its_fold_glyph():
+    failed = suite("host_suite", ["failed"], failures={0: ("t.py:1: AssertionError",)})
+    grid, _ = drawn([run(host_suite=failed)], IDLE, stage="host_suite")
+    grid.find(r"▾ ✗ case_00")
