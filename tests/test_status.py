@@ -663,8 +663,8 @@ def proc_tree(tmp_path, pid, start_epoch, holders, comm="bench run"):
     ticks_per_second = os.sysconf("SC_CLK_TCK")
     btime = int(start_epoch) - 1000
     (proc / "stat").write_text(f"cpu  1 2 3\nbtime {btime}\nprocesses 9\n")
-    fields = ["0"] * 49
-    fields[19] = str((int(start_epoch) - btime) * ticks_per_second)
+    fields = ["0"] * 48
+    fields[17] = str((int(start_epoch) - btime) * ticks_per_second)
     (proc / str(pid) / "stat").write_text(f"{pid} ({comm}) S 1 " + " ".join(fields) + "\n")
     lines = [
         f"{i}: FLOCK  ADVISORY  {mode} {holder_pid} {dev}:{inode} 0 EOF"
