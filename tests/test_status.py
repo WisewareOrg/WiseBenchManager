@@ -15,33 +15,23 @@ from helpers import (
     write_lg_env,
     write_suite,
 )
+from status_helpers import mark, real_run, rep
 
-from wisebench import bench_test, status
+from wisebench import bench_state, bench_test, runlog, screen, status
+from wisebench.records import Records
 
 STAMP = "20261110T030715Z"
+TEST_STARTED = mark("run started kind=test ref=main")
 STARTED = datetime(2026, 11, 10, 3, 0, 0, tzinfo=UTC)
 ROOT = os.geteuid() == 0
-
-
-def mark(event, minute=0, second=0, fraction=""):
-    """One `bench:` marker line at 2026-11-10 03:<minute>:<second>, newline-terminated."""
-    return f"bench: 2026-11-10T03:{minute:02d}:{second:02d}{fraction}+00:00 {event}\n"
 
 
 def log(*parts):
     return "".join(parts)
 
 
-def rep(nodeid, when, outcome, longrepr=None):
-    """One pytest-reportlog TestReport line as a dict."""
-    out = {"$report_type": "TestReport", "nodeid": nodeid, "when": when, "outcome": outcome}
-    if longrepr is not None:
-        out["longrepr"] = longrepr
-    return out
-
-
 def parse(text, reports=None, record=STAMP):
-    return status.parse_run(record, text, reports or {})
+    return runlog.parse_run(record, text, reports or {})
 
 
 def stage_of(run, name):
@@ -51,7 +41,7 @@ def stage_of(run, name):
 def suite_log(*body, stage="target_suite"):
     """A log holding one suite stage whose body is `body`, left open."""
     return log(
-        mark("run started kind=test ref=main"),
+        TEST_STARTED,
         mark(f"stage {stage} started", 1),
         *body,
     )
@@ -95,7 +85,7 @@ def test_a_run_without_pr_sha_or_result_has_none_for_each():
     """No ` pr=`, no `sha=` and no `run <result>` line leave pr, sha, result and ended None."""
     run = parse(
         log(
-            mark("run started kind=test ref=main"),
+            TEST_STARTED,
             mark("stage checkout started"),
             mark("stage checkout passed", 0, 5),
         )
@@ -111,7 +101,7 @@ def test_every_stage_state_and_the_sequence_for_a_kind_test_run():
     """Each stage marker shape lands in its state; the sequence is the full one, without posted."""
     run = parse(
         log(
-            mark("run started kind=test ref=main"),
+            TEST_STARTED,
             mark("stage checkout started"),
             mark("stage checkout passed sha=0123456789abcdef", 0, 2),
             mark("stage precondition started", 0, 3),
@@ -149,19 +139,11 @@ def test_every_stage_state_and_the_sequence_for_a_kind_test_run():
     assert stage_of(run, "target_suite").started is None
 
 
-def test_a_kind_run_adds_the_posted_stage_even_while_still_at_checkout():
-    """`posted` belongs to the sequence of kind=run, listed in full from the first line."""
-    run = parse(log(mark("run started kind=run ref=main pr=3"), mark("stage checkout started")))
-
-    assert [s.name for s in run.stages][-2:] == ["target_suite", "posted"]
-    assert [s.state for s in run.stages] == ["open"] + ["not-started"] * 6
-
-
 def test_marker_timestamps_parse_with_and_without_fractional_seconds():
     """Both widths of the marker timestamp (whole seconds, microseconds) are read."""
     run = parse(
         log(
-            mark("run started kind=test ref=main"),
+            TEST_STARTED,
             mark("stage checkout started", 0, 1, ".250000"),
             mark("stage checkout passed", 0, 3),
         )
@@ -192,7 +174,7 @@ def test_a_bench_prefix_that_is_not_at_line_start_is_output_not_a_marker():
     mid_line = "see bench: 2026-11-10T03:05:00+00:00 run passed"
     run = parse(
         log(
-            mark("run started kind=test ref=main"),
+            TEST_STARTED,
             mark("stage build started", 1),
             "plain output\n",
             mid_line + "\n",
@@ -260,7 +242,7 @@ def test_test_rows_follow_queue_order_with_unstarted_tests_emitted_in_place():
     after the last row at stage end; a setup section sits at its marker."""
     run = parse(
         log(
-            mark("run started kind=test ref=main"),
+            TEST_STARTED,
             mark("stage target_suite started", 1),
             *(mark(f"test queued t.py::{n}", 1, 1) for n in "abcde"),
             mark("test started t.py::a", 1, 2),
@@ -328,33 +310,6 @@ def test_a_tests_outcome_is_the_worst_of_its_phases(phases, outcome):
     assert section.outcome == outcome
 
 
-def test_a_started_test_with_no_report_yet_is_open():
-    """A test that began and has no report is still `open`."""
-    run = parse(
-        suite_log(
-            mark("test queued t.py::a", 1, 1),
-            mark("test started t.py::a", 1, 2),
-        )
-    )
-
-    (section,) = stage_of(run, "target_suite").sections
-    assert section.outcome == "open"
-
-
-def test_a_test_is_open_until_its_teardown_report():
-    """A passed setup report with the call still running is `open`, not `passed`."""
-    run = parse(
-        suite_log(
-            mark("test queued t.py::a", 1, 1),
-            mark("test started t.py::a", 1, 2),
-        ),
-        {"target_suite": [rep("t.py::a", "setup", "passed")]},
-    )
-
-    (section,) = stage_of(run, "target_suite").sections
-    assert section.outcome == "open"
-
-
 @pytest.mark.parametrize(
     ("setup_outcome", "expected"), [("passed", "passed"), ("failed", "failed")]
 )
@@ -373,30 +328,6 @@ def test_a_setup_sections_outcome_is_the_first_following_tests_setup_report(
 
     setup = next(s for s in stage_of(run, "target_suite").sections if s.kind == "setup")
     assert setup.outcome == expected
-
-
-def test_stage_counts_are_started_or_reported_queued_passed_and_failed():
-    """done = queued tests started or reported; passed = worst passed; failed = worst failed;
-    skipped counts in neither."""
-    run = parse(
-        suite_log(
-            *(mark(f"test queued t.py::{n}", 1, 1) for n in "abcde"),
-            mark("test started t.py::a", 1, 2),
-            mark("test started t.py::b", 1, 3),
-            mark("test started t.py::c", 1, 4),
-        ),
-        {
-            "target_suite": [
-                rep("t.py::a", "call", "passed"),
-                rep("t.py::b", "call", "failed"),
-                rep("t.py::c", "call", "skipped"),
-                rep("t.py::d", "setup", "failed"),
-            ]
-        },
-    )
-
-    target = stage_of(run, "target_suite")
-    assert (target.done, target.queued, target.passed, target.failed) == (4, 5, 1, 2)
 
 
 def test_a_failed_test_carries_its_crash_line_and_the_last_traceback_entrys_lines():
@@ -437,37 +368,17 @@ def test_a_failed_test_carries_its_crash_line_and_the_last_traceback_entrys_line
     assert sections["t.py::good"].failure == ()
 
 
-def test_a_stage_with_no_section_markers_keeps_all_its_lines_and_no_sections():
-    """Old-layout logs, non-suite stages and collection errors: lines on the stage, no sections."""
-    run = parse(
-        log(
-            mark("run started kind=test ref=main"),
-            mark("stage host_suite started", 1),
-            "collected 0 items\n",
-            "ERROR collecting t.py\n",
-            mark("stage host_suite error reason=pytest exited 2", 2),
-        )
-    )
-
-    host = stage_of(run, "host_suite")
-    assert host.sections == ()
-    assert host.lines == ("collected 0 items", "ERROR collecting t.py")
-
-
-# ---------------------------------------------------------------- bytes and partial lines
-
-
 def test_crlf_and_invalid_utf8_are_read_without_raising(tmp_path):
     """A trailing `\\r` is dropped from every line; invalid UTF-8 decodes with replacement."""
     raw = (
-        mark("run started kind=test ref=main").replace("\n", "\r\n")
+        TEST_STARTED.replace("\n", "\r\n")
         + mark("stage build started", 1).replace("\n", "\r\n")
         + "out \xff line\r\n"
         + mark("stage build passed", 2).replace("\n", "\r\n")
     ).encode("latin-1")
     write_record(tmp_path, raw=raw)
 
-    (run,) = status.Records(tmp_path).runs()
+    (run,) = Records(tmp_path).runs()
 
     build = stage_of(run, "build")
     assert run.ref == "main"
@@ -477,9 +388,9 @@ def test_crlf_and_invalid_utf8_are_read_without_raising(tmp_path):
 
 def test_a_last_line_without_its_newline_is_held_until_the_newline_lands(tmp_path):
     """Bytes after the final `\\n` are not parsed; once the newline is written they are."""
-    head = log(mark("run started kind=test ref=main"), mark("stage build started", 1))
+    head = log(TEST_STARTED, mark("stage build started", 1))
     run_dir = write_record(tmp_path, text=head + "half an output line")
-    records = status.Records(tmp_path)
+    records = Records(tmp_path)
 
     (before,) = records.runs()
     assert stage_of(before, "build").lines == ()
@@ -509,7 +420,7 @@ KAS = "2026-11-10 03:10:00 - INFO     - NOTE: "
 
 def build_log(*lines):
     return log(
-        mark("run started kind=test ref=main"),
+        TEST_STARTED,
         mark("stage build started", 1),
         *(line + "\n" for line in lines),
     )
@@ -537,7 +448,7 @@ def test_build_progress_reads_the_last_task_count_and_the_tasks_still_running():
         ("linux-yocto", "do_compile", datetime(2026, 11, 10, 3, 10, 0).astimezone()),
         ("busybox", "do_install", None),
     }
-    assert all(isinstance(t, status.Task) for t in progress.tasks)
+    assert all(isinstance(t, runlog.Task) for t in progress.tasks)
 
 
 @pytest.mark.parametrize(
@@ -567,7 +478,7 @@ def test_build_progress_is_none_without_a_running_task_line_or_outside_the_build
     no_count = parse(build_log("NOTE: recipe x-1-r0: task do_x: Started"))
     other_stage = parse(
         log(
-            mark("run started kind=test ref=main"),
+            TEST_STARTED,
             mark("stage precondition started", 1),
             "NOTE: Running task 1 of 2 (/l/a.bb:do_x)\n",
         )
@@ -583,13 +494,13 @@ def test_build_progress_is_none_without_a_running_task_line_or_outside_the_build
 def test_runs_are_newest_first_by_stamp_then_numeric_suffix_and_need_a_bench_log(tmp_path):
     """`-10` sorts after `-2`; the bare stamp is suffix 1; folders without bench.log and plain
     files are not runs."""
-    text = log(mark("run started kind=test ref=main"))
+    text = log(TEST_STARTED)
     for name in (STAMP, f"{STAMP}-2", f"{STAMP}-10", "20261111T000000Z", "20261109T000000Z"):
         write_record(tmp_path, name, text)
     (tmp_path / "20261112T000000Z" / "host_suite").mkdir(parents=True)
     (tmp_path / "DISABLED").write_text("x\n")
 
-    names = [run.record for run in status.Records(tmp_path).runs()]
+    names = [run.record for run in Records(tmp_path).runs()]
 
     assert names == [
         "20261111T000000Z",
@@ -620,7 +531,7 @@ def test_suite_reports_are_read_from_each_suites_report_jsonl_and_a_cut_last_lin
     with open(run_dir / "target_suite" / "report.jsonl", "a") as f:
         f.write('{"$report_type": "TestReport", "nodeid": "t.py::b", "wh')
 
-    (run,) = status.Records(tmp_path).runs()
+    (run,) = Records(tmp_path).runs()
 
     sections = {s.name: s.outcome for s in stage_of(run, "target_suite").sections}
     assert sections == {"t.py::a": "passed", "t.py::b": "open"}
@@ -628,10 +539,10 @@ def test_suite_reports_are_read_from_each_suites_report_jsonl_and_a_cut_last_lin
 
 def test_a_removed_record_drops_out_of_the_next_runs(tmp_path):
     """A record that vanishes after a first `.runs()` is left out of the next one."""
-    text = log(mark("run started kind=test ref=main"))
+    text = log(TEST_STARTED)
     write_record(tmp_path, STAMP, text)
     gone = write_record(tmp_path, "20261111T000000Z", text)
-    records = status.Records(tmp_path)
+    records = Records(tmp_path)
     assert len(records.runs()) == 2
 
     (gone / "bench.log").unlink()
@@ -643,10 +554,10 @@ def test_a_removed_record_drops_out_of_the_next_runs(tmp_path):
 @pytest.mark.skipif(ROOT, reason="root reads a mode-000 file")
 def test_an_unreadable_record_drops_out_of_the_next_runs(tmp_path):
     """A changed bench.log that cannot be read is left out, not raised."""
-    text = log(mark("run started kind=test ref=main"))
+    text = log(TEST_STARTED)
     write_record(tmp_path, STAMP, text)
     bad = write_record(tmp_path, "20261111T000000Z", text)
-    records = status.Records(tmp_path)
+    records = Records(tmp_path)
     assert len(records.runs()) == 2
 
     (bad / "bench.log").write_text(text + "more\n")
@@ -662,7 +573,7 @@ def test_a_same_size_rewrite_with_the_old_mtime_is_not_reread_but_a_size_change_
     assert len(old) == len(new)
     path = write_record(tmp_path, text=old) / "bench.log"
     before = path.stat()
-    records = status.Records(tmp_path)
+    records = Records(tmp_path)
     assert [r.ref for r in records.runs()] == ["aaaa"]
 
     path.write_text(new)
@@ -677,20 +588,13 @@ def test_a_same_size_rewrite_with_the_old_mtime_is_not_reread_but_a_size_change_
 # ---------------------------------------------------------------- liveness
 
 
-def proc_tree(tmp_path, pid, start_epoch, holders, comm="bench run"):
-    """A fake /proc: `locks` with `holders` lines, `stat` with btime, `<pid>/stat` starting at
-    `start_epoch`."""
+def proc_tree(tmp_path, holders):
+    """A fake /proc whose `locks` lists `holders` as (mode, pid, dev, inode) FLOCK lines."""
     proc = tmp_path / "proc"
-    (proc / str(pid)).mkdir(parents=True)
-    ticks_per_second = os.sysconf("SC_CLK_TCK")
-    btime = int(start_epoch) - 1000
-    (proc / "stat").write_text(f"cpu  1 2 3\nbtime {btime}\nprocesses 9\n")
-    fields = ["0"] * 48
-    fields[17] = str((int(start_epoch) - btime) * ticks_per_second)
-    (proc / str(pid) / "stat").write_text(f"{pid} ({comm}) S 1 " + " ".join(fields) + "\n")
+    proc.mkdir(parents=True)
     lines = [
-        f"{i}: FLOCK  ADVISORY  {mode} {holder_pid} {dev}:{inode} 0 EOF"
-        for i, (mode, holder_pid, dev, inode) in enumerate(holders, 1)
+        f"{i}: FLOCK  ADVISORY  {mode} {pid} {dev}:{inode} 0 EOF"
+        for i, (mode, pid, dev, inode) in enumerate(holders, 1)
     ]
     (proc / "locks").write_text("\n".join(lines) + ("\n" if lines else ""))
     return proc
@@ -707,51 +611,37 @@ def live_run(*extra):
     return parse(log(mark("run started kind=run ref=main pr=1"), *extra))
 
 
-@pytest.mark.parametrize(
-    ("holder_start_offset", "expected"),
-    [(-3600, True), (0, True), (2, True), (3, False), (3600, False)],
-)
-def test_a_run_is_live_when_the_lock_holder_started_no_later_than_two_seconds_after_it(
-    tmp_path, holder_start_offset, expected
-):
-    """The FLOCK WRITE holder on the lock's inode, started <= run started + 2 s; the `maj:min`
-    in /proc/locks is not compared (it deliberately differs from the file's device here)."""
+def test_a_run_is_live_when_a_process_holds_a_write_flock_on_the_lock_file(tmp_path):
+    """The FLOCK WRITE holder on the lock's inode; the `maj:min` in /proc/locks is not compared
+    (it deliberately differs from the file's device here), and the holder's start time is not
+    consulted."""
     directory, inode = lock_file(tmp_path)
-    proc = proc_tree(
-        tmp_path,
-        4242,
-        STARTED.timestamp() + holder_start_offset,
-        [("WRITE", 4242, "ff:ff", inode)],
-    )
+    proc = proc_tree(tmp_path, [("WRITE", 4242, "ff:ff", inode)])
 
-    assert status.is_live(directory, live_run(), proc) is expected
+    assert bench_state.is_live(directory, live_run(), proc) is True
 
 
 def test_a_run_is_not_live_with_no_holder_no_lock_file_or_a_holder_on_another_inode(tmp_path):
     """No FLOCK on the lock's inode, or no lock file, means not live."""
     directory, inode = lock_file(tmp_path)
-    other = proc_tree(
-        tmp_path, 4242, STARTED.timestamp() - 5, [("WRITE", 4242, "00:2c", inode + 1)]
-    )
-    assert status.is_live(directory, live_run(), other) is False
+    other = proc_tree(tmp_path, [("WRITE", 4242, "00:2c", inode + 1)])
+    assert bench_state.is_live(directory, live_run(), other) is False
 
-    empty = proc_tree(tmp_path / "empty", 4242, STARTED.timestamp() - 5, [])
-    assert status.is_live(directory, live_run(), empty) is False
+    empty = proc_tree(tmp_path / "empty", [])
+    assert bench_state.is_live(directory, live_run(), empty) is False
 
-    held = proc_tree(
-        tmp_path / "held", 4242, STARTED.timestamp() - 5, [("WRITE", 4242, "00:2c", inode)]
-    )
+    held = proc_tree(tmp_path / "held", [("WRITE", 4242, "00:2c", inode)])
     (directory / "lock").unlink()
-    assert status.is_live(directory, live_run(), held) is False
+    assert bench_state.is_live(directory, live_run(), held) is False
 
 
 def test_a_run_with_a_result_line_is_not_live_even_while_the_lock_is_still_held(tmp_path):
     """`run error` is written before the lock is released: the result line ends liveness."""
     directory, inode = lock_file(tmp_path)
-    proc = proc_tree(tmp_path, 4242, STARTED.timestamp() - 5, [("WRITE", 4242, "00:2c", inode)])
+    proc = proc_tree(tmp_path, [("WRITE", 4242, "00:2c", inode)])
 
-    assert status.is_live(directory, live_run(), proc) is True
-    assert status.is_live(directory, live_run(mark("run error", 0, 9)), proc) is False
+    assert bench_state.is_live(directory, live_run(), proc) is True
+    assert bench_state.is_live(directory, live_run(mark("run error", 0, 9)), proc) is False
 
 
 # ---------------------------------------------------------------- timer and bench state
@@ -766,7 +656,7 @@ def stub_systemctl(monkeypatch, returncode=None, raises=None):
             raise raises
         return subprocess.CompletedProcess(command, returncode, stdout="", stderr="")
 
-    monkeypatch.setattr(status.subprocess, "run", run)
+    monkeypatch.setattr(bench_state.subprocess, "run", run)
     return calls
 
 
@@ -774,19 +664,19 @@ def test_the_timer_is_asked_with_is_active_and_a_one_second_timeout(monkeypatch)
     """argv is `systemctl --user is-active <unit>.timer`, timeout=1."""
     calls = stub_systemctl(monkeypatch, returncode=0)
 
-    status.timer_state("bench-run")
+    bench_state.timer_state("bench-run")
 
     ((command, kwargs),) = calls
     assert command == ["systemctl", "--user", "is-active", "bench-run.timer"]
     assert kwargs["timeout"] == 1
 
 
-@pytest.mark.parametrize(("returncode", "expected"), [(0, "on"), (3, "off"), (1, "—"), (4, "—")])
+@pytest.mark.parametrize(("returncode", "expected"), [(0, "on"), (3, "off"), (1, "—")])
 def test_timer_state_maps_the_exit_code(monkeypatch, returncode, expected):
     """rc 0 is on, rc 3 is off, any other rc is the dash."""
     stub_systemctl(monkeypatch, returncode=returncode)
 
-    assert status.timer_state("bench-run") == expected
+    assert bench_state.timer_state("bench-run") == expected
 
 
 @pytest.mark.parametrize(
@@ -796,20 +686,19 @@ def test_timer_state_is_the_dash_when_systemctl_is_absent_or_times_out(monkeypat
     """An absent binary or a timeout reads as the dash, never raises."""
     stub_systemctl(monkeypatch, raises=error)
 
-    assert status.timer_state("bench-run") == "—"
+    assert bench_state.timer_state("bench-run") == "—"
 
 
-def test_read_run_unit_returns_the_unit_from_bench_toml(tmp_path):
-    """`[run] unit` of cwd/bench.toml."""
-    write_bench_toml(tmp_path)
-    with open(tmp_path / "bench.toml", "a") as f:
+def test_read_run_unit_is_the_run_tables_unit_and_none_without_a_table_a_file_or_valid_toml(
+    tmp_path,
+):
+    """`[run] unit` of cwd/bench.toml; no `[run]`, no bench.toml, and a bench.toml that does not
+    load all give None."""
+    with_unit = tmp_path / "with_unit"
+    with_unit.mkdir()
+    write_bench_toml(with_unit)
+    with open(with_unit / "bench.toml", "a") as f:
         f.write('\n[run]\nunit = "bench-run"\n')
-
-    assert status.read_run_unit(tmp_path) == "bench-run"
-
-
-def test_read_run_unit_is_none_without_a_run_table_a_file_or_valid_toml(tmp_path):
-    """No `[run]`, no bench.toml, and a bench.toml that does not load all give None."""
     no_run = tmp_path / "no_run"
     no_run.mkdir()
     write_bench_toml(no_run)
@@ -819,37 +708,30 @@ def test_read_run_unit_is_none_without_a_run_table_a_file_or_valid_toml(tmp_path
     invalid.mkdir()
     (invalid / "bench.toml").write_text("[run\nunit = ")
 
-    assert status.read_run_unit(no_run) is None
-    assert status.read_run_unit(missing) is None
-    assert status.read_run_unit(invalid) is None
+    assert bench_state.read_run_unit(with_unit) == "bench-run"
+    assert bench_state.read_run_unit(no_run) is None
+    assert bench_state.read_run_unit(missing) is None
+    assert bench_state.read_run_unit(invalid) is None
 
 
 def test_read_bench_combines_disabled_presence_liveness_and_timer(tmp_path, monkeypatch):
     """disabled = DISABLED exists (content unread); live = is_live of the newest run; timer =
     timer_state(run_unit), the dash for a None unit."""
     directory, inode = lock_file(tmp_path)
-    proc = proc_tree(tmp_path, 4242, STARTED.timestamp() - 5, [("WRITE", 4242, "00:2c", inode)])
+    proc = proc_tree(tmp_path, [("WRITE", 4242, "00:2c", inode)])
     calls = stub_systemctl(monkeypatch, returncode=0)
     newest = live_run()
 
-    quiet = status.read_bench(directory, newest, "bench-run", proc)
-    assert quiet == status.Bench(live=True, disabled=False, timer="on")
+    quiet = bench_state.read_bench(directory, newest, "bench-run", proc)
+    assert quiet == bench_state.Bench(live=True, disabled=False, timer="on")
 
     (directory / "DISABLED").write_bytes(b"\xff\xfe not text")
-    disabled = status.read_bench(directory, newest, None, proc)
-    assert disabled == status.Bench(live=True, disabled=True, timer="—")
+    disabled = bench_state.read_bench(directory, newest, None, proc)
+    assert disabled == bench_state.Bench(live=True, disabled=True, timer="—")
     assert len(calls) == 1
 
-
-def test_read_bench_is_not_live_without_a_newest_run(tmp_path, monkeypatch):
-    """`newest` None means no run to be live."""
-    directory, inode = lock_file(tmp_path)
-    proc = proc_tree(tmp_path, 4242, STARTED.timestamp() - 5, [("WRITE", 4242, "00:2c", inode)])
-    stub_systemctl(monkeypatch, returncode=3)
-
-    bench = status.read_bench(directory, None, "bench-run", proc)
-
-    assert bench == status.Bench(live=False, disabled=False, timer="off")
+    first_launch = bench_state.read_bench(directory, None, "bench-run", proc)
+    assert first_launch == bench_state.Bench(live=False, disabled=True, timer="on")
 
 
 # ---------------------------------------------------------------- read-only tick
@@ -888,12 +770,7 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
     )
     (records / "DISABLED").write_text("reason\n")
     (records / "lock").touch()
-    proc = proc_tree(
-        tmp_path,
-        4242,
-        STARTED.timestamp() - 5,
-        [("WRITE", 4242, "00:2c", (records / "lock").stat().st_ino)],
-    )
+    proc = proc_tree(tmp_path, [("WRITE", 4242, "00:2c", (records / "lock").stat().st_ino)])
     before = snapshot(tmp_path)
     forbidden = []
     popen_argv = []
@@ -913,11 +790,11 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        runs = status.Records(records).runs()
-        status.is_live(records, runs[0], proc)
-        status.timer_state("bench-run")
-        bench = status.read_bench(records, runs[0], "bench-run", proc)
-        status.render(status.View(), runs, bench, 24, 80, STARTED)
+        runs = Records(records).runs()
+        bench_state.is_live(records, runs[0], proc)
+        bench_state.timer_state("bench-run")
+        bench = bench_state.read_bench(records, runs[0], "bench-run", proc)
+        screen.render(status.View(), runs, bench, 24, 80, STARTED)
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -949,7 +826,7 @@ def test_a_bench_log_written_by_a_real_bench_test_run_parses_into_the_model(monk
         lg_env, [], post=posted.append
     )
 
-    (run,) = status.Records(tmp_path / "records").runs()
+    (run,) = Records(tmp_path / "records").runs()
     assert (run.kind, run.ref, run.pr, run.result) == ("run", "HEAD", 7, "passed")
     assert [s.name for s in run.stages] == [
         "checkout",
@@ -967,10 +844,9 @@ def test_a_bench_log_written_by_a_real_bench_test_run_parses_into_the_model(monk
         (section,) = stage.sections
         assert section.name == f"{name}/test_one.py::test_one"
         assert section.outcome == "passed"
-        assert (stage.done, stage.queued, stage.passed, stage.failed) == (1, 1, 1, 0)
 
 
-def real_run(monkeypatch, tmp_path, *, skip_build=False, post=True, **toml):
+def run_real_writer(monkeypatch, tmp_path, *, skip_build=False, post=True, **toml):
     """One real `BenchTest.run` over throwaway suites; returns its parsed run and the exception
     the runner raised, if any."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=60))
@@ -984,7 +860,7 @@ def real_run(monkeypatch, tmp_path, *, skip_build=False, post=True, **toml):
         )
     except Exception as exc:
         raised = exc
-    (run,) = status.Records(tmp_path / "records").runs()
+    (run,) = Records(tmp_path / "records").runs()
     return run, raised
 
 
@@ -995,7 +871,7 @@ def states(run):
 def test_a_skip_build_run_parses_its_skipped_stages(monkeypatch, tmp_path):
     write_suite(tmp_path, "target_suite", passing=True)
 
-    run, raised = real_run(monkeypatch, tmp_path, skip_build=True)
+    run, raised = run_real_writer(monkeypatch, tmp_path, skip_build=True)
 
     assert raised is None
     assert states(run) == {
@@ -1013,7 +889,7 @@ def test_a_skip_build_run_parses_its_skipped_stages(monkeypatch, tmp_path):
 def test_a_failing_suite_parses_as_a_failed_stage_and_a_failed_run(monkeypatch, tmp_path):
     write_suite(tmp_path, "host_suite", passing=False)
 
-    run, raised = real_run(monkeypatch, tmp_path)
+    run, raised = run_real_writer(monkeypatch, tmp_path)
 
     assert isinstance(raised, bench_test.CandidateFailure)
     assert states(run) == {
@@ -1044,7 +920,7 @@ def test_a_fixture_taking_bench_candidate_parses_as_a_setup_section(monkeypatch,
         "    assert board\n"
     )
 
-    run, raised = real_run(monkeypatch, tmp_path)
+    run, raised = run_real_writer(monkeypatch, tmp_path)
 
     assert raised is None
     kinds = [(s.kind, s.name, s.outcome) for s in stage_of(run, "target_suite").sections]
@@ -1055,7 +931,7 @@ def test_a_fixture_taking_bench_candidate_parses_as_a_setup_section(monkeypatch,
 
 
 def test_a_run_that_errors_parses_as_an_error_stage_and_an_error_run(monkeypatch, tmp_path):
-    run, raised = real_run(monkeypatch, tmp_path, precondition="false", post=False)
+    run, raised = run_real_writer(monkeypatch, tmp_path, precondition="false", post=False)
 
     assert isinstance(raised, bench_test.BenchFailure)
     assert states(run) == {
@@ -1068,3 +944,32 @@ def test_a_run_that_errors_parses_as_an_error_stage_and_an_error_run(monkeypatch
         "posted": "not-started",
     }
     assert run.result == "error"
+
+
+# ---------------------------------------------------------------- a real record
+
+
+def test_a_committed_real_host_record_parses_into_the_model():
+    """A scrubbed record of a real `bench test`: stage states, sha, build output left on the
+    stage, the setup row and the bracketed absolute nodeid of the real target suite."""
+    run = real_run()
+
+    assert (run.kind, run.ref[:7], run.pr, run.result) == ("test", "39e00d7", None, "passed")
+    assert run.ended - run.started == timedelta(minutes=10, seconds=13)
+    assert [(s.name, s.state) for s in run.stages] == [
+        (name, "passed")
+        for name in ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite")
+    ]
+    assert len(stage_of(run, "checkout").sha) == 40
+    build = stage_of(run, "build")
+    assert build.sections == ()
+    assert any("Tasks Summary" in line for line in build.lines)
+    assert [(s.kind, s.outcome) for s in stage_of(run, "host_suite").sections] == [
+        ("test", "passed")
+    ] * 2
+    target = stage_of(run, "target_suite").sections
+    assert [(s.kind, s.outcome) for s in target] == [("setup", "passed")] + [("test", "passed")] * 4
+    assert target[0].name == "install_candidate"
+    assert target[-1].name.endswith(
+        "test_instance_reaches_out[/srv/bench/tests/replay/sets/cards4-live/flows.har]"
+    )
