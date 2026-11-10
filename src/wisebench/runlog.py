@@ -183,6 +183,7 @@ class _StageBuilder:
     """Collects one stage's markers and lines while a log is read, then builds its `Stage`."""
 
     def __init__(self, name):
+        """An empty builder for the stage `name`."""
         self.name, self.state, self.sha = name, "not-started", None
         self.started = self.ended = None
         self.lines, self.queued, self.rows, self._emitted, self._seen, self._row = (

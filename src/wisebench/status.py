@@ -420,6 +420,7 @@ def _painter():
     if not (curses.has_colors() and curses.COLORS >= 256):
 
         def plain(style):
+            """Reverse video for the selection, tab, badge and box; bold stays bold."""
             reverse = curses.A_REVERSE if style & _REVERSED else curses.A_NORMAL
             return reverse | (curses.A_BOLD if "bold" in style else curses.A_NORMAL)
 
@@ -427,6 +428,7 @@ def _painter():
     pairs = {}
 
     def paint(style):
+        """The colour pair of the style's foreground and background, bold if it is bold."""
         colours = _colours(style)
         if colours not in pairs:
             pairs[colours] = len(pairs) + 1

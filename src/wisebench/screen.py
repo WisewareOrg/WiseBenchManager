@@ -212,6 +212,7 @@ class _Canvas:
     """A grid of (character, style) cells that text is clipped onto."""
 
     def __init__(self, rows, cols):
+        """A blank grid of `rows` by `cols` cells."""
         self.cols = cols
         self.cells = [[(" ", _NONE)] * cols for _ in range(rows)]
 

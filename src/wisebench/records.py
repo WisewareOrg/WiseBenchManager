@@ -45,6 +45,7 @@ class Records:
     """
 
     def __init__(self, directory):
+        """An empty cache over `directory`."""
         self.directory = Path(directory)
         self._cache = {}
 
