@@ -71,13 +71,16 @@ class BenchRun:
             )
             summary = os.path.relpath(self._result_dir, self.checkout)
 
-            try:
-                BenchTest(self.checkout, sha, None, kind="run", pr=pr).run(lg_env, [])
-            except CandidateFailure as exc:
-                check.post(sha, "failure", str(exc).splitlines()[0], summary)
-                return
+            def post(failure):
+                if failure is None:
+                    check.post(sha, "success", "PASS", summary)
+                else:
+                    check.post(sha, "failure", str(failure).splitlines()[0], summary)
 
-            check.post(sha, "success", "PASS", summary)
+            try:
+                BenchTest(self.checkout, sha, None, kind="run", pr=pr).run(lg_env, [], post=post)
+            except CandidateFailure:
+                return
         except Exception as exc:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""

@@ -54,7 +54,7 @@ class BenchTest:
         self.kind = kind
         self.pr = pr
 
-    def run(self, lg_env, pytest_args):
+    def run(self, lg_env, pytest_args, post=None):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
 
         Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`,
@@ -67,6 +67,10 @@ class BenchTest:
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`).
             pytest_args (list[str]): Arguments after `--`, passed to the target suite only.
+            post (Callable[[CandidateFailure | None], None] | None): Called in a `posted` stage
+                when the run passes (with `None`) or a `CandidateFailure` ends it (with that
+                failure), before the `run passed|failed` line; the failure is then re-raised.
+                None runs no `posted` stage. A `post` that raises ends the run as `run error`.
 
         Raises:
             BenchFailure: A precondition hook faulted, or pytest itself faulted, including a
@@ -114,12 +118,30 @@ class BenchTest:
             with self._stage(log, "target_suite"):
                 self._run_suite("target_suite", config.target_suite, env, target_args, log)
         except BaseException as exc:
+            if post is not None and isinstance(exc, CandidateFailure):
+                self._post(log, post, exc)
             self._mark(log, f"run {'failed' if isinstance(exc, CandidateFailure) else 'error'}")
             raise
         else:
+            if post is not None:
+                self._post(log, post, None)
             self._mark(log, "run passed")
         finally:
             log.close()
+
+    def _post(self, log, post, failure):
+        """Call `post(failure)` inside the `posted` stage.
+
+        Raises:
+            BaseException: Whatever `post` raised, after the stage's `error` line and a
+                `run error` line.
+        """
+        try:
+            with self._stage(log, "posted"):
+                post(failure)
+        except BaseException:
+            self._mark(log, "run error")
+            raise
 
     def _open_log(self, result_dir):
         """Create `result_dir/<stamp>/bench.log`, retrying with `-2`, `-3` on a collision.
