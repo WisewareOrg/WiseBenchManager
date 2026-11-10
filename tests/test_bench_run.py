@@ -196,8 +196,8 @@ def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(
 def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(
     made, bench_test_class, monkeypatch, tmp_path
 ):
-    """run posts failure on a candidate failure, without raising."""
-    _stub_subprocess(monkeypatch)
+    """run posts failure on a candidate failure, without raising or disabling the timer."""
+    calls = _stub_subprocess(monkeypatch)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = bench_test.CandidateFailure(
         "target_suite failed\nextra detail"
@@ -206,6 +206,7 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(
     run.run("env.yaml")
     _post_of(bench_test_class)(bench_test.CandidateFailure("target_suite failed\nextra detail"))
 
+    assert calls == [["git", "fetch", "origin", "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"]]
     assert _FakeCheck.posts == [("cafef00d", "failure", "target_suite failed", "records")]
 
 
@@ -354,6 +355,25 @@ def test_run_prints_a_failing_systemctl_call_but_still_reraises(
     assert "systemctl failed" in capsys.readouterr().err
 
 
+def _record_systemctl(monkeypatch):
+    """Fake only `systemctl` calls (recorded, succeeding); every other command really runs.
+
+    Returns:
+        list: Each `systemctl` command BenchRun issued, in order.
+    """
+    real_run = subprocess.run
+    calls = []
+
+    def run(command, **kwargs):
+        if command[0] == "systemctl":
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(bench_run.subprocess, "run", run)
+    return calls
+
+
 def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_run_failed(
     made, monkeypatch, tmp_path
 ):
@@ -369,6 +389,7 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
     _FakeQueue.result = ("HEAD", sha, 14)
+    systemctl_calls = _record_systemctl(monkeypatch)
     seen = []
     monkeypatch.setattr(
         _FakeCheck,
@@ -380,6 +401,7 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
 
     _make_run(tmp_path).run(lg_env)
 
+    assert systemctl_calls == []
     assert len(seen) == 1
     conclusion, title, lines_at_post = seen[0]
     assert (conclusion, title) == ("failure", "target_suite failed")
