@@ -7,6 +7,7 @@ A style is a frozenset of style names; mapping names to terminal attributes is t
 
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import groupby
 
 from wisebench.bench_state import DASH
 
@@ -236,16 +237,10 @@ class _Canvas:
 
     def rows(self):
         """The grid as rows of (text, style) segments, adjacent equal styles merged."""
-        out = []
-        for cells in self.cells:
-            segments = []
-            for char, style in cells:
-                if segments and segments[-1][1] == style:
-                    segments[-1] = (segments[-1][0] + char, style)
-                else:
-                    segments.append((char, style))
-            out.append(segments)
-        return out
+        return [
+            [("".join(c for c, _ in run), style) for style, run in groupby(cells, lambda c: c[1])]
+            for cells in self.cells
+        ]
 
 
 def _text(line):
@@ -621,22 +616,17 @@ def _history(canvas, view, runs, bench, now, lay):
         else:
             took = _minutes(run.ended - run.started)
         failing = next((s for s in run.stages if s.state in ("failed", "error")), None)
-        trailing = []
-        if failing:
-            trailing.append((_display_name(failing.name), _GREY))
-        if run.kind == "test":
-            trailing.append(("by hand", frozenset({"blue"})))
+        trailing = [(_display_name(failing.name), _GREY)] if failing else []
+        trailing += [("by hand", frozenset({"blue"}))] if run.kind == "test" else []
         parts = [
             (run.record.ljust(width), _NONE),
             (what[:20].ljust(22), _NONE),
             (_sha7(run).ljust(9), _NONE),
             (word.ljust(13), frozenset({tone})),
-            (f"{took:>4}", _NONE),
-            ("  ", _NONE),
+            (f"{took:>4}  ", _NONE),
         ]
         for index, part in enumerate(trailing):
-            parts += [("  ", _NONE)] if index else []
-            parts.append(part)
+            parts += [("  ", _NONE)] * bool(index) + [part]
         canvas.put_all(row, 0, parts)
         if run.record == view.history_record:
             canvas.tint(row, 0, canvas.cols, _SELECTION)

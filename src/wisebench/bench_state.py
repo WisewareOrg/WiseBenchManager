@@ -1,7 +1,4 @@
-"""Bench state: whether a run is executing, whether the bench is disabled, the timer's state.
-
-Reads files and asks `systemctl`; takes no lock and writes nothing.
-"""
+"""Bench state: whether a run is executing, whether the bench is disabled, the timer's state."""
 
 import os
 import subprocess
@@ -72,11 +69,8 @@ def timer_state(run_unit):
         str: "on" (exit 0), "off" (exit 3), or "—" for any other exit or a failed call.
     """
     try:
-        done = subprocess.run(
-            ["systemctl", "--user", "is-active", f"{run_unit}.timer"],
-            capture_output=True,
-            timeout=1,
-        )
+        argv = ["systemctl", "--user", "is-active", f"{run_unit}.timer"]
+        done = subprocess.run(argv, capture_output=True, timeout=1)
     except (OSError, subprocess.SubprocessError):
         return DASH
     return {0: "on", 3: "off"}.get(done.returncode, DASH)

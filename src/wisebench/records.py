@@ -1,7 +1,4 @@
-"""Records: the records directory read into runs, re-parsed only when a file changed.
-
-Reads files and writes none.
-"""
+"""Records: the records directory read into runs, re-parsed only when a file changed."""
 
 import json
 import os
@@ -10,10 +7,17 @@ from pathlib import Path
 
 from wisebench.runlog import parse_run
 
-_RECORD_NAME_RE = re.compile(r"^(?P<stamp>.+?)(?:-(?P<suffix>\d+))?$")
+_NAME = re.compile(r"^(?P<stamp>.+?)(?:-(?P<suffix>\d+))?$")
+_SUITES = ("host_suite", "target_suite")
 
 
-def _signature(path):
+def _order(name):
+    """Sort key putting `<stamp>-10` after `<stamp>-2`; the bare stamp is suffix 1."""
+    match = _NAME.match(name)
+    return match["stamp"], int(match["suffix"] or 1)
+
+
+def _stat(path):
     """(mtime_ns, size) of `path`, or None when it does not exist."""
     try:
         info = path.stat()
@@ -22,22 +26,15 @@ def _signature(path):
     return info.st_mtime_ns, info.st_size
 
 
-def _read_reports(path):
+def _reports(path):
     """The JSON lines of a `report.jsonl`; a line that does not parse (a cut one) is skipped."""
-    reports = []
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                reports.append(json.loads(line))
-            except ValueError:
-                continue
-    return reports
-
-
-def _record_order(name):
-    """Sort key putting `<stamp>-10` after `<stamp>-2` and the bare stamp as suffix 1."""
-    match = _RECORD_NAME_RE.match(name)
-    return match["stamp"], int(match["suffix"] or 1)
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
 
 
 class Records:
@@ -60,44 +57,37 @@ class Records:
             list[Run]: The runs, newest first.
         """
         try:
-            names = [entry.name for entry in os.scandir(self.directory) if entry.is_dir()]
+            names = [e.name for e in os.scandir(self.directory) if e.is_dir()]
         except OSError:
             names = []
-        runs = []
-        seen = set()
-        for name in sorted(names, key=_record_order, reverse=True):
+        runs, seen = [], set()
+        for name in sorted(names, key=_order, reverse=True):
             try:
                 run = self._run(name)
             except OSError:
                 continue
-            if run is None:
-                continue
-            seen.add(name)
-            if run.started is not None:
-                runs.append(run)
-        for name in set(self._cache) - seen:
-            del self._cache[name]
+            if run is not None:
+                seen.add(name)
+                if run.started is not None:
+                    runs.append(run)
+        self._cache = {name: self._cache[name] for name in seen}
         return runs
 
     def _run(self, name):
-        """The run in folder `name`, from the cache when no file changed; None without a
-        `bench.log`."""
+        """The run in folder `name` from the cache or a parse; None without a `bench.log`."""
         folder = self.directory / name
-        log = folder / "bench.log"
-        reports = {
-            suite: folder / suite / "report.jsonl" for suite in ("host_suite", "target_suite")
-        }
-        signature = tuple(_signature(path) for path in (log, *reports.values()))
+        paths = [folder / "bench.log", *(folder / suite / "report.jsonl" for suite in _SUITES)]
+        signature = tuple(_stat(path) for path in paths)
         if signature[0] is None:
             return None
-        cached = self._cache.get(name)
-        if cached is not None and cached[0] == signature:
-            return cached[1]
-        text = log.read_bytes().decode("utf-8", errors="replace")
-        run = parse_run(
-            name,
-            text,
-            {suite: _read_reports(path) for suite, path in reports.items() if path.exists()},
-        )
+        if name in self._cache and self._cache[name][0] == signature:
+            return self._cache[name][1]
+        text = paths[0].read_bytes().decode("utf-8", errors="replace")
+        reports = {
+            suite: _reports(path)
+            for suite, path in zip(_SUITES, paths[1:], strict=True)
+            if path.exists()
+        }
+        run = parse_run(name, text, reports)
         self._cache[name] = (signature, run)
         return run
