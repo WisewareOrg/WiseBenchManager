@@ -187,7 +187,7 @@ class _StageBuilder:
         self.name = name
         self.state = "not-started"
         self.started = self.ended = self.sha = self._row = None
-        self.lines, self.queued, self.rows = [], [], []
+        self.lines, self._queued, self.rows = [], [], []
         self._emitted, self._seen = set(), {}
 
     def start(self, at):
@@ -207,6 +207,14 @@ class _StageBuilder:
             sha (str | None): The commit a passed `checkout` resolved.
         """
         self.state, self.ended, self.sha = result, at, sha
+
+    def queue(self, name):
+        """Record a `test queued` marker.
+
+        Args:
+            name (str): The pytest node id.
+        """
+        self._queued.append(name)
 
     def add_line(self, line):
         """Append an output line to the open row, or to the stage's own before any row opens.
@@ -238,7 +246,7 @@ class _StageBuilder:
             name (str): The pytest node id.
             at (datetime): The marker's time.
         """
-        for earlier in self.queued[: self.queued.index(name)] if name in self.queued else ():
+        for earlier in self._queued[: self._queued.index(name)] if name in self._queued else ():
             self._emit_unstarted(earlier)
         self._emitted.add(name)
         self.open_row("test", name, at)
@@ -262,7 +270,7 @@ class _StageBuilder:
         Returns:
             Stage: The stage.
         """
-        for name in self.queued:
+        for name in self._queued:
             self._emit_unstarted(name)
         by_node = {}
         for report in reports:
@@ -313,6 +321,13 @@ def parse_run(record, text, reports):
     """
     kind = ref = pr = started = result = ended = current = None
     builders = {}
+
+    def builder(name):
+        """The builder of stage `name`, created when first met."""
+        if name not in builders:
+            builders[name] = _StageBuilder(name)
+        return builders[name]
+
     lines = text[: text.rindex("\n")].split("\n") if "\n" in text else []
     for line in (line.removesuffix("\r") for line in lines):
         marker = _MARKER.match(line)
@@ -327,14 +342,14 @@ def parse_run(record, text, reports):
         elif found := _RUN_RESULT.match(event):
             result, ended = found["result"], at
         elif (found := _STAGE_STARTED.match(event)) and found["name"] in (*STAGES, POSTED):
-            current = builders.setdefault(found["name"], _StageBuilder(found["name"]))
+            current = builder(found["name"])
             current.start(at)
         elif (found := _STAGE_RESULT.match(event)) and found["name"] in (*STAGES, POSTED):
-            stage = builders.setdefault(found["name"], _StageBuilder(found["name"]))
+            stage = builder(found["name"])
             stage.finish(found["result"], at, found["sha"])
             current = None if current is stage else current
         elif current and (found := _QUEUED.match(event)):
-            current.queued.append(found["name"])
+            current.queue(found["name"])
         elif current and (found := _SETUP_STARTED.match(event)):
             current.open_row("setup", found["name"], at)
         elif current and (found := _TEST_STARTED.match(event)):
@@ -342,8 +357,5 @@ def parse_run(record, text, reports):
         elif current:
             current.add_line(line)
     names = (*STAGES, POSTED) if kind == "run" else STAGES
-    stages = tuple(
-        builders.setdefault(name, _StageBuilder(name)).build(reports.get(name, []))
-        for name in names
-    )
+    stages = tuple(builder(name).build(reports.get(name, [])) for name in names)
     return Run(record, kind, ref, pr, started, result, ended, stages)

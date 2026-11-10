@@ -7,17 +7,17 @@ from pathlib import Path
 
 from wisebench.runlog import parse_run
 
-_NAME = re.compile(r"^(?P<stamp>.+?)(?:-(?P<suffix>\d+))?$")
+_NAME_RE = re.compile(r"^(?P<stamp>.+?)(?:-(?P<suffix>\d+))?$")
 _SUITES = ("host_suite", "target_suite")
 
 
 def _order(name):
     """Sort key putting `<stamp>-10` after `<stamp>-2`; the bare stamp is suffix 1."""
-    match = _NAME.match(name)
+    match = _NAME_RE.match(name)
     return match["stamp"], int(match["suffix"] or 1)
 
 
-def _stat(path):
+def _mtime_and_size(path):
     """(mtime_ns, size) of `path`, or None when it does not exist."""
     try:
         info = path.stat()
@@ -78,7 +78,7 @@ class Records:
         """The run in folder `name` from the cache or a parse; None without a `bench.log`."""
         folder = self.directory / name
         paths = [folder / "bench.log", *(folder / suite / "report.jsonl" for suite in _SUITES)]
-        signature = tuple(_stat(path) for path in paths)
+        signature = tuple(_mtime_and_size(path) for path in paths)
         if signature[0] is None:
             return None
         if name in self._cache and self._cache[name][0] == signature:
