@@ -186,6 +186,7 @@ def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(made, monk
     assert _FakeBenchTest.instances[0].ref == "cafef00d"
     assert _FakeBenchTest.instances[0].set_name is None
     assert _FakeBenchTest.instances[0].kind == "run"
+    assert _FakeBenchTest.instances[0].pr == 14
     assert _FakeBenchTest.instances[0].run_calls == [("env.yaml", [])]
     assert _FakeCheck.posts == [("cafef00d", "success", "PASS", "records")]
 

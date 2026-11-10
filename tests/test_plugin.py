@@ -2,11 +2,12 @@
 fixture."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from wisebench.plugin import SETUP_ERROR_EXIT_STATUS
+from wisebench.plugin import SETUP_ERROR_EXIT_STATUS, write_mark
 
 
 def _run_one_passing_test(pytester, monkeypatch):
@@ -135,3 +136,24 @@ def test_record_dir_receives_the_records_directly_with_no_stamp_folder(pytester,
     result.assert_outcomes(passed=1)
     assert sorted(p.name for p in record_dir.iterdir()) == ["report.jsonl", "run.json"]
     assert not Path("records").exists()
+
+
+def test_write_mark_starts_on_a_fresh_line_only_when_the_file_does_not_end_in_one(tmp_path):
+    """write_mark prepends a newline to a file not ending in one, and adds none to one that does."""
+    unterminated = tmp_path / "unterminated.log"
+    unterminated.write_bytes(b"partial output")
+    terminated = tmp_path / "terminated.log"
+    terminated.write_bytes(b"whole line\n")
+    for path in (unterminated, terminated):
+        fd = os.open(path, os.O_RDWR | os.O_APPEND)
+        try:
+            write_mark(fd, "event")
+        finally:
+            os.close(fd)
+
+    unterminated_lines = unterminated.read_text().split("\n")
+    assert unterminated_lines[0] == "partial output"
+    assert unterminated_lines[1].startswith("bench: ")
+    terminated_lines = terminated.read_text().split("\n")
+    assert terminated_lines[0] == "whole line"
+    assert terminated_lines[1].startswith("bench: ")

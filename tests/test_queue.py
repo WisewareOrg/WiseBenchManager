@@ -57,7 +57,6 @@ def test_head_returns_the_ref_sha_and_pr_number_of_the_one_match(monkeypatch, tm
     assert ref == "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
     assert sha == "deadbeef"
     assert pr == 14
-    assert isinstance(pr, int)
 
 
 def test_head_fetches_origin_before_reading_the_tip_or_the_queue(monkeypatch, tmp_path):

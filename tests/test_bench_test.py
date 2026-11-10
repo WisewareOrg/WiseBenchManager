@@ -538,3 +538,27 @@ def test_a_suite_writes_queued_setup_and_started_markers_around_its_live_output(
     first_queued = next(i for i, line in enumerate(section) if " test queued " in line)
     setup_at = next(i for i, line in enumerate(section) if " setup " in line)
     assert first_queued < setup_at < started_at
+
+
+def test_a_post_that_raises_ends_the_log_with_posted_error_then_run_error_and_propagates(
+    monkeypatch, tmp_path
+):
+    """A raising `post` logs `stage posted error`, then `run error` last, and propagates."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=True)
+    lg_env = _write_lg_env(tmp_path)
+
+    def post(outcome):
+        raise OSError("github unreachable")
+
+    with pytest.raises(OSError, match="github unreachable"):
+        bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [], post=post)
+
+    lines = _marker_lines(tmp_path)
+    assert lines[-3] == "stage posted started"
+    assert lines[-2].startswith("stage posted error")
+    assert lines[-1] == "run error"
