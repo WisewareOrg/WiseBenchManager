@@ -318,23 +318,23 @@ def test_the_stage_list_is_34_wide_with_its_divider_at_column_35_and_the_pane_at
     assert grid.find("marker")[1] == 37
 
 
-def past_build():
-    """A run whose build passed, with bitbake progress and two output lines."""
+def past_build(lines=2):
+    """A run whose build passed, with bitbake progress and `lines` output lines."""
     tasks = tuple(runlog.Task(f"r{i}", "do_compile", t(3, 11, i)) for i in range(3))
     progress = runlog.BuildProgress(1204, 3311, tasks)
-    done = stage(
-        "build", "passed", t(3, 10), t(3, 40), lines=["NOTE: one", "NOTE: two"], progress=progress
-    )
+    output = [f"NOTE: line {i}" for i in range(lines)]
+    done = stage("build", "passed", t(3, 10), t(3, 40), lines=output, progress=progress)
     return run(build=done)
 
 
-def test_a_past_builds_drawn_head_rows_are_the_frames_head_height():
-    grid, frame = drawn([past_build()], IDLE, stage="build")
-    top = frame.layout.pane_top
-    head_rows = 0
-    while grid.text(top + head_rows)[37:].strip():
-        head_rows += 1
-    assert head_rows == frame.head_height
+def test_a_past_builds_label_and_log_window_start_below_its_head_and_fill_the_room():
+    grid, frame = drawn([past_build(lines=80)], IDLE, stage="build")
+    top, room = frame.layout.pane_top, frame.room
+    first, last = frame.rows[frame.scroll].text, frame.rows[frame.scroll + room - 1].text
+
+    assert grid.find("this stage's output")[0] == top + frame.head_height - 1
+    assert grid.find(re.escape(first))[0] == top + frame.head_height
+    assert grid.find(re.escape(last))[0] == top + frame.head_height + room - 1
 
 
 def test_a_passed_past_builds_head_is_not_drawn_amber():
