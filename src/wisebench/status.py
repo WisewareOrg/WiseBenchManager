@@ -185,7 +185,7 @@ class View:
         rows = log_rows(stage, self.folds)
         if not rows:
             return None
-        lay = layout(size[0], size[1], False)
+        lay = layout(size[0], size[1], self.prompt is not None)
         return stage, rows, pane_room(lay, stage, bench.live and shown is runs[0])
 
     def _reveal(self, rows, room):
@@ -206,13 +206,11 @@ class View:
         lines arrive, until a log movement key. The `G` follow carries to the next stage only
         when `carry` is set.
         """
-        self.stage, self._opened, self.cursor, self.log_scroll, self._pin = (
-            name,
-            True,
-            None,
-            0,
-            False,
-        )
+        self.stage = name
+        self._opened = True
+        self.cursor = None
+        self.log_scroll = 0
+        self._pin = False
         if not carry:
             self._follow_log = False
         pane = self._pane(runs, bench, size)
@@ -268,7 +266,7 @@ class View:
         """Scroll History just far enough that the selected row is in view."""
         records = [r.record for r in runs]
         at = records.index(self.history_record) if self.history_record in records else 0
-        room = layout(size[0], size[1], False).history_room
+        room = layout(size[0], size[1], self.prompt is not None).history_room
         scroll = min(self.history_scroll, max(0, len(records) - room))
         if at < scroll:
             scroll = at
@@ -287,7 +285,7 @@ class View:
 
     def _move(self, kind, runs, bench, size):
         """Move the History selection, the stage selection or the log cursor, by the focus."""
-        lay = layout(size[0], size[1], False)
+        lay = layout(size[0], size[1], self.prompt is not None)
         if self.tab == "history":
             records = [r.record for r in runs]
             if records:
