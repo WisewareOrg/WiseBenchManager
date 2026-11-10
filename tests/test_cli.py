@@ -295,3 +295,50 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
 
     with Lock(tmp_path / "records"):
         pass
+
+
+# ---------------------------------------------------------------- bench status
+
+
+@pytest.fixture
+def watched(monkeypatch, tmp_path):
+    """Record `status.watch`'s argument, return 7 from it, and unset `LG_ENV`."""
+    from wisebench import status
+
+    calls = []
+
+    def fake(directory):
+        calls.append(directory)
+        return 7
+
+    monkeypatch.delenv("LG_ENV", raising=False)
+    monkeypatch.delenv(cli.BENCH_RESULT_DIR, raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(status, "watch", fake, raising=False)
+    return calls
+
+
+def test_main_status_watch_reaches_the_watch_loop_without_lg_env(watched, tmp_path):
+    """`bench status --watch` runs before the `LG_ENV` check and returns the loop's code."""
+    assert cli.main(["status", "--watch"]) == 7
+    assert watched == [tmp_path / cli.DEFAULT_RESULT_DIR]
+
+
+def test_main_status_watch_resolves_the_records_directory_from_the_environment(
+    watched, monkeypatch, tmp_path
+):
+    """The records directory is resolved as `bench test` and `bench run` resolve it."""
+    monkeypatch.setenv(cli.BENCH_RESULT_DIR, "elsewhere")
+    cli.main(["status", "--watch"])
+    assert watched == [tmp_path / "elsewhere"]
+
+
+def test_main_status_without_watch_exits_2_asking_for_it(watched, capsys):
+    """`bench status` alone is an argument error that names `--watch`."""
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["status"])
+    assert raised.value.code == 2
+    err = capsys.readouterr().err
+    assert "--watch" in err
+    assert "invalid choice" not in err
+    assert watched == []
