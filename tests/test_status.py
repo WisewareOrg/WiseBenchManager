@@ -968,3 +968,103 @@ def test_a_bench_log_written_by_a_real_bench_test_run_parses_into_the_model(monk
         assert section.name == f"{name}/test_one.py::test_one"
         assert section.outcome == "passed"
         assert (stage.done, stage.queued, stage.passed, stage.failed) == (1, 1, 1, 0)
+
+
+def real_run(monkeypatch, tmp_path, *, skip_build=False, post=True, **toml):
+    """One real `BenchTest.run` over throwaway suites; returns its parsed run and the exception
+    the runner raised, if any."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=60))
+    monkeypatch.chdir(tmp_path)
+    repo_with_one_commit(tmp_path)
+    write_bench_toml(tmp_path, **toml)
+    raised = None
+    try:
+        bench_test.BenchTest(tmp_path, "HEAD", None, skip_build=skip_build, kind="run", pr=7).run(
+            write_lg_env(tmp_path), [], post=(lambda failure: None) if post else None
+        )
+    except Exception as exc:
+        raised = exc
+    (run,) = status.Records(tmp_path / "records").runs()
+    return run, raised
+
+
+def states(run):
+    return {s.name: s.state for s in run.stages}
+
+
+def test_a_skip_build_run_parses_its_skipped_stages(monkeypatch, tmp_path):
+    write_suite(tmp_path, "target_suite", passing=True)
+
+    run, raised = real_run(monkeypatch, tmp_path, skip_build=True)
+
+    assert raised is None
+    assert states(run) == {
+        "checkout": "passed",
+        "precondition": "passed",
+        "build": "skipped",
+        "bundle": "skipped",
+        "host_suite": "skipped",
+        "target_suite": "passed",
+        "posted": "passed",
+    }
+    assert run.result == "passed"
+
+
+def test_a_failing_suite_parses_as_a_failed_stage_and_a_failed_run(monkeypatch, tmp_path):
+    write_suite(tmp_path, "host_suite", passing=False)
+
+    run, raised = real_run(monkeypatch, tmp_path)
+
+    assert isinstance(raised, bench_test.CandidateFailure)
+    assert states(run) == {
+        "checkout": "passed",
+        "precondition": "passed",
+        "build": "passed",
+        "bundle": "passed",
+        "host_suite": "failed",
+        "target_suite": "not-started",
+        "posted": "passed",
+    }
+    assert run.result == "failed"
+    (section,) = stage_of(run, "host_suite").sections
+    assert (section.name, section.outcome) == ("host_suite/test_one.py::test_one", "failed")
+    assert section.failure[0].endswith("assert False")
+
+
+def test_a_fixture_taking_bench_candidate_parses_as_a_setup_section(monkeypatch, tmp_path):
+    write_suite(tmp_path, "host_suite", passing=True)
+    suite = tmp_path / "target_suite"
+    suite.mkdir()
+    (suite / "test_one.py").write_text(
+        "import pytest\n\n\n"
+        "@pytest.fixture\n"
+        "def board(bench_candidate):\n"
+        "    return bench_candidate\n\n\n"
+        "def test_one(board):\n"
+        "    assert board\n"
+    )
+
+    run, raised = real_run(monkeypatch, tmp_path)
+
+    assert raised is None
+    kinds = [(s.kind, s.name, s.outcome) for s in stage_of(run, "target_suite").sections]
+    assert kinds == [
+        ("setup", "board", "passed"),
+        ("test", "target_suite/test_one.py::test_one", "passed"),
+    ]
+
+
+def test_a_run_that_errors_parses_as_an_error_stage_and_an_error_run(monkeypatch, tmp_path):
+    run, raised = real_run(monkeypatch, tmp_path, precondition="false", post=False)
+
+    assert isinstance(raised, bench_test.BenchFailure)
+    assert states(run) == {
+        "checkout": "passed",
+        "precondition": "error",
+        "build": "not-started",
+        "bundle": "not-started",
+        "host_suite": "not-started",
+        "target_suite": "not-started",
+        "posted": "not-started",
+    }
+    assert run.result == "error"

@@ -996,3 +996,97 @@ def test_a_plain_pane_follows_new_lines_until_a_log_movement_key_is_pressed():
     more = [build_lines(50)]
     view.tick(more, LIVE, SIZE)
     assert shown(view, more, LIVE) == "line_43"
+
+
+# ---------------------------------------------------------------- real-shaped logs
+
+
+def line(event, minute, second=0):
+    return f"bench: 2026-11-10T03:{minute:02d}:{second:02d}+00:00 {event}\n"
+
+
+def report(nodeid, when, outcome, longrepr=None):
+    out = {"$report_type": "TestReport", "nodeid": nodeid, "when": when, "outcome": outcome}
+    if longrepr is not None:
+        out["longrepr"] = longrepr
+    return out
+
+
+def finished(nodeid, outcome="passed", longrepr=None):
+    return [
+        report(nodeid, "setup", "passed"),
+        report(nodeid, "call", outcome, longrepr),
+        report(nodeid, "teardown", "passed"),
+    ]
+
+
+def build_prefix(*, build_open=False):
+    """`run started` through the build stage, as `BenchTest.run` writes it, with kas output."""
+    out = line("run started kind=run ref=main pr=7", 0)
+    for minute, name in enumerate(("checkout", "precondition"), 1):
+        out += line(f"stage {name} started", minute) + line(f"stage {name} passed", minute, 30)
+    out += line("stage build started", 3) + "".join(f"NOTE: build step {i}\n" for i in range(40))
+    if not build_open:
+        out += line("stage build passed", 20)
+        out += line("stage bundle started", 21) + line("stage bundle passed", 22)
+    return out
+
+
+def suite_stage(name, tests, started_at, running=None, failed=None):
+    """A suite stage whose tests are queued, the ones before `running` finished."""
+    out = line(f"stage {name} started", started_at)
+    out += "".join(line(f"test queued {name}.py::{test}", started_at, 1) for test in tests)
+    reports = []
+    for position, test in enumerate(tests):
+        nodeid = f"{name}.py::{test}"
+        if running is not None and position > running:
+            break
+        out += line(f"test started {nodeid}", started_at, 2 + position)
+        out += f"output of {test}\n"
+        if position == running:
+            reports.append(report(nodeid, "setup", "passed"))
+            break
+        bad = position == failed
+        reports += finished(nodeid, "failed" if bad else "passed", FAILURE if bad else None)
+    return out, reports
+
+
+FAILURE = {
+    "reprcrash": {"path": "/w/t.py", "lineno": 12, "message": "assert 1 == 2"},
+    "reprtraceback": {
+        "reprentries": [{"type": "ReprEntry", "data": {"lines": [">   assert 1 == 2"]}}]
+    },
+    "sections": [],
+}
+TESTS = tuple(f"test_{i:02d}" for i in range(30))
+
+
+def test_following_from_the_build_into_a_long_suite_puts_the_running_test_on_screen():
+    view = status.View()
+    building = status.parse_run(STAMP, build_prefix(build_open=True), {})
+    view.tick([building], LIVE, SIZE)
+    assert view.stage == "build"
+
+    text, reports = suite_stage("host_suite", TESTS, 23, running=1)
+    host = status.parse_run(STAMP, build_prefix() + text, {"host_suite": reports})
+    view.tick([host], LIVE, SIZE)
+
+    assert view.stage == "host_suite"
+    assert "test_01" in shown(view, [host], LIVE)
+
+
+def test_history_enter_on_a_failed_past_run_puts_its_failed_test_on_screen():
+    building = status.parse_run(STAMP, build_prefix(build_open=True), {})
+    text, reports = suite_stage("host_suite", TESTS[:25], 23, failed=3)
+    text += line("stage host_suite failed reason=host_suite failed", 40) + line("run failed", 41)
+    past = status.parse_run(OLDER, build_prefix() + text, {"host_suite": reports})
+    runs = [building, past]
+    view = status.View()
+    view.tick(runs, LIVE, SIZE)
+    assert view.stage == "build"
+
+    keys(view, runs, "3", "j", ENTER, bench=LIVE)
+
+    assert view.tab == "run"
+    assert OLDER in tab_line(view, runs, LIVE)
+    assert "test_03" in shown(view, runs, LIVE)
