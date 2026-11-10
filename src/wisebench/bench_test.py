@@ -82,7 +82,7 @@ class BenchTest:
                 run ends as `run error`), propagated unwrapped.
         """
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
-        log = self._open_log(result_dir)
+        run_dir, log = self._open_log(result_dir)
         outcome = "error"
         try:
             try:
@@ -115,7 +115,7 @@ class BenchTest:
                         self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle", log)
                     stage = "host_suite"
                     with self._stage(log, stage):
-                        self._run_suite(stage, config.host_suite, env, [], log)
+                        self._run_suite(stage, run_dir, config.host_suite, env, [], log)
                     candidate_args = [BENCH_CANDIDATE_OPTION, commit]
                 else:
                     for name in ("build", "bundle", "host_suite"):
@@ -124,7 +124,7 @@ class BenchTest:
                 target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
                 stage = "target_suite"
                 with self._stage(log, stage):
-                    self._run_suite(stage, config.target_suite, env, target_args, log)
+                    self._run_suite(stage, run_dir, config.target_suite, env, target_args, log)
             except CandidateFailure as failure:
                 if post is not None:
                     self._post(log, post, failure)
@@ -145,10 +145,8 @@ class BenchTest:
     def _open_log(self, result_dir):
         """Create `result_dir/<stamp>/bench.log`, retrying with `-2`, `-3` on a collision.
 
-        Sets `self._run_dir` to the run's folder.
-
         Returns:
-            BinaryIO: The log, opened append-binary.
+            tuple[pathlib.Path, BinaryIO]: The run's folder and its log, opened append-binary.
         """
         stamp = datetime.now(UTC).strftime(_TIMESTAMP)
         suffix = 1
@@ -159,8 +157,7 @@ class BenchTest:
                 break
             except FileExistsError:
                 suffix += 1
-        self._run_dir = run_dir
-        return open(run_dir / "bench.log", "ab+")
+        return run_dir, open(run_dir / "bench.log", "ab+")
 
     def _mark(self, log, text):
         """Append one `bench: <iso> <text>` line, a leading newline first if the log doesn't
@@ -255,7 +252,7 @@ class BenchTest:
         except subprocess.CalledProcessError as exc:
             raise failure_cls(f"{name} exited {exc.returncode}") from exc
 
-    def _run_suite(self, stage, suite, env, extra_args, log):
+    def _run_suite(self, stage, run_dir, suite, env, extra_args, log):
         """Run pytest on one suite directory, its output appended to `log`.
 
         The suite's records go in `<run folder>/<stage>/` (`BENCH_RECORD_DIR`).
@@ -263,6 +260,7 @@ class BenchTest:
 
         Args:
             stage (str): The stage's name, which names the suite's record folder.
+            run_dir (pathlib.Path): The run's folder; the suite's records go in `run_dir/<stage>/`.
             suite (str): The suite's path, relative to the checkout.
             env (dict[str, str]): The subprocess environment.
             extra_args (list[str]): Extra pytest arguments, after the fixed ones.
@@ -288,7 +286,7 @@ class BenchTest:
         suite_env = {
             **env,
             "PYTHONUNBUFFERED": "1",
-            BENCH_RECORD_DIR: str((self._run_dir / stage).resolve()),
+            BENCH_RECORD_DIR: str((run_dir / stage).resolve()),
         }
         result = subprocess.run(
             command, cwd=self.checkout, env=suite_env, stdout=log, stderr=subprocess.STDOUT
