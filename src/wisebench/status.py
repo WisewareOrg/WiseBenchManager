@@ -9,8 +9,9 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from wisebench.config import Config
@@ -609,31 +610,360 @@ def read_bench(directory, newest, run_unit, proc_root):
 
 @dataclass(kw_only=True)
 class View:
-    """What the screen shows: the data `render` reads besides the runs and the bench.
+    """What the screen shows and the keys that change it.
 
     Args:
         tab (str): "run", "history" or "help".
         record (str | None): The record shown in Run; None is the newest run.
         stage (str | None): The selected stage's name; None shows the run's summary.
-        cursor (object | None): The log cursor.
+        cursor (tuple | None): The log cursor: (section id or None, line within the section).
         folds (dict): Section id to True (open) or False (folded), overriding the derived state.
-        log_scroll (int): Index of the first shown row of a sectioned pane.
+        log_scroll (int): Index of the first shown row of the log pane.
         history_scroll (int): Index of the first shown History row.
         history_record (str | None): The selected History row's record.
         prompt (str | None): The command line's text when open.
         directory (str): The records directory as shown in footers.
+        focus (str): "stages" or "log", the pane the movement keys act on.
+        follow (bool): The selection rides the newest run's running stage.
     """
 
     tab: str = "run"
     record: str | None = None
     stage: str | None = None
-    cursor: object | None = None
+    cursor: tuple | None = None
     folds: dict = field(default_factory=dict)
     log_scroll: int = 0
     history_scroll: int = 0
     history_record: str | None = None
     prompt: str | None = None
     directory: str = DEFAULT_RESULT_DIR
+    focus: str = "stages"
+    follow: bool = True
+    _opened: bool = field(default=False, init=False, repr=False)
+    _was_live: bool = field(default=False, init=False, repr=False)
+    _tail: bool = field(default=False, init=False, repr=False)
+    _pending: str | None = field(default=None, init=False, repr=False)
+    _pattern: str | None = field(default=None, init=False, repr=False)
+    _origin: str = field(default="run", init=False, repr=False)
+
+    def key(self, key, runs, bench, size):
+        """Apply one key.
+
+        Args:
+            key (str | int): A character, or a curses key code.
+            runs (list[Run]): Every run, newest first.
+            bench (Bench): The bench's state.
+            size (tuple[int, int]): (rows, columns).
+
+        Returns:
+            bool: True to quit.
+        """
+        self._opened = True
+        if self.prompt is not None:
+            return self._prompt_key(key, runs, bench, size)
+        if self.tab == "help":
+            return self._help_key(key)
+        pending, self._pending = self._pending, None
+        if pending is not None:
+            if pending == "g" and key == "g":
+                self._move("top", runs, bench, size)
+            elif pending == "z" and key in ("a", "R", "M"):
+                self._fold(key, runs, bench, size)
+            return False
+        if key == "q":
+            return True
+        if key == ":":
+            self.prompt = ":"
+        elif key == "?":
+            self._origin, self.tab = self.tab, "help"
+        elif key == "/":
+            if self.tab == "run" and self.stage is not None:
+                self.prompt = "/"
+        elif key == "h":
+            self.tab = "run"
+        elif key in ("l", "3"):
+            self._open_history(runs, size)
+        elif key == "1":
+            self._newest(runs, bench, size, follow=True)
+        elif key in ("[", "]") and self.tab == "run":
+            self._step_run(-1 if key == "]" else 1, runs, bench, size)
+        elif key in ("g", "z"):
+            self._pending = key
+        elif key in _ENTER:
+            self._enter(runs, bench, size)
+        elif key == _ESC:
+            self.focus = "stages"
+        elif key == "n" or key == "N":
+            self._search_step(self._pattern, 1 if key == "n" else -1, runs, bench, size)
+        else:
+            moves = {
+                "j": "down",
+                "k": "up",
+                "G": "bottom",
+                _HALF_DOWN: "half_down",
+                _HALF_UP: "half_up",
+            }
+            if key in moves:
+                self._move(moves[key], runs, bench, size)
+        return False
+
+    def tick(self, runs, bench, size):
+        """Apply a refresh with no key: the opening state, follow, and the cursor re-found by
+        section id after a re-parse.
+
+        Args:
+            runs (list[Run]): Every run, newest first.
+            bench (Bench): The bench's state.
+            size (tuple[int, int]): (rows, columns).
+        """
+        if runs and not self._opened:
+            self._opened = True
+            self._choose(self._opening(runs[0], runs, bench), runs, bench, size)
+        elif self.follow and self.record is None and runs:
+            running = next((s.name for s in runs[0].stages if s.state == "open"), None)
+            if bench.live and running is not None and running != self.stage:
+                self._choose(running, runs, bench, size)
+            elif not bench.live and self._was_live:
+                self._choose(None, runs, bench, size)
+        self._was_live = bench.live
+        self._settle(runs, bench, size)
+
+    def _shown_run(self, runs):
+        return next((r for r in runs if r.record == self.record), runs[0] if runs else None)
+
+    def _opening(self, run, runs, bench):
+        """The stage selected when `run` is opened."""
+        if run is runs[0] and bench.live:
+            return next((s.name for s in run.stages if s.state == "open"), None)
+        if run is runs[0] and not bench.disabled:
+            return None
+        bad = ("failed", "error", "open")
+        return next((s.name for s in run.stages if s.state in bad), None)
+
+    def _pane(self, runs, bench, size):
+        """(stage, anchors, rows visible) of the log pane, or None without log rows."""
+        shown = self._shown_run(runs)
+        stage = _stage(shown, self.stage) if shown else None
+        if stage is None:
+            return None
+        live = bench.live and shown is runs[0]
+        bottom = size[0] - 2
+        rows = _log_rows(self, stage, live and stage.state == "open", datetime.now(UTC))
+        anchors = [anchor for anchor, _ in rows]
+        if not anchors:
+            return None
+        room = bottom - 3 if stage.sections else bottom - _plain_top(stage, live, bottom)[0]
+        return stage, anchors, max(1, room)
+
+    def _reveal(self, anchors, room):
+        """Scroll just far enough that the cursor is in view."""
+        at = _locate(anchors, self.cursor)
+        scroll = min(self.log_scroll, max(0, len(anchors) - room))
+        if at < scroll:
+            scroll = at
+        elif at >= scroll + room:
+            scroll = at - room + 1
+        self.log_scroll = scroll
+
+    def _choose(self, name, runs, bench, size):
+        """Select a stage and put the log cursor on its default row."""
+        self.stage = name
+        self.cursor = None
+        self.log_scroll = 0
+        pane = self._pane(runs, bench, size)
+        if pane is None:
+            self.focus = "stages"
+            return
+        stage, anchors, room = pane
+        if self._tail:
+            self.cursor = anchors[-1]
+        elif stage.sections:
+            wanted = next((x for x in stage.sections if x.outcome == "failed"), None) or next(
+                (x for x in stage.sections if x.outcome == "open"), None
+            )
+            self.cursor = (wanted.id, 0) if wanted else anchors[0]
+        else:
+            self.cursor = anchors[-1]
+            self._tail = True
+        self._reveal(anchors, room)
+
+    def _settle(self, runs, bench, size):
+        """Re-find the cursor among the current rows and keep it in view."""
+        pane = self._pane(runs, bench, size)
+        if pane is None:
+            self.cursor = None
+            self.focus = "stages"
+            return
+        _, anchors, room = pane
+        if self._tail:
+            self.cursor = anchors[-1]
+        elif self.cursor is None:
+            self.cursor = anchors[0]
+        else:
+            self.cursor = anchors[_locate(anchors, self.cursor)]
+        self._reveal(anchors, room)
+
+    def _newest(self, runs, bench, size, follow):
+        self.tab, self.record, self.focus, self.follow = "run", None, "stages", follow
+        if runs:
+            self._choose(self._opening(runs[0], runs, bench), runs, bench, size)
+
+    def _step_run(self, direction, runs, bench, size):
+        shown = self._shown_run(runs)
+        if shown is None:
+            return
+        index = runs.index(shown) + direction
+        if not 0 <= index < len(runs):
+            return
+        self.record = None if index == 0 else runs[index].record
+        self.follow, self.focus = False, "stages"
+        self._choose(self._opening(runs[index], runs, bench), runs, bench, size)
+
+    def _open_history(self, runs, size):
+        if self.tab != "history":
+            shown = self._shown_run(runs)
+            self.history_record = shown.record if shown else None
+            self.tab = "history"
+            self._history_reveal(runs, size)
+
+    def _history_reveal(self, runs, size):
+        records = [r.record for r in runs]
+        at = records.index(self.history_record) if self.history_record in records else 0
+        room = size[0] - 4
+        scroll = min(self.history_scroll, max(0, len(records) - room))
+        if at < scroll:
+            scroll = at
+        elif at >= scroll + room:
+            scroll = at - room + 1
+        self.history_scroll = scroll
+
+    def _enter(self, runs, bench, size):
+        if self.tab == "history":
+            run = next((r for r in runs if r.record == self.history_record), None)
+            if run is None:
+                return
+            self.tab, self.follow, self.focus = "run", False, "stages"
+            self.record = None if run is runs[0] else run.record
+            self._choose(self._opening(run, runs, bench), runs, bench, size)
+        elif self.focus == "stages" and self._pane(runs, bench, size) is not None:
+            self.focus = "log"
+
+    def _move(self, kind, runs, bench, size):
+        half = (size[0] - 5) // 2
+        if self.tab == "history":
+            half = (size[0] - 4) // 2
+            records = [r.record for r in runs]
+            if not records:
+                return
+            at = records.index(self.history_record) if self.history_record in records else 0
+            self.history_record = records[_moved(kind, at, len(records), half)]
+            self._history_reveal(runs, size)
+            return
+        if self.focus == "stages":
+            shown = self._shown_run(runs)
+            if shown is None:
+                return
+            names = [stage.name for stage in shown.stages]
+            at = names.index(self.stage) if self.stage in names else None
+            self.follow = False
+            self._tail = False
+            self._choose(names[_moved(kind, at, len(names), half)], runs, bench, size)
+            return
+        pane = self._pane(runs, bench, size)
+        if pane is None:
+            return
+        _, anchors, room = pane
+        at = _locate(anchors, self.cursor)
+        self.cursor = anchors[_moved(kind, at, len(anchors), half)]
+        self._tail = kind == "bottom"
+        self._reveal(anchors, room)
+
+    def _fold(self, op, runs, bench, size):
+        pane = self._pane(runs, bench, size)
+        if self.tab != "run" or self.focus != "log" or pane is None:
+            return
+        stage, anchors, _ = pane
+        if op == "a":
+            anchor = anchors[_locate(anchors, self.cursor)]
+            section = next((x for x in stage.sections if x.id == anchor[0]), None)
+            if section is None:
+                return
+            self.folds[section.id] = not _is_open(self, section)
+            self.cursor = (section.id, 0)
+        else:
+            for section in stage.sections:
+                self.folds[section.id] = op == "R"
+        self._settle(runs, bench, size)
+
+    def _search_step(self, pattern, direction, runs, bench, size):
+        pane = self._pane(runs, bench, size)
+        if self.tab != "run" or pane is None or not pattern:
+            return
+        stage, anchors, _ = pane
+        lines = [((None, i), line) for i, line in enumerate(stage.lines)]
+        for section in stage.sections:
+            lines.append(((section.id, 0), section.name))
+            lines.extend(
+                ((section.id, i), line)
+                for i, line in enumerate([*section.lines, *section.failure], 1)
+            )
+        listed = [anchor for anchor, _ in lines]
+        at = listed.index(self.cursor) if self.cursor in listed else _locate(listed, self.cursor)
+        for step in range(1, len(lines) + 1):
+            anchor, line = lines[(at + direction * step) % len(lines)]
+            if pattern in line:
+                break
+        else:
+            return
+        section = next((x for x in stage.sections if x.id == anchor[0]), None)
+        if section is not None and anchor[1] > 0 and not _is_open(self, section):
+            self.folds[section.id] = True
+        self.cursor, self.focus, self._tail = anchor, "log", False
+        self._settle(runs, bench, size)
+
+    def _prompt_key(self, key, runs, bench, size):
+        if key == _ESC:
+            self.prompt = None
+        elif key in _ENTER:
+            text, self.prompt = self.prompt, None
+            if text == ":q":
+                return True
+            if text.startswith("/") and len(text) > 1:
+                self._pattern = text[1:]
+                self._search_step(self._pattern, 1, runs, bench, size)
+        elif key in _BACKSPACE:
+            self.prompt = self.prompt[:-1] or None
+        elif isinstance(key, str) and key.isprintable():
+            self.prompt += key
+        return False
+
+    def _help_key(self, key):
+        if key in ("?", _ESC):
+            self.tab = self._origin
+        elif key == "q":
+            return True
+        elif key == ":":
+            self.prompt = ":"
+        return False
+
+
+_ENTER = ("\n", "\r", curses.KEY_ENTER)
+_BACKSPACE = ("\x7f", "\b", curses.KEY_BACKSPACE)
+_ESC = "\x1b"
+_HALF_DOWN = "\x04"
+_HALF_UP = "\x15"
+
+
+def _moved(kind, at, count, half):
+    """The index `kind` of movement reaches from `at` (None: no selection) among `count` rows."""
+    if kind == "top":
+        return 0
+    if kind == "bottom":
+        return count - 1
+    if at is None:
+        at = -1 if kind in ("down", "half_down") else count
+    step = {"down": 1, "up": -1, "half_down": half, "half_up": -half}[kind]
+    return min(max(at + step, 0), count - 1)
 
 
 ATTRIBUTES = {
@@ -911,7 +1241,7 @@ def _run_view(canvas, view, runs, shown, bench, now, bottom):
     elif selected.sections:
         _sectioned_pane(canvas, view, selected, live, now, bottom)
     else:
-        _plain_pane(canvas, selected, live, now, bottom)
+        _plain_pane(canvas, view, selected, live, now, bottom)
 
 
 def _run_header(canvas, shown, newest, bench, live):
@@ -988,25 +1318,19 @@ def _summary(canvas, run, live, now, bottom):
         row += 1
 
 
-def _sectioned_pane(canvas, view, stage, live, now, bottom):
-    running = live and stage.state == "open"
-    failed_style = frozenset({"red"}) if stage.failed else _GREY
-    canvas.put_all(
-        2,
-        _RIGHT,
-        [
-            (_shown(stage.name), frozenset({"bold"}) | _TONES.get(stage.state, _GREY)),
-            (f"  {stage.done} of {stage.queued}  ", _NONE),
-            (f"{stage.passed} passed", frozenset({"green"})),
-            ("  ", _NONE),
-            (f"{stage.failed} failed", failed_style),
-        ],
-    )
-    items = [[(_text(line), _LIGHT)] for line in stage.lines]
+def _is_open(view, section):
+    """Whether a section's body shows: the view's toggle, else open while running or failed."""
+    return view.folds.get(section.id, section.outcome in ("open", "failed"))
+
+
+def _log_rows(view, stage, running, now):
+    """The log rows of a stage as (anchor, parts): its own lines, then each section's header and,
+    when open, its body. An anchor is (section id or None, line within the section)."""
+    rows = [((None, index), [(_text(line), _LIGHT)]) for index, line in enumerate(stage.lines)]
     sections = stage.sections
     for index, section in enumerate(sections):
         body = [*section.lines, *section.failure]
-        opened = view.folds.get(section.id, section.outcome in ("open", "failed"))
+        opened = _is_open(view, section)
         fold = "  " if not body else ("▾ " if opened else "▸ ")
         glyph, style = _glyph(section.outcome, running)
         head = [(fold, _GREY), (glyph, style), (" ", _NONE)]
@@ -1023,17 +1347,62 @@ def _sectioned_pane(canvas, view, stage, live, now, bottom):
             else:
                 took = _DASH
             head += [("  ", _NONE), (took, _GREY)]
-        items.append(head)
+        rows.append(((section.id, 0), head))
         if opened:
-            items.extend([("      " + _text(line), _LIGHT)] for line in body)
-    window = items[view.log_scroll : view.log_scroll + bottom - 3]
-    for offset, parts in enumerate(window):
+            for line_no, line in enumerate(body, 1):
+                rows.append(((section.id, line_no), [("      " + _text(line), _LIGHT)]))
+    return rows
+
+
+def _locate(anchors, cursor):
+    """Index of `cursor` among `anchors`; a line folded away resolves to its section's header,
+    anything else to the first row."""
+    for target in (cursor, (cursor[0], 0) if cursor and cursor[0] is not None else None):
+        if target in anchors:
+            return anchors.index(target)
+    return 0
+
+
+def _plain_top(stage, live, bottom):
+    """(first row free for the label and lines, running-task rows) of a pane without sections."""
+    progress = stage.progress
+    if progress is None:
+        return 2, 0
+    if not (live and stage.state == "open"):
+        return 4, 0
+    shown = min(len(progress.tasks), max(0, bottom - 4 - 5 + 1))
+    return 5 + shown, shown
+
+
+def _paint_cursor(canvas, row):
+    canvas.tint(row, _RIGHT, canvas.cols, frozenset({"selection"}))
+
+
+def _sectioned_pane(canvas, view, stage, live, now, bottom):
+    running = live and stage.state == "open"
+    failed_style = frozenset({"red"}) if stage.failed else _GREY
+    canvas.put_all(
+        2,
+        _RIGHT,
+        [
+            (_shown(stage.name), frozenset({"bold"}) | _TONES.get(stage.state, _GREY)),
+            (f"  {stage.done} of {stage.queued}  ", _NONE),
+            (f"{stage.passed} passed", frozenset({"green"})),
+            ("  ", _NONE),
+            (f"{stage.failed} failed", failed_style),
+        ],
+    )
+    rows = _log_rows(view, stage, running, now)
+    at = _locate([anchor for anchor, _ in rows], view.cursor) if view.cursor else None
+    window = rows[view.log_scroll : view.log_scroll + bottom - 3]
+    for offset, (_, parts) in enumerate(window):
         canvas.put_all(3 + offset, _RIGHT, parts)
+        if at == view.log_scroll + offset:
+            _paint_cursor(canvas, 3 + offset)
     canvas.put(bottom, _RIGHT, _HINT, _GREY)
 
 
-def _plain_pane(canvas, stage, live, now, bottom):
-    first = 2
+def _plain_pane(canvas, view, stage, live, now, bottom):
     progress = stage.progress
     if progress is not None:
         percent = progress.done * 100 // progress.total if progress.total else 0
@@ -1051,25 +1420,25 @@ def _plain_pane(canvas, stage, live, now, bottom):
             _RIGHT,
             [("█" * filled, frozenset({"amber"})), ("█" * (33 - filled), frozenset({"bar_empty"}))],
         )
-        first = 4
-        if live and stage.state == "open":
-            canvas.put(4, _RIGHT, "running now", _GREY)
-            first = 5
-            tasks = sorted(
-                progress.tasks,
-                key=lambda t: (t.started is None, t.started.timestamp() if t.started else 0),
-            )
-            for offset, task in enumerate(tasks[: max(0, bottom - 4 - 5 + 1)]):
-                took = _duration(now - task.started) if task.started else _DASH
-                canvas.put(5 + offset, _RIGHT, f"{task.recipe:<14}{task.task:<14}{took}")
-            first = 5 + min(len(tasks), max(0, bottom - 4 - 5 + 1))
+    first, listed = _plain_top(stage, live, bottom)
+    if progress is not None and live and stage.state == "open":
+        canvas.put(4, _RIGHT, "running now", _GREY)
+        tasks = sorted(
+            progress.tasks,
+            key=lambda t: (t.started is None, t.started.timestamp() if t.started else 0),
+        )
+        for offset, task in enumerate(tasks[:listed]):
+            took = _duration(now - task.started) if task.started else _DASH
+            canvas.put(5 + offset, _RIGHT, f"{task.recipe:<14}{task.task:<14}{took}")
     lines = [_text(line) for line in stage.lines]
     room = max(0, bottom - first)
-    shown = lines[len(lines) - room :] if room and lines else []
+    shown = lines[view.log_scroll : view.log_scroll + room]
     label_row = bottom - len(shown) if shown else first
     canvas.put(label_row, _RIGHT, "this stage's output", _GREY)
     for offset, line in enumerate(shown):
         canvas.put(label_row + 1 + offset, _RIGHT, line, _LIGHT)
+        if view.cursor == (None, view.log_scroll + offset):
+            _paint_cursor(canvas, label_row + 1 + offset)
 
 
 def _history(canvas, view, runs, bench, now, bottom):
@@ -1126,3 +1495,111 @@ def _help(canvas):
             canvas.put_all(
                 3 + offset, start, [(f"{key:<10}", frozenset({"amber"})), (words, _NONE)], stop
             )
+
+
+def watch(directory):
+    """Run the read-only curses view of the records until the user quits.
+
+    Args:
+        directory (pathlib.Path): The records directory.
+
+    Returns:
+        int: 0 on quit or Ctrl-C, 2 when curses cannot start (not a terminal).
+    """
+    try:
+        return curses.wrapper(_loop, Path(directory))
+    except KeyboardInterrupt:
+        return 0
+    except curses.error as exc:
+        print(f"BENCH ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+_TEXT, _GROUND = 252, 232
+_FOREGROUND = {
+    "green": 108,
+    "amber": 180,
+    "red": 168,
+    "blue": 75,
+    "grey": 245,
+    "lightgrey": 248,
+    "bar_empty": 237,
+}
+_BACKGROUND = {"running_tint": 235, "failed_tint": 235, "selection": 235}
+_FILLED = {
+    "badge_running": (_GROUND, 180),
+    "badge_idle": (231, 237),
+    "badge_disabled": (_GROUND, 168),
+    "inverse": (_GROUND, _TEXT),
+}
+
+
+def _colours(style):
+    """The xterm-256 (foreground, background) indexes for a set of style names. Each index is the
+    nearest to the canvas colour of that name."""
+    for name, pair in _FILLED.items():
+        if name in style:
+            return pair
+    foreground = next((index for name, index in _FOREGROUND.items() if name in style), None)
+    if foreground is None:
+        foreground = 231 if "bold" in style else _TEXT
+    background = next((index for name, index in _BACKGROUND.items() if name in style), _GROUND)
+    return foreground, background
+
+
+def _painter():
+    """A function from a style to curses attributes: colour pairs with 256 colours, otherwise
+    the attributes-only table."""
+    if not (curses.has_colors() and curses.COLORS >= 256):
+        return attributes
+    pairs = {}
+
+    def pair_for(colours):
+        if colours not in pairs:
+            pairs[colours] = len(pairs) + 1
+            curses.init_pair(pairs[colours], *colours)
+        return curses.color_pair(pairs[colours])
+
+    def paint(style):
+        bold = curses.A_BOLD if "bold" in style else curses.A_NORMAL
+        return pair_for(_colours(style)) | bold
+
+    return paint
+
+
+def _loop(screen, directory):
+    """Refresh once a second and on every key until a quit key."""
+    screen.timeout(1000)
+    paint = _painter()
+    screen.bkgd(" ", paint(_NONE))
+    records = Records(directory)
+    run_unit = read_run_unit(Path.cwd())
+    view = View(directory=os.path.relpath(directory))
+    while True:
+        runs = records.runs()
+        bench = read_bench(directory, runs[0] if runs else None, run_unit, Path("/proc"))
+        rows, cols = screen.getmaxyx()
+        view.tick(runs, bench, (rows, cols))
+        _blit(screen, render(view, runs, bench, rows, cols, datetime.now(UTC)), paint)
+        try:
+            key = screen.get_wch()
+        except curses.error:
+            continue
+        if view.key(key, runs, bench, screen.getmaxyx()):
+            return 0
+
+
+def _blit(screen, lines, paint):
+    """Draw rendered rows; the write into the bottom-right cell raises after it lands."""
+    screen.erase()
+    last = len(lines) - 1
+    for row, segments in enumerate(lines):
+        col = 0
+        for text, style in segments:
+            try:
+                screen.addstr(row, col, text, paint(style))
+            except curses.error:
+                if row != last:
+                    raise
+            col += len(text)
+    screen.refresh()

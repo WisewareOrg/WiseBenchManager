@@ -1,4 +1,5 @@
-"""`bench` command line: argument parsing for `bench test`/`bench run` and their exit mapping."""
+"""`bench` command line: argument parsing for `bench test`/`bench run`/`bench status` and their
+exit mapping."""
 
 import argparse
 import contextlib
@@ -7,6 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
+from wisebench import status
 from wisebench.bench_run import BenchRun
 from wisebench.bench_test import BenchFailure, BenchTest, CandidateFailure
 from wisebench.config import Config
@@ -28,16 +30,17 @@ def _raise_on_sigterm(signum, frame):
 
 
 def main(argv=None):
-    """Parse arguments and run one `bench test` or `bench run` invocation end to end.
+    """Parse arguments and run one `bench test`, `bench run` or `bench status --watch` invocation
+    end to end.
 
-    Holds the `Lock` shared between the two commands for the whole of whichever one runs.
+    Holds the `Lock` shared between `test` and `run` for the whole of whichever one runs.
 
     Args:
         argv (list[str] | None): Arguments to parse, defaulting to `sys.argv[1:]`.
 
     Returns:
         int: 0 pass (or, for `run`, no job/disabled/lock held), 1 `test`'s candidate failure,
-        2 the bench's own failure.
+        2 the bench's own failure; for `status`, the watch loop's exit code.
 
     Raises:
         SystemExit: argparse rejected the arguments, or printed `--help`.
@@ -56,14 +59,18 @@ def main(argv=None):
     test_parser.add_argument("--set", dest="set_name", default=None)
     test_parser.add_argument("--skip-build", action="store_true")
     subparsers.add_parser("run")
+    status_parser = subparsers.add_parser("status")
+    status_parser.add_argument("--watch", action="store_true", required=True)
     args = parser.parse_args(own_args)
+
+    directory = Path.cwd() / os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
+    if args.command == "status":
+        return status.watch(directory)
 
     lg_env = os.environ.get("LG_ENV")
     if not lg_env:
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
         return 2
-
-    directory = Path.cwd() / os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
 
     if args.command == "run":
         try:
