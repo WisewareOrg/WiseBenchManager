@@ -973,3 +973,26 @@ def test_searching_a_plain_pane_takes_the_cursor_and_scrolls_to_the_match():
     assert view.prompt is None
     assert cursor(view, LONG_RUNS) == (3, "line_17")
     assert view.log_scroll == 17
+
+
+def build_lines(count):
+    lines = tuple(f"line_{i:02d}" for i in range(count))
+    return live("build", build=stage("build", "open", 2, lines=lines))
+
+
+def test_a_plain_pane_follows_new_lines_until_a_log_movement_key_is_pressed():
+    first = [build_lines(40)]
+    view = status.View()
+    view.tick(first, LIVE, SIZE)
+    assert view.stage == "build"
+    assert cursor(view, first, LIVE) == (22, "line_39")
+
+    grown = [build_lines(45)]
+    view.tick(grown, LIVE, SIZE)
+    assert cursor(view, grown, LIVE) == (22, "line_44")
+
+    keys(view, grown, ENTER, "k", bench=LIVE)
+    assert shown(view, grown, LIVE) == "line_43"
+    more = [build_lines(50)]
+    view.tick(more, LIVE, SIZE)
+    assert shown(view, more, LIVE) == "line_43"
