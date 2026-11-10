@@ -1,4 +1,4 @@
-"""`main`'s exit-code mapping, against a scripted fake `BenchTest`/`BenchRun`."""
+"""`main`'s exit-code mapping, against an autospec `BenchTest` and a scripted fake `BenchRun`."""
 
 import contextlib
 import fcntl
@@ -11,77 +11,46 @@ from wisebench import bench_run, bench_test, cli
 from wisebench.lock import Lock
 
 
-class _FakeBenchTest:
-    """Scripted stand-in for `BenchTest.run`."""
-
-    instances = []
-
-    def __init__(self, checkout, ref, set_name, skip_build=False, pr=None):
-        self.checkout = checkout
-        self.ref = ref
-        self.set_name = set_name
-        self.skip_build = skip_build
-        self.pr = pr
-        self.run_calls = []
-        self.outcome = None
-        _FakeBenchTest.instances.append(self)
-
-    def run(self, lg_env, pytest_args):
-        self.run_calls.append((lg_env, pytest_args))
-        if isinstance(self.outcome, Exception):
-            raise self.outcome
-
-
-def _build(outcome=None):
-    def factory(*a, **kw):
-        bench = _FakeBenchTest(*a, **kw)
-        bench.outcome = outcome
-        return bench
-
-    return factory
-
-
 @pytest.fixture
-def made(monkeypatch):
-    """Sets a harmless `LG_ENV` and clears `_FakeBenchTest.instances`.
+def made(monkeypatch, bench_test_class):
+    """Set a harmless `LG_ENV` and yield the autospec `BenchTest` class.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
+        bench_test_class (unittest.mock.NonCallableMagicMock): The shared autospec.
 
     Yields:
-        list[_FakeBenchTest]: Each `BenchTest` this test constructs, in order.
+        unittest.mock.NonCallableMagicMock: The mocked class; `.return_value.run` is the run.
     """
     monkeypatch.setenv("LG_ENV", "unused.yaml")
-    _FakeBenchTest.instances.clear()
-    yield _FakeBenchTest.instances
+    yield bench_test_class
 
 
 def test_main_returns_0_on_a_clean_run(made, monkeypatch, tmp_path):
     """main returns 0 on a clean bench test run."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build())
     assert cli.main(["test", "HEAD"]) == 0
-    assert made[0].run_calls == [("unused.yaml", [])]
+    made.return_value.run.assert_called_once_with("unused.yaml", [])
 
 
 def test_main_returns_1_on_a_candidate_failure(made, monkeypatch, tmp_path):
     """main returns 1 on a candidate failure."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build(bench_test.CandidateFailure("build exited 1")))
+    made.return_value.run.side_effect = bench_test.CandidateFailure("build exited 1")
     assert cli.main(["test", "HEAD"]) == 1
 
 
 def test_main_returns_2_on_a_bench_failure(made, monkeypatch, tmp_path):
     """main returns 2 on a bench failure."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build(bench_test.BenchFailure("precondition exited 2")))
+    made.return_value.run.side_effect = bench_test.BenchFailure("precondition exited 2")
     assert cli.main(["test", "HEAD"]) == 2
 
 
 def test_main_returns_2_on_a_raw_exception_run_never_wraps(made, monkeypatch, tmp_path):
     """main returns 2 on an exception that is neither BenchFailure nor CandidateFailure."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build(RuntimeError("tree is dirty: [' M x']")))
+    made.return_value.run.side_effect = RuntimeError("tree is dirty: [' M x']")
     assert cli.main(["test", "HEAD"]) == 2
 
 
@@ -95,26 +64,23 @@ def test_main_returns_2_when_lg_env_is_not_set(monkeypatch, tmp_path):
 def test_main_passes_set_name_and_pytest_args_through(made, monkeypatch, tmp_path):
     """main passes --set and the trailing pytest args through to BenchTest."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build())
     assert cli.main(["test", "HEAD", "--set", "scratch-set", "--", "-k", "x"]) == 0
-    assert made[0].set_name == "scratch-set"
-    assert made[0].run_calls == [("unused.yaml", ["-k", "x"])]
+    assert made.call_args.args[2] == "scratch-set"
+    made.return_value.run.assert_called_once_with("unused.yaml", ["-k", "x"])
 
 
 def test_main_passes_skip_build_through(made, monkeypatch, tmp_path):
     """main passes --skip-build through to BenchTest.skip_build."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build())
     assert cli.main(["test", "HEAD", "--skip-build"]) == 0
-    assert made[0].skip_build is True
+    assert made.call_args.kwargs["skip_build"] is True
 
 
 def test_main_defaults_skip_build_to_false(made, monkeypatch, tmp_path):
     """main defaults BenchTest.skip_build to False."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build())
     assert cli.main(["test", "HEAD"]) == 0
-    assert made[0].skip_build is False
+    assert made.call_args.kwargs["skip_build"] is False
 
 
 @contextlib.contextmanager
@@ -133,10 +99,9 @@ def _hold_lock(tmp_path):
 def test_main_test_returns_2_when_the_lock_is_already_held(made, monkeypatch, tmp_path):
     """main returns 2 for bench test when the lock is already held."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "BenchTest", _build())
     with _hold_lock(tmp_path):
         assert cli.main(["test", "HEAD"]) == 2
-    assert made[0].run_calls == []
+    made.return_value.run.assert_not_called()
 
 
 def _write_bench_toml(repo):
@@ -280,7 +245,9 @@ def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_pa
     assert made_run[0].run_calls == ["unused.yaml"]
 
 
-def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch, tmp_path):
+def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
+    bench_test_class, monkeypatch, tmp_path
+):
     """main exits 2 on SIGTERM, writing DISABLED and disabling the timer."""
     _write_bench_toml(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -313,16 +280,11 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(monkeypatch,
         def post(self, *a, **kw):
             pass
 
-    class _SigtermBenchTest:
-        def __init__(self, checkout, ref, set_name, kind="test", pr=None):
-            pass
-
-        def run(self, lg_env, pytest_args, post=None):
-            os.kill(os.getpid(), signal.SIGTERM)
-
     monkeypatch.setattr(bench_run, "Queue", _StubQueue)
     monkeypatch.setattr(bench_run, "Check", _StubCheck)
-    monkeypatch.setattr(bench_run, "BenchTest", _SigtermBenchTest)
+    bench_test_class.return_value.run.side_effect = lambda *a, **kw: os.kill(
+        os.getpid(), signal.SIGTERM
+    )
 
     assert cli.main(["run"]) == 2
 
