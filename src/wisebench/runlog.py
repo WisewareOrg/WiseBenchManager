@@ -184,32 +184,46 @@ class _StageBuilder:
 
     def __init__(self, name):
         """An empty builder for the stage `name`."""
-        self.name, self.state, self.sha = name, "not-started", None
-        self.started = self.ended = None
-        self.lines, self.queued, self.rows, self._emitted, self._seen, self._row = (
-            [],
-            [],
-            [],
-            set(),
-            {},
-            None,
-        )
+        self.name = name
+        self.state = "not-started"
+        self.started = self.ended = self.sha = self._row = None
+        self.lines, self.queued, self.rows = [], [], []
+        self._emitted, self._seen = set(), {}
 
     def start(self, at):
-        """The stage's `started` marker: lines belong to the stage until a row opens."""
+        """Record the stage's `started` marker; lines belong to the stage until a row opens.
+
+        Args:
+            at (datetime): The marker's time.
+        """
         self.state, self.started, self._row = "open", at, None
 
     def finish(self, result, at, sha):
-        """The stage's result marker."""
+        """Record the stage's result marker.
+
+        Args:
+            result (str): "passed", "failed", "error" or "skipped".
+            at (datetime): The marker's time.
+            sha (str | None): The commit a passed `checkout` resolved.
+        """
         self.state, self.ended, self.sha = result, at, sha
 
     def add_line(self, line):
-        """An output line: the open row's, or the stage's own before any row opens."""
+        """Append an output line to the open row, or to the stage's own before any row opens.
+
+        Args:
+            line (str): The line without its newline.
+        """
         (self._row.lines if self._row else self.lines).append(line)
 
     def open_row(self, kind, name, at):
-        """Open a row at a marker (`at` None: a queued test that never started); its lines run to
-        the next marker."""
+        """Add a row; one with a marker takes the lines up to the next marker.
+
+        Args:
+            kind (str): "setup" or "test".
+            name (str): The fixture name or pytest node id.
+            at (datetime | None): The marker's time; None for a queued test that never started.
+        """
         key = (self.name, kind, name)
         self._seen[key] = self._seen.get(key, -1) + 1
         row = _Row((*key, self._seen[key]), kind, name, at)
@@ -218,7 +232,12 @@ class _StageBuilder:
             self._row = row
 
     def start_test(self, name, at):
-        """A started test: queued tests before it that never started become rows first."""
+        """Record a started test: queued tests before it that never started become rows first.
+
+        Args:
+            name (str): The pytest node id.
+            at (datetime): The marker's time.
+        """
         for earlier in self.queued[: self.queued.index(name)] if name in self.queued else ():
             self._emit_unstarted(earlier)
         self._emitted.add(name)

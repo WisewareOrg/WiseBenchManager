@@ -134,7 +134,16 @@ def plain_top(lay, stage, live):
 
 
 def pane_room(lay, stage, live):
-    """How many log rows the selected stage's pane shows at once."""
+    """How many log rows the selected stage's pane shows at once.
+
+    Args:
+        lay (Layout): The screen layout.
+        stage (Stage): The selected stage.
+        live (bool): Whether the stage's run is the live one.
+
+    Returns:
+        int: At least 1.
+    """
     if stage.sections:
         return max(1, lay.log_room)
     return max(1, lay.bottom - plain_top(lay, stage, live)[0])
@@ -164,7 +173,15 @@ class LogRow:
 
 
 def is_open(folds, section):
-    """Whether a section's body shows: the toggle in `folds`, else open while running or failed."""
+    """Whether a section's body shows: the toggle in `folds`, else open while running or failed.
+
+    Args:
+        folds (dict): Section id to True (open) or False (folded).
+        section (Section): The section.
+
+    Returns:
+        bool: True if the body shows.
+    """
     return folds.get(section.id, section.outcome in ("open", "failed"))
 
 
@@ -200,7 +217,15 @@ def log_rows(stage, folds, expand=False):
 
 def locate(rows, cursor):
     """Index of `cursor` among `rows`; a line folded away resolves to its section's header,
-    anything else to the first row."""
+    anything else to the first row.
+
+    Args:
+        rows (list[LogRow]): The log rows.
+        cursor (tuple | None): An anchor.
+
+    Returns:
+        int: A row index.
+    """
     anchors = [row.anchor for row in rows]
     for target in (cursor, (cursor[0], 0) if cursor and cursor[0] is not None else None):
         if target in anchors:
@@ -217,7 +242,15 @@ class _Canvas:
         self.cells = [[(" ", _NONE)] * cols for _ in range(rows)]
 
     def put(self, row, col, text, style=_NONE, limit=None):
-        """Write `text` at (row, col), clipped at `limit` (default: the right edge)."""
+        """Write `text` at (row, col), clipped at `limit`.
+
+        Args:
+            row (int): The row.
+            col (int): The first column.
+            text (str): The text.
+            style (frozenset[str]): The text's style.
+            limit (int | None): The column the text is clipped at; None is the right edge.
+        """
         stop = self.cols if limit is None else min(limit, self.cols)
         for offset, char in enumerate(text):
             if col + offset >= stop:
@@ -225,13 +258,27 @@ class _Canvas:
             self.cells[row][col + offset] = (char, style)
 
     def put_all(self, row, col, parts, limit=None):
-        """Write consecutive (text, style) parts starting at (row, col)."""
+        """Write consecutive (text, style) parts starting at (row, col).
+
+        Args:
+            row (int): The row.
+            col (int): The first column.
+            parts (list[tuple[str, frozenset[str]]]): The (text, style) pairs.
+            limit (int | None): The column the text is clipped at; None is the right edge.
+        """
         for text, style in parts:
             self.put(row, col, text, style, limit)
             col += len(text)
 
     def tint(self, row, start, stop, style):
-        """Add `style` to every cell of `row` in [start, stop)."""
+        """Add `style` to every cell of `row` in [start, stop).
+
+        Args:
+            row (int): The row.
+            start (int): The first column.
+            stop (int): One past the last column.
+            style (frozenset[str]): The style names to add.
+        """
         for col in range(start, stop):
             char, existing = self.cells[row][col]
             self.cells[row][col] = (char, existing | style)

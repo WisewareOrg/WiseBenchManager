@@ -215,17 +215,17 @@ tag. `bench run` is started by a systemd user timer; the lock it shares with `be
 refuses rather than clashing with it, and `bench run` itself backs off with exit 0 if the lock is
 already held. It asks `Queue.head()` for the merge queue's head entry -- the `gh-readonly-queue`
 ref whose own base is `origin/main`'s current tip, read with `git ls-remote` -- and posts the
-verdict as a GitHub check run (`Check.post`). `bench status --watch` is the read-only view of all of it, run from the directory `bench run` runs
-in. It is a curses screen refreshed once a second: Run shows the newest run's stages and the selected
-stage's log, headed by bitbake's task progress while a build runs, and History lists every run on
-disk. It reads `records/*/bench.log`, each suite's `report.jsonl`, whether `records/DISABLED`
-exists, the holder of the `lock` file from `/proc/locks`, the run timer's state from `systemctl
---user`, and `bench.toml`. It writes nothing, takes no lock and runs no git. No maintained viewer
-reads the runner's markers or joins them to pytest-reportlog's outcomes, so the view is the
-runner's own, on stdlib `curses`. Bitbake shows its task progress only on the terminal that ran the
-build, so the view reads bitbake's `NOTE:` lines from the log; and it asks the kernel's `/proc/locks`
-who holds the lock rather than `lslocks`, which resolves holders by path through
-`/proc/<pid>/fd`.
+verdict as a GitHub check run (`Check.post`). `bench status --watch` is the read-only view of all
+of it, run from the directory `bench run` runs in. It is a curses screen refreshed once a second:
+Run shows the newest run's stages and the selected stage's log, headed by bitbake's task progress
+while a build runs, and History lists every run on disk. It reads `records/*/bench.log`, each
+suite's `report.jsonl`, whether `records/DISABLED` exists, the holder of the `lock` file from
+`/proc/locks`, the run timer's state from `systemctl --user`, and `bench.toml`. It writes nothing,
+takes no lock and runs no git. No maintained viewer reads the runner's markers or joins them to
+pytest-reportlog's outcomes, so the view is the runner's own, on stdlib `curses`. Bitbake shows its
+task progress only on the terminal that ran the build, so the view reads bitbake's `NOTE:` lines
+from the log; and it asks the kernel's `/proc/locks` who holds the lock rather than `lslocks`,
+which resolves holders by path through `/proc/<pid>/fd`.
 
 ### Installing `bench run`
 
