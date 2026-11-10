@@ -4,15 +4,17 @@ Everything here reads and nothing writes: no lock is taken, no process but the t
 started, and DISABLED is only checked for presence.
 """
 
+import curses
 import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from wisebench.config import Config
+from wisebench.plugin import DEFAULT_RESULT_DIR
 
 _STAGES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite")
 _POSTED = "posted"
@@ -603,3 +605,524 @@ def read_bench(directory, newest, run_unit, proc_root):
         disabled=(Path(directory) / "DISABLED").exists(),
         timer=_DASH if run_unit is None else timer_state(run_unit),
     )
+
+
+@dataclass(kw_only=True)
+class View:
+    """What the screen shows: the data `render` reads besides the runs and the bench.
+
+    Args:
+        tab (str): "run", "history" or "help".
+        record (str | None): The record shown in Run; None is the newest run.
+        stage (str | None): The selected stage's name; None shows the run's summary.
+        cursor (object | None): The log cursor.
+        folds (dict): Section id to True (open) or False (folded), overriding the derived state.
+        log_scroll (int): Index of the first shown row of a sectioned pane.
+        history_scroll (int): Index of the first shown History row.
+        history_record (str | None): The selected History row's record.
+        prompt (str | None): The command line's text when open.
+        directory (str): The records directory as shown in footers.
+    """
+
+    tab: str = "run"
+    record: str | None = None
+    stage: str | None = None
+    cursor: object | None = None
+    folds: dict = field(default_factory=dict)
+    log_scroll: int = 0
+    history_scroll: int = 0
+    history_record: str | None = None
+    prompt: str | None = None
+    directory: str = DEFAULT_RESULT_DIR
+
+
+ATTRIBUTES = {
+    "selection": curses.A_REVERSE,
+    "inverse": curses.A_REVERSE,
+    "badge_running": curses.A_REVERSE,
+    "badge_idle": curses.A_REVERSE,
+    "badge_disabled": curses.A_REVERSE,
+    "bold": curses.A_BOLD,
+    "grey": curses.A_DIM,
+    "lightgrey": curses.A_DIM,
+    "bar_empty": curses.A_DIM,
+    "green": curses.A_NORMAL,
+    "amber": curses.A_NORMAL,
+    "red": curses.A_NORMAL,
+    "blue": curses.A_NORMAL,
+    "running_tint": curses.A_NORMAL,
+    "failed_tint": curses.A_NORMAL,
+}
+
+
+def attributes(style):
+    """The curses attributes for a set of style names, ORed together.
+
+    Args:
+        style (frozenset[str]): Style names from `ATTRIBUTES`.
+
+    Returns:
+        int: The attribute bits.
+    """
+    bits = curses.A_NORMAL
+    for name in style:
+        bits |= ATTRIBUTES[name]
+    return bits
+
+
+_MIN_ROWS, _MIN_COLS = 24, 80
+_LEFT, _RULE, _RIGHT = 39, 42, 45
+_NONE = frozenset()
+_GREY = frozenset({"grey"})
+_LIGHT = frozenset({"lightgrey"})
+_BOLD = frozenset({"bold"})
+_TONES = {
+    "passed": frozenset({"green"}),
+    "failed": frozenset({"red"}),
+    "error": frozenset({"red"}),
+    "open": frozenset({"amber"}),
+}
+_RESULT_WORDS = {
+    "passed": ("passed", "green"),
+    "failed": ("failed", "red"),
+    "error": ("bench error", "red"),
+    None: ("no result", "grey"),
+}
+_HINT = "Enter into the log   za fold   Esc back to stages"
+_HELP = (
+    (
+        "move",
+        [
+            ("h l", "prev / next view"),
+            ("1 3", "jump to view"),
+            ("j k", "down / up"),
+            ("gg G", "top / bottom"),
+            ("^d ^u", "half page"),
+            ("Enter", "open selection"),
+        ],
+    ),
+    (
+        "runs and log",
+        [
+            ("[ ]", "older / newer run"),
+            ("1", "back to the live run"),
+            ("za", "fold / unfold a stage"),
+            ("zR zM", "unfold / fold all"),
+            ("/", "search"),
+            ("n N", "next / prev match"),
+            ("G", "follow the live log"),
+        ],
+    ),
+    ("commands", [(":q", "quit"), ("?", "this screen"), ("q", "quit")]),
+)
+
+
+class _Canvas:
+    """A grid of (character, style) cells that text is clipped onto."""
+
+    def __init__(self, rows, cols):
+        self.cols = cols
+        self.cells = [[(" ", _NONE)] * cols for _ in range(rows)]
+
+    def put(self, row, col, text, style=_NONE, limit=None):
+        """Write `text` at (row, col), clipped at `limit` (default: the right edge)."""
+        stop = self.cols if limit is None else min(limit, self.cols)
+        for offset, char in enumerate(text):
+            if col + offset >= stop:
+                break
+            self.cells[row][col + offset] = (char, style)
+
+    def put_all(self, row, col, parts, limit=None):
+        """Write consecutive (text, style) parts starting at (row, col)."""
+        for text, style in parts:
+            self.put(row, col, text, style, limit)
+            col += len(text)
+
+    def tint(self, row, start, stop, style):
+        """Add `style` to every cell of `row` in [start, stop)."""
+        for col in range(start, stop):
+            char, existing = self.cells[row][col]
+            self.cells[row][col] = (char, existing | style)
+
+    def rows(self):
+        """The grid as rows of (text, style) segments, adjacent equal styles merged."""
+        out = []
+        for cells in self.cells:
+            segments = []
+            for char, style in cells:
+                if segments and segments[-1][1] == style:
+                    segments[-1] = (segments[-1][0] + char, style)
+                else:
+                    segments.append((char, style))
+            out.append(segments)
+        return out
+
+
+def _text(line):
+    """`line` with tabs expanded to the next multiple of 8 and other controls as carets."""
+    out = ""
+    for char in line:
+        if char == "\t":
+            out += " " * (8 - len(out) % 8)
+        elif ord(char) < 32 or ord(char) == 127:
+            out += "^" + chr(ord(char) ^ 64)
+        else:
+            out += char
+    return out
+
+
+def _clock(moment):
+    return moment.astimezone().strftime("%H:%M:%S")
+
+
+def _duration(delta):
+    seconds = int(delta.total_seconds())
+    return f"{seconds // 60}m{seconds % 60:02d}s"
+
+
+def _minutes(delta):
+    return f"{int(delta.total_seconds()) // 60}m"
+
+
+def _shown(name):
+    return name.replace("_", " ")
+
+
+def _stage(run, name):
+    return next((stage for stage in run.stages if stage.name == name), None)
+
+
+def _sha7(run):
+    checkout = _stage(run, "checkout")
+    return checkout.sha[:7] if checkout and checkout.sha else _DASH
+
+
+def _glyph(state, live):
+    """(glyph, style) for a stage or section state; `live` is whether an open one is running."""
+    if state == "passed":
+        return "✓", frozenset({"green"})
+    if state in ("failed", "error"):
+        return "✗", frozenset({"red", "bold"})
+    if state == "open":
+        return ("●", frozenset({"amber", "bold"})) if live else ("?", _GREY)
+    if state == "skipped":
+        return "–", _GREY
+    return "·", _GREY
+
+
+def _result_word(run, running):
+    if running:
+        return "running", "amber"
+    return _RESULT_WORDS[run.result]
+
+
+def render(view, runs, bench, rows, cols, now):
+    """Draw the model as `rows` lists of `(text, style)` segments, each row `cols` wide.
+
+    Args:
+        view (View): The tab, selections, scroll offsets, folds and prompt.
+        runs (list[Run]): Every run, newest first.
+        bench (Bench): The bench's live, disabled and timer state.
+        rows (int): Screen height.
+        cols (int): Screen width.
+        now (datetime): The current time.
+
+    Returns:
+        list[list[tuple[str, frozenset[str]]]]: The screen; a style is a set of style names.
+    """
+    canvas = _Canvas(rows, cols)
+    if rows < _MIN_ROWS or cols < _MIN_COLS:
+        canvas.put(0, 0, "terminal too small")
+        return canvas.rows()
+    newest = runs[0] if runs else None
+    shown = next((r for r in runs if r.record == view.record), newest)
+    bar = rows - 1
+    if view.prompt is not None:
+        canvas.put(bar, 0, view.prompt)
+        canvas.put(bar, len(view.prompt), " ", frozenset({"inverse"}))
+        bar -= 1
+    bottom = bar - 1
+    _tab_line(canvas, view, shown, newest, now)
+    _status_bar(canvas, bench, bar)
+    if view.tab == "history":
+        _history(canvas, view, runs, bench, now, bottom)
+    elif view.tab == "help":
+        _help(canvas)
+    else:
+        _run_view(canvas, view, runs, shown, bench, now, bottom)
+    return canvas.rows()
+
+
+def _tab_line(canvas, view, shown, newest, now):
+    canvas.put(0, 0, "bench", _BOLD)
+    run_label = " 1 Run "
+    if shown is not None and shown is not newest:
+        run_label = f" 1 Run  {shown.record} "
+    active = frozenset({"inverse"})
+    run_style = active if view.tab == "run" else _GREY
+    history_style = active if view.tab == "history" else _GREY
+    canvas.put_all(0, 7, [(run_label, run_style), (" 3 History ", history_style)])
+    clock = _clock(now)
+    canvas.put(0, canvas.cols - len(clock), clock, _GREY)
+
+
+def _status_bar(canvas, bench, row):
+    if bench.live:
+        badge, ground = " RUNNING ", "badge_running"
+    elif bench.disabled:
+        badge, ground = " DISABLED ", "badge_disabled"
+    else:
+        badge, ground = " IDLE ", "badge_idle"
+    timer_tone = {"on": "green", "off": "red"}.get(bench.timer, "grey")
+    canvas.put_all(
+        row,
+        0,
+        [
+            (badge, frozenset({"bold", ground})),
+            ("  ", _NONE),
+            ("timer ", _GREY),
+            (bench.timer, frozenset({timer_tone})),
+        ],
+    )
+    canvas.put_all(row, canvas.cols - 6, [("?", frozenset({"inverse"})), (" keys", _GREY)])
+
+
+def _footer(view, runs):
+    return f"{len(runs)} records in {view.directory}/"
+
+
+def _run_view(canvas, view, runs, shown, bench, now, bottom):
+    if shown is None:
+        canvas.put(1, 0, _footer(view, runs), _GREY)
+        return
+    live = bench.live and shown is runs[0]
+    _run_header(canvas, shown, runs[0], bench, live)
+    canvas.put(2, 0, f"{'stage':<17}{'start':<10}took", _GREY)
+    for index, stage in enumerate(shown.stages):
+        row = 3 + index
+        if row > bottom:
+            break
+        _stage_row(canvas, row, stage, live, view.stage == stage.name, now)
+    for row in range(2, bottom + 1):
+        canvas.put(row, _RULE, "│", _GREY)
+    selected = _stage(shown, view.stage)
+    if selected is None:
+        _summary(canvas, shown, live, now, bottom)
+    elif selected.sections:
+        _sectioned_pane(canvas, view, selected, live, now, bottom)
+    else:
+        _plain_pane(canvas, selected, live, now, bottom)
+
+
+def _run_header(canvas, shown, newest, bench, live):
+    title = f"PR #{shown.pr}" if shown.pr is not None else (shown.ref or _DASH)
+    rest = f"{_sha7(shown)}  record {shown.record}"
+    if shown is not newest:
+        word, tone = _result_word(shown, False)
+        ended = _clock(shown.ended) if shown.ended else _DASH
+        parts = [
+            (title, _BOLD),
+            (f"  {rest}  ", _GREY),
+            (word, frozenset({"bold", tone})),
+            (f"  ended {ended}", _GREY),
+        ]
+    elif not bench.live and not bench.disabled:
+        parts = [("last run  ", _GREY), (title, _BOLD), (f"  {rest}", _GREY)]
+    else:
+        parts = [(title, _BOLD), (f"  {rest}", _GREY)]
+    canvas.put_all(1, 0, parts)
+
+
+def _stage_row(canvas, row, stage, live, selected, now):
+    name = _shown(stage.name)
+    running = stage.state == "open" and live
+    if stage.state in ("not-started", "skipped"):
+        glyph, _ = _glyph(stage.state, False)
+        canvas.put(row, 0, f"{glyph} {name}".ljust(_LEFT), _GREY, _LEFT)
+        ground = frozenset({"selection"}) if selected else _NONE
+        canvas.tint(row, 0, _LEFT, ground)
+        return
+    glyph, style = _glyph(stage.state, running)
+    canvas.put(row, 0, glyph, style, _LEFT)
+    canvas.put(row, 2, name, _NONE, _LEFT)
+    if stage.started is not None:
+        canvas.put(row, 17, _clock(stage.started), _NONE, _LEFT)
+        if stage.ended is not None:
+            took = _duration(stage.ended - stage.started)
+        elif running:
+            took = _duration(now - stage.started)
+        else:
+            took = _DASH
+        canvas.put(row, 27, took, _NONE, _LEFT)
+    if glyph == "●":
+        ground = frozenset({"running_tint"})
+    elif glyph == "✗":
+        ground = frozenset({"failed_tint"})
+    else:
+        ground = frozenset({"selection"}) if selected else _NONE
+    canvas.tint(row, 0, _LEFT, ground)
+
+
+def _summary(canvas, run, live, now, bottom):
+    if run.result is None and live:
+        word, tone = "running", "amber"
+        rest = f"  took {_minutes(now - run.started)}"
+    else:
+        word, tone = _result_word(run, False)
+        ended = _clock(run.ended) if run.ended else _DASH
+        took = _minutes(run.ended - run.started) if run.ended and run.started else _DASH
+        rest = f"  ended {ended}, took {took}"
+    canvas.put_all(2, _RIGHT, [(word, frozenset({"bold", tone})), (rest, _GREY)])
+    row = 3
+    for name in ("host_suite", "target_suite"):
+        stage = _stage(run, name)
+        if stage is None or stage.queued == 0 or row > bottom:
+            continue
+        parts = [
+            (f"{_shown(name):<14}", _GREY),
+            (f"{stage.passed} passed", frozenset({"green"})),
+        ]
+        if stage.failed:
+            parts += [("  ", _NONE), (f"{stage.failed} failed", frozenset({"red"}))]
+        canvas.put_all(row, _RIGHT, parts)
+        row += 1
+
+
+def _sectioned_pane(canvas, view, stage, live, now, bottom):
+    running = live and stage.state == "open"
+    failed_style = frozenset({"red"}) if stage.failed else _GREY
+    canvas.put_all(
+        2,
+        _RIGHT,
+        [
+            (_shown(stage.name), frozenset({"bold"}) | _TONES.get(stage.state, _GREY)),
+            (f"  {stage.done} of {stage.queued}  ", _NONE),
+            (f"{stage.passed} passed", frozenset({"green"})),
+            ("  ", _NONE),
+            (f"{stage.failed} failed", failed_style),
+        ],
+    )
+    items = [[(_text(line), _LIGHT)] for line in stage.lines]
+    sections = stage.sections
+    for index, section in enumerate(sections):
+        body = [*section.lines, *section.failure]
+        opened = view.folds.get(section.id, section.outcome in ("open", "failed"))
+        fold = "  " if not body else ("▾ " if opened else "▸ ")
+        glyph, style = _glyph(section.outcome, running)
+        head = [(fold, _GREY), (glyph, style), (" ", _NONE)]
+        if section.kind == "setup":
+            head.append(("setup ", frozenset({"blue"})))
+        head.append((section.name, _NONE))
+        if section.started is not None:
+            following = next((s.started for s in sections[index + 1 :] if s.started), None)
+            end = following or stage.ended
+            if end is not None:
+                took = _duration(end - section.started)
+            elif running:
+                took = _duration(now - section.started)
+            else:
+                took = _DASH
+            head += [("  ", _NONE), (took, _GREY)]
+        items.append(head)
+        if opened:
+            items.extend([("      " + _text(line), _LIGHT)] for line in body)
+    window = items[view.log_scroll : view.log_scroll + bottom - 3]
+    for offset, parts in enumerate(window):
+        canvas.put_all(3 + offset, _RIGHT, parts)
+    canvas.put(bottom, _RIGHT, _HINT, _GREY)
+
+
+def _plain_pane(canvas, stage, live, now, bottom):
+    first = 2
+    progress = stage.progress
+    if progress is not None:
+        percent = progress.done * 100 // progress.total if progress.total else 0
+        filled = round(33 * progress.done / progress.total) if progress.total else 0
+        canvas.put_all(
+            2,
+            _RIGHT,
+            [
+                ("build", frozenset({"amber", "bold"})),
+                (f"  task {progress.done} of {progress.total}  {percent}%", _NONE),
+            ],
+        )
+        canvas.put_all(
+            3,
+            _RIGHT,
+            [("█" * filled, frozenset({"amber"})), ("█" * (33 - filled), frozenset({"bar_empty"}))],
+        )
+        first = 4
+        if live and stage.state == "open":
+            canvas.put(4, _RIGHT, "running now", _GREY)
+            first = 5
+            tasks = sorted(
+                progress.tasks,
+                key=lambda t: (t.started is None, t.started.timestamp() if t.started else 0),
+            )
+            for offset, task in enumerate(tasks[: max(0, bottom - 4 - 5 + 1)]):
+                took = _duration(now - task.started) if task.started else _DASH
+                canvas.put(5 + offset, _RIGHT, f"{task.recipe:<14}{task.task:<14}{took}")
+            first = 5 + min(len(tasks), max(0, bottom - 4 - 5 + 1))
+    lines = [_text(line) for line in stage.lines]
+    room = max(0, bottom - first)
+    shown = lines[len(lines) - room :] if room and lines else []
+    label_row = bottom - len(shown) if shown else first
+    canvas.put(label_row, _RIGHT, "this stage's output", _GREY)
+    for offset, line in enumerate(shown):
+        canvas.put(label_row + 1 + offset, _RIGHT, line, _LIGHT)
+
+
+def _history(canvas, view, runs, bench, now, bottom):
+    width = max(18, max((len(r.record) for r in runs), default=0) + 2)
+    canvas.put(
+        1,
+        0,
+        "record".ljust(width) + "what".ljust(22) + "sha".ljust(9) + "result".ljust(13) + "took",
+        _GREY,
+    )
+    window = runs[view.history_scroll : view.history_scroll + bottom - 2]
+    for offset, run in enumerate(window):
+        row = 2 + offset
+        running = run is runs[0] and bench.live and run.result is None
+        word, tone = _result_word(run, running)
+        what = f"PR #{run.pr}" if run.pr is not None else (run.ref or _DASH)
+        if running:
+            took = _minutes(now - run.started)
+        elif run.result is None:
+            took = _DASH
+        else:
+            took = _minutes(run.ended - run.started)
+        failing = next((s for s in run.stages if s.state in ("failed", "error")), None)
+        trailing = []
+        if failing:
+            trailing.append((_shown(failing.name), _GREY))
+        if run.kind == "test":
+            trailing.append(("by hand", frozenset({"blue"})))
+        parts = [
+            (run.record.ljust(width), _NONE),
+            (what[:22].ljust(22), _NONE),
+            (_sha7(run).ljust(9), _NONE),
+            (word.ljust(13), frozenset({tone})),
+            (f"{took:>4}", _NONE),
+            ("  ", _NONE),
+        ]
+        for index, part in enumerate(trailing):
+            parts += [("  ", _NONE)] if index else []
+            parts.append(part)
+        canvas.put_all(row, 0, parts)
+        if run.record == view.history_record:
+            canvas.tint(row, 0, canvas.cols, frozenset({"selection"}))
+    canvas.put(bottom, 0, _footer(view, runs), _GREY)
+
+
+def _help(canvas):
+    canvas.put(1, 0, "keys", _BOLD)
+    width = (canvas.cols - 6) // 3
+    for index, (heading, entries) in enumerate(_HELP):
+        start = index * (width + 3)
+        stop = start + width
+        canvas.put(2, start, heading, frozenset({"blue"}), stop)
+        for offset, (key, words) in enumerate(entries):
+            canvas.put_all(
+                3 + offset, start, [(f"{key:<10}", frozenset({"amber"})), (words, _NONE)], stop
+            )
