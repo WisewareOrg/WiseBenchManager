@@ -273,6 +273,7 @@ def test_test_rows_follow_queue_order_with_unstarted_tests_emitted_in_place():
                 rep("t.py::a", "call", "passed"),
                 rep("t.py::a", "teardown", "passed"),
                 rep("t.py::b", "setup", "skipped"),
+                rep("t.py::b", "teardown", "passed"),
                 rep("t.py::c", "call", "failed"),
                 rep("t.py::c", "teardown", "passed"),
                 rep("t.py::d", "setup", "failed"),
