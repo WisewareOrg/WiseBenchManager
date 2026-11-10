@@ -83,66 +83,64 @@ class BenchTest:
         """
         result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
         log = self._open_log(result_dir)
+        outcome = "error"
         try:
-            pr = f" pr={self.pr}" if self.pr is not None else ""
-            self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}")
-            with self._stage(log, "checkout") as info:
-                commit = self._checkout_commit(log)
-                config = Config.load(self.checkout / "bench.toml")
-                info["sha"] = commit
-            env = {
-                **os.environ,
-                BENCH_SHA: commit,
-                BENCH_TREE: str(self.checkout),
-                BENCH_SET: self.set_name,
-                BENCH_RESULT_DIR: result_dir,
-            }
-            if self.skip_build:
-                env[BENCH_SKIP_BUILD] = "true"
+            try:
+                pr = f" pr={self.pr}" if self.pr is not None else ""
+                self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}")
+                with self._stage(log, "checkout") as info:
+                    commit = self._checkout_commit(log)
+                    config = Config.load(self.checkout / "bench.toml")
+                    info["sha"] = commit
+                env = {
+                    **os.environ,
+                    BENCH_SHA: commit,
+                    BENCH_TREE: str(self.checkout),
+                    BENCH_SET: self.set_name,
+                    BENCH_RESULT_DIR: result_dir,
+                }
+                if self.skip_build:
+                    env[BENCH_SKIP_BUILD] = "true"
 
-            with self._stage(log, "precondition"):
-                self._run_hook(config.hooks["precondition"], env, BenchFailure, "precondition", log)
+                with self._stage(log, "precondition"):
+                    self._run_hook(
+                        config.hooks["precondition"], env, BenchFailure, "precondition", log
+                    )
 
-            candidate_args = []
-            if not self.skip_build:
-                with self._stage(log, "build"):
-                    self._run_hook(config.hooks["build"], env, CandidateFailure, "build", log)
-                with self._stage(log, "bundle"):
-                    self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle", log)
-                with self._stage(log, "host_suite"):
-                    self._run_suite("host_suite", config.host_suite, env, [], log)
-                candidate_args = [BENCH_CANDIDATE_OPTION, commit]
-            else:
-                for name in ("build", "bundle", "host_suite"):
-                    self._mark(log, f"stage {name} skipped")
+                candidate_args = []
+                if not self.skip_build:
+                    with self._stage(log, "build"):
+                        self._run_hook(config.hooks["build"], env, CandidateFailure, "build", log)
+                    with self._stage(log, "bundle"):
+                        self._run_hook(config.hooks["bundle"], env, CandidateFailure, "bundle", log)
+                    stage = "host_suite"
+                    with self._stage(log, stage):
+                        self._run_suite(stage, config.host_suite, env, [], log)
+                    candidate_args = [BENCH_CANDIDATE_OPTION, commit]
+                else:
+                    for name in ("build", "bundle", "host_suite"):
+                        self._mark(log, f"stage {name} skipped")
 
-            target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
-            with self._stage(log, "target_suite"):
-                self._run_suite("target_suite", config.target_suite, env, target_args, log)
-        except BaseException as exc:
-            if post is not None and isinstance(exc, CandidateFailure):
-                self._post(log, post, exc)
-            self._mark(log, f"run {'failed' if isinstance(exc, CandidateFailure) else 'error'}")
-            raise
-        else:
+                target_args = ["--lg-env", lg_env, *candidate_args, *pytest_args]
+                stage = "target_suite"
+                with self._stage(log, stage):
+                    self._run_suite(stage, config.target_suite, env, target_args, log)
+            except CandidateFailure as failure:
+                if post is not None:
+                    self._post(log, post, failure)
+                outcome = "failed"
+                raise
             if post is not None:
                 self._post(log, post, None)
-            self._mark(log, "run passed")
+            outcome = "passed"
         finally:
+            self._mark(log, f"run {outcome}")
             log.close()
 
     def _post(self, log, post, failure):
-        """Call `post(failure)` inside the `posted` stage.
-
-        Raises:
-            BaseException: Whatever `post` raised, after a `run error` line.
-        """
-        try:
-            with self._stage(log, "posted"):
-                post(failure)
-        except BaseException:
-            self._mark(log, "run error")
-            raise
+        """Call `post(failure)` inside the `posted` stage."""
+        with self._stage(log, "posted"):
+            post(failure)
 
     def _open_log(self, result_dir):
         """Create `result_dir/<stamp>/bench.log`, retrying with `-2`, `-3` on a collision.
@@ -167,7 +165,6 @@ class BenchTest:
     def _mark(self, log, text):
         """Append one `bench: <iso> <text>` line, a leading newline first if the log doesn't
         already end in one."""
-        log.flush()
         write_mark(log.fileno(), text)
 
     @contextmanager
