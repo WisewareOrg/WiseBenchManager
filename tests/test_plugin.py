@@ -110,3 +110,28 @@ def test_bench_candidate_reads_the_command_line_option(pytester, monkeypatch):
     """)
     result = pytester.runpytest("--bench-candidate", "deadbeef")
     result.assert_outcomes(passed=1)
+
+
+def test_a_plain_run_records_under_a_stamp_folder_and_prints_no_bench_line(pytester, monkeypatch):
+    """With BENCH_RECORD_DIR unset, records land in records/<stamp>/ and no `bench:` line prints."""
+    monkeypatch.delenv("BENCH_RECORD_DIR", raising=False)
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile("def test_pass():\n    assert True\n")
+    result = pytester.runpytest("-s")
+    result.assert_outcomes(passed=1)
+    (stamp_dir,) = Path("records").iterdir()
+    assert (stamp_dir / "report.jsonl").is_file()
+    assert (stamp_dir / "run.json").is_file()
+    assert not any(line.startswith("bench:") for line in result.outlines)
+
+
+def test_record_dir_receives_the_records_directly_with_no_stamp_folder(pytester, monkeypatch):
+    """With BENCH_RECORD_DIR set, report.jsonl and run.json land directly in it."""
+    record_dir = pytester.path / "direct"
+    monkeypatch.setenv("BENCH_RECORD_DIR", str(record_dir))
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    pytester.makepyfile("def test_pass():\n    assert True\n")
+    result = pytester.runpytest()
+    result.assert_outcomes(passed=1)
+    assert sorted(p.name for p in record_dir.iterdir()) == ["report.jsonl", "run.json"]
+    assert not Path("records").exists()

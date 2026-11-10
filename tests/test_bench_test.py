@@ -180,6 +180,21 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     assert target_env["BENCH_SHA"] == "deadbeef"
 
 
+def test_each_suite_gets_its_own_record_dir_inside_the_run_folder(monkeypatch, tmp_path):
+    """Each suite's BENCH_RECORD_DIR is its stage's folder inside the run folder, and no hook's."""
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    calls = _stub_subprocess(monkeypatch)
+    _write_bench_toml(tmp_path)
+
+    bench_test.BenchTest(tmp_path, "HEAD", None).run("env.yaml", [])
+
+    run_dir = next((tmp_path / "records").rglob("bench.log")).parent.resolve()
+    assert calls[3][1].get("BENCH_RECORD_DIR") is None  # precondition
+    assert calls[6][1]["BENCH_RECORD_DIR"] == str(run_dir / "host_suite")
+    assert calls[7][1]["BENCH_RECORD_DIR"] == str(run_dir / "target_suite")
+
+
 def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path):
     """skip_build skips build, bundle and the host suite, and passes no --bench-candidate."""
     monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
@@ -217,8 +232,11 @@ def test_a_real_pytest_subprocess_clears_addopts(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text(ini)
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench._run_dir = tmp_path / "run"
     with open(tmp_path / "bench.log", "w") as log:
-        bench._run_suite("suite", {**os.environ}, [], log)  # no raise means the suite passed
+        bench._run_suite(
+            "suite_stage", "suite", {**os.environ}, [], log
+        )  # no raise means the suite passed
 
 
 def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monkeypatch):
@@ -226,11 +244,12 @@ def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monk
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     _write_suite(tmp_path, "suite", passing=True)
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench._run_dir = tmp_path / "run"
     with (
         open(tmp_path / "bench.log", "w") as log,
         pytest.raises(bench_test.BenchFailure, match="pytest exited"),
     ):
-        bench._run_suite("suite", {**os.environ}, ["--no-such-flag"], log)
+        bench._run_suite("suite_stage", "suite", {**os.environ}, ["--no-such-flag"], log)
 
 
 def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_path, monkeypatch):
@@ -247,11 +266,12 @@ def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_pa
         "    pass\n"
     )
     bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench._run_dir = tmp_path / "run"
     with (
         open(tmp_path / "bench.log", "w") as log,
         pytest.raises(bench_test.BenchFailure, match="pytest exited"),
     ):
-        bench._run_suite("suite", {**os.environ}, [], log)
+        bench._run_suite("suite_stage", "suite", {**os.environ}, [], log)
 
 
 def test_hook_output_and_every_marker_land_in_bench_log_in_order(monkeypatch, tmp_path, capsys):
@@ -338,3 +358,23 @@ def test_a_keyboardinterrupt_during_a_hook_is_an_error_and_reraises(monkeypatch,
     lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
     assert any(line.endswith("stage precondition error reason=KeyboardInterrupt") for line in lines)
     assert lines[-1].endswith("run error")
+
+
+def test_suite_records_land_in_the_run_folder_and_nowhere_else(monkeypatch, tmp_path):
+    """Both suites' report.jsonl and run.json land in the run folder, with no sibling folders."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=60))
+    monkeypatch.chdir(tmp_path)
+    _repo_with_one_commit(tmp_path)
+    _write_bench_toml(tmp_path)
+    _write_suite(tmp_path, "host_suite", passing=True)
+    _write_suite(tmp_path, "target_suite", passing=True)
+    lg_env = _write_lg_env(tmp_path)
+
+    bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [])
+
+    run_dir = next((tmp_path / "records").rglob("bench.log")).parent
+    for stage in ("host_suite", "target_suite"):
+        assert (run_dir / stage / "report.jsonl").is_file()
+        assert (run_dir / stage / "run.json").is_file()
+    assert [p.name for p in (tmp_path / "records").iterdir()] == [run_dir.name]
+    assert sorted(p.name for p in run_dir.iterdir()) == ["bench.log", "host_suite", "target_suite"]
