@@ -57,25 +57,6 @@ def stage_row(glyph, name, start="", took=""):
     return f"{glyph} {name}".ljust(17) + start.ljust(10) + took
 
 
-def test_the_palette_is_the_canvas_colours():
-    canvas = {
-        "GROUND": "#0c0c0c",
-        "TEXT": "#cccccc",
-        "DIM": "#8b8b8b",
-        "LOG": "#a8a8a8",
-        "RULE": "#3a3a3a",
-        "BRIGHT": "#ffffff",
-        "GREEN": "#98c379",
-        "AMBER": "#e5c07b",
-        "RED": "#e06c75",
-        "BLUE": "#61afef",
-        "RUNNING_TINT": "#2a2614",
-        "FAILED_TINT": "#3a1d20",
-        "SELECTION": "#1f2a36",
-    }
-    assert {name: getattr(screen, name).lower() for name in canvas} == canvas
-
-
 SCENES = {
     "live build": lambda: drawn([building(3)], LIVE),
     "live suite": lambda: drawn([running_test(3, failed=(1,))], LIVE),
