@@ -1,0 +1,32 @@
+bench: 2026-11-04T23:33:28+00:00 run started kind=run ref=main
+bench: 2026-11-04T23:33:28+00:00 stage build started
+2026-11-04 18:34:15 - INFO     - NOTE: Executing Tasks
+2026-11-04 18:34:15 - INFO     - NOTE: Running setscene task 3615 of 3615 (/work/build/../sources/poky/meta/recipes-core/glibc/glibc_2.39.bb:do_packagedata_setscene)
+2026-11-04 18:34:16 - INFO     - NOTE: recipe glibc-2.39+git-r1: task do_packagedata_setscene: Started
+2026-11-04 18:34:16 - INFO     - NOTE: recipe glibc-2.39+git-r1: task do_packagedata_setscene: Succeeded
+2026-11-04 18:34:17 - INFO     - NOTE: Running task 965 of 7291 (/work/build/../sources/poky/meta/recipes-devtools/gcc/libgcc_13.5.bb:do_package)
+2026-11-04 18:34:17 - INFO     - NOTE: Running task 1053 of 7291 (/work/build/../sources/poky/meta/recipes-core/glibc/glibc_2.39.bb:do_create_spdx)
+2026-11-04 18:34:18 - INFO     - NOTE: recipe libgcc-13.5.0-r0: task do_package: Started
+2026-11-04 18:34:18 - INFO     - NOTE: recipe glibc-2.39+git-r1: task do_create_spdx: Started
+2026-11-04 18:34:18 - INFO     - NOTE: Running task 1375 of 7291 (/work/build/../sources/poky/meta/recipes-core/glib-2.0/glib-2.0_2.78.6.bb:do_install)
+2026-11-04 18:34:18 - INFO     - NOTE: Running task 1386 of 7291 (/work/build/../sources/poky/meta/recipes-devtools/python/python3_3.12.16.bb:do_compile)
+2026-11-04 18:34:18 - INFO     - NOTE: recipe python3-3.12.16-r0: task do_compile: Started
+2026-11-04 18:34:18 - INFO     - NOTE: Running task 1624 of 7291 (/work/build/../sources/poky/meta/recipes-graphics/fontconfig/fontconfig_2.15.0.bb:do_install)
+2026-11-04 18:34:19 - INFO     - NOTE: recipe glib-2.0-1_2.78.6-r0: task do_install: Started
+2026-11-04 18:34:19 - INFO     - NOTE: Running task 1686 of 7291 (/work/build/../sources/poky/meta/recipes-extended/shadow/shadow_4.14.2.bb:do_compile)
+2026-11-04 18:34:19 - INFO     - NOTE: recipe fontconfig-2.15.0-r0: task do_install: Started
+2026-11-04 18:34:19 - INFO     - NOTE: recipe shadow-4.14.2-r0: task do_compile: Started
+2026-11-04 18:34:34 - INFO     - NOTE: recipe libgcc-13.5.0-r0: task do_package: Succeeded
+2026-11-04 18:34:34 - INFO     - NOTE: Running task 1687 of 7291 (/work/build/../sources/poky/meta/recipes-devtools/gcc/libgcc_13.5.bb:do_packagedata)
+2026-11-04 18:34:34 - INFO     - NOTE: recipe libgcc-13.5.0-r0: task do_packagedata: Started
+2026-11-04 18:34:35 - INFO     - NOTE: recipe libgcc-13.5.0-r0: task do_packagedata: Succeeded
+2026-11-04 18:34:35 - INFO     - NOTE: recipe fontconfig-2.15.0-r0: task do_install: Succeeded
+2026-11-04 18:34:35 - INFO     - NOTE: Running task 1688 of 7291 (/work/build/../sources/poky/meta/recipes-devtools/gcc/gcc-runtime_13.5.bb:do_package)
+2026-11-04 18:34:35 - INFO     - NOTE: Running task 1724 of 7291 (/work/build/../sources/poky/meta/recipes-graphics/fontconfig/fontconfig_2.15.0.bb:do_populate_sysroot)
+2026-11-04 18:34:36 - INFO     - NOTE: recipe fontconfig-2.15.0-r0: task do_populate_sysroot: Started
+2026-11-04 18:34:36 - INFO     - NOTE: recipe gcc-runtime-13.5.0-r0: task do_package: Started
+2026-11-04 18:34:38 - INFO     - NOTE: recipe fontconfig-2.15.0-r0: task do_populate_sysroot: Succeeded
+2026-11-04 18:34:38 - INFO     - NOTE: Running task 1739 of 7291 (/work/build/../sources/poky/meta/recipes-graphics/xorg-lib/libice_1.1.1.bb:do_compile)
+2026-11-04 18:34:39 - INFO     - NOTE: recipe libice-1_1.1.1-r0: task do_compile: Started
+2026-11-04 18:34:45 - INFO     - NOTE: recipe glib-2.0-1_2.78.6-r0: task do_install: Succeeded
+2026-11-04 18:34:45 - INFO     - NOTE: Running task 1740 of 7291 (/work/build/../sources/poky/meta/recipes-core/glib-2.0/glib-2.0_2.78.6.bb:do_populate_sysroot)

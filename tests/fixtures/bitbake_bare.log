@@ -1,0 +1,10 @@
+NOTE: recipe update-bundle-1.0-r0: task do_prepare_recipe_sysroot: Started
+NOTE: recipe update-bundle-1.0-r0: task do_prepare_recipe_sysroot: Succeeded
+NOTE: Running task 7305 of 7308 (/work/build/../sources/meta-autonomos/meta-autonomos-core/recipes-core/bundles/update-bundle.bb:do_configure)
+NOTE: recipe update-bundle-1.0-r0: task do_configure: Started
+NOTE: recipe update-bundle-1.0-r0: task do_configure: Succeeded
+NOTE: Running task 7306 of 7308 (/work/build/../sources/meta-autonomos/meta-autonomos-core/recipes-core/bundles/update-bundle.bb:do_bundle)
+NOTE: recipe update-bundle-1.0-r0: task do_bundle: Started
+NOTE: recipe update-bundle-1.0-r0: task do_bundle: Succeeded
+NOTE: Running task 7307 of 7308 (/work/build/../sources/meta-autonomos/meta-autonomos-core/recipes-core/bundles/update-bundle.bb:do_deploy)
+NOTE: recipe update-bundle-1.0-r0: task do_deploy: Started

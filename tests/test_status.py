@@ -407,6 +407,32 @@ def test_build_progress_reads_the_last_task_count_and_the_tasks_still_running():
     }
 
 
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_real_bitbake_excerpts_parse_into_build_progress():
+    """A kas-prefixed excerpt of a real build and a bare excerpt of a real `kas shell` bundle:
+    the count of the last `Running task`, the tasks still open, the recipe without -PV-PR, a
+    host-local start for the prefixed lines and None for the bare ones."""
+    kas = stage_of(parse((FIXTURES / "bitbake_build.log").read_text()), "build").progress
+    assert (kas.done, kas.total) == (1740, 7291)
+    started = datetime(2026, 11, 4, 18, 34, 18).astimezone()
+    assert {(t.recipe, t.task) for t in kas.tasks} == {
+        ("glibc", "do_create_spdx"),
+        ("python3", "do_compile"),
+        ("shadow", "do_compile"),
+        ("gcc-runtime", "do_package"),
+        ("libice", "do_compile"),
+    }
+    assert {t.recipe: t.started for t in kas.tasks}["glibc"] == started
+
+    bare = build(*(FIXTURES / "bitbake_bare.log").read_text().splitlines())
+    assert (bare.done, bare.total) == (7307, 7308)
+    assert [(t.recipe, t.task, t.started) for t in bare.tasks] == [
+        ("update-bundle", "do_deploy", None)
+    ]
+
+
 def test_build_progress_is_none_without_a_running_task_line_or_outside_the_build_stage():
     assert build("NOTE: recipe x-1-r0: task do_x: Started") is None
     assert build("NOTE: Running task 1 of 2 (/l/a.bb:do_x)", stage="precondition") is None

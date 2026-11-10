@@ -16,7 +16,7 @@ from status_helpers import (
     t,
 )
 
-from wisebench import bench_state, runlog
+from wisebench import bench_state, runlog, status
 from wisebench.screen import LEFT, RIGHT
 
 pytestmark = pytest.mark.usefixtures("local_zone")
@@ -482,3 +482,9 @@ def test_every_screen_the_module_draws_is_exactly_the_requested_width():
     for tab in ("run", "history", "help"):
         for size in ((24, 80), (30, 100), (24, 200)):
             draw([run(), run(record="20261109T030715Z")], LIVE, size=size, tab=tab)
+
+
+def test_the_selection_the_running_tint_the_failed_tint_and_no_tint_have_four_backgrounds():
+    styles = [frozenset({"running_tint"}), frozenset({"failed_tint"}), frozenset({"selection"})]
+    backgrounds = [status._colours(style)[1] for style in [*styles, frozenset()]]
+    assert len(set(backgrounds)) == 4
