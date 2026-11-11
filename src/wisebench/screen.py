@@ -382,7 +382,10 @@ def _plain_head(surface, frame):
 
 
 def _log_window(surface, frame, top):
-    """The log rows the frame scrolled to, from row `top`, the cursor's row selected in the log."""
+    """The log rows the frame scrolled to, from row `top`.
+
+    The cursor's row is selected only while the log has focus.
+    """
     cols = frame.layout.cols
     running = _running(frame, frame.stage)
     for offset, row in enumerate(frame.rows[frame.scroll : frame.scroll + frame.room]):
