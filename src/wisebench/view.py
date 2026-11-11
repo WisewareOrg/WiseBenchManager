@@ -243,16 +243,16 @@ def _layout(rows, cols, prompt_open):
     too_small = rows < MIN_ROWS or cols < MIN_COLS
     rule_top, header, rule_bottom = 1, 2, bar - 1
     return Layout(
-        rows,
-        cols,
-        bar,
-        prompt,
-        header + 1,
-        rule_bottom - 1,
-        too_small,
-        rule_top,
-        header,
-        rule_bottom,
+        rows=rows,
+        cols=cols,
+        bar=bar,
+        prompt=prompt,
+        pane_top=header + 1,
+        pane_bottom=rule_bottom - 1,
+        too_small=too_small,
+        rule_top=rule_top,
+        header=header,
+        rule_bottom=rule_bottom,
     )
 
 
