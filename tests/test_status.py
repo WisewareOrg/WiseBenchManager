@@ -441,8 +441,42 @@ def test_real_bitbake_excerpts_parse_into_build_progress():
     ]
 
 
-def test_build_progress_is_none_without_a_running_task_line_or_outside_the_build_stage():
-    assert build("NOTE: recipe x-1-r0: task do_x: Started") is None
+def test_a_started_build_has_progress_with_zero_counts_before_any_count_line():
+    progress = build("NOTE: recipe x-1-r0: task do_x: Started")
+    assert (progress.done, progress.total) == (0, 0)
+    assert [(t.recipe, t.task) for t in progress.tasks] == [("x", "do_x")]
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        (["NOTE: Running setscene task 3600 of 3615 (/l/a.bb:do_fetch_setscene)"], (3600, 3615)),
+        (
+            [
+                "NOTE: Running setscene task 3600 of 3615 (/l/a.bb:do_fetch_setscene)",
+                "NOTE: Running task 7 of 10 (/l/b.bb:do_compile)",
+            ],
+            (7, 10),
+        ),
+        (
+            [
+                "NOTE: Running task 7 of 10 (/l/b.bb:do_compile)",
+                "NOTE: Running setscene task 3600 of 3615 (/l/a.bb:do_fetch_setscene)",
+            ],
+            (3600, 3615),
+        ),
+    ],
+    ids=["setscene", "task after setscene", "the last count line of either kind wins"],
+)
+def test_the_counts_are_those_of_the_last_count_line_of_either_kind(lines, expected):
+    progress = build(*lines)
+    assert (progress.done, progress.total) == expected
+
+
+def test_a_build_not_started_or_skipped_or_outside_the_build_stage_has_no_progress():
+    assert stage_of(parse(log(TEST_STARTED)), "build").progress is None
+    skipped = parse(log(TEST_STARTED, mark("stage build skipped", 0, 5)))
+    assert stage_of(skipped, "build").progress is None
     assert build("NOTE: Running task 1 of 2 (/l/a.bb:do_x)", stage="precondition") is None
 
 

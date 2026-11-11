@@ -447,9 +447,49 @@ def parsed_build(*lines):
 
 
 def build_head(*lines):
-    """The grid of a live run parsed from `lines`, and the row of its `build` head line."""
-    grid, _ = drawn([parsed_build(*lines)], LIVE)
-    return grid, grid.find(r"^.{37}build\b")[0]
+    """The grid of a live run parsed from `lines`, and the row its stage's head starts on."""
+    grid, frame = drawn([parsed_build(*lines)], LIVE)
+    return grid, frame.layout.pane_top
+
+
+KAS_INFO = "2026-11-10 03:00:02 - INFO     - NOTE: "
+COUNTED = "NOTE: Running setscene task 1000 of 3300 (/l/a.bb:do_fetch_setscene)"
+HEADS = {
+    "nothing yet": (["NOTE: Executing"], "starting", 0),
+    "cache loaded": (["Loading cache...done."], "parsing recipes", 0),
+    "cache loaded, kas prefix": ([KAS_INFO + "Loading cache...done."], "parsing recipes", 0),
+    "recipes parsed": (
+        ["Loading cache...done.", "Parsing recipes...done."],
+        "initialising tasks",
+        0,
+    ),
+    "the last phase line wins": (
+        ["Parsing recipes...done.", "Loading cache...done."],
+        "parsing recipes",
+        0,
+    ),
+    "a setscene count replaces the phase": (
+        ["Parsing recipes...done.", COUNTED],
+        "setscene 1000 of 3300  30%",
+        10,
+    ),
+    "a task count replaces the phase": (
+        ["Loading cache...done.", "NOTE: Running task 5 of 10 (/l/b.bb:do_compile)"],
+        "task 5 of 10  50%",
+        16,
+    ),
+}
+
+
+@pytest.mark.parametrize(("lines", "text", "filled"), HEADS.values(), ids=HEADS)
+def test_a_builds_head_is_its_phase_text_until_the_first_count_over_a_bar_of_33_ticks(
+    lines, text, filled
+):
+    grid, y = build_head(*lines)
+    assert grid.text(y)[37:].rstrip() == f"build  {text}"
+    bar = grid.cells[y + 1][37:70]
+    assert {cell[0] for cell in bar} == {"▉"}
+    assert [cell[1] for cell in bar].count(screen.RULE) == 33 - filled
 
 
 def test_a_running_now_row_widens_its_recipe_and_task_columns_to_the_longest_name_plus_two():
