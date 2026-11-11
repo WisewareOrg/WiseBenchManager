@@ -2,6 +2,7 @@
 
 import curses
 import fcntl
+import math
 import os
 import select
 import shutil
@@ -149,7 +150,7 @@ def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_ex
         screen.FAILED_TINT, screen.SELECTION,
     ]  # fmt: skip
     expected = [
-        (16 + position, *(round(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5)))
+        (16 + position, *(math.ceil(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5)))
         for position, hexed in enumerate(order)
     ]
     assert touched == expected
@@ -166,6 +167,17 @@ def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkey
     assert attribute(fake, "1 Run") & curses.A_REVERSE
     assert attribute(fake, "IDLE") & curses.A_REVERSE
     assert not attribute(fake, "3 History") & curses.A_REVERSE
+
+
+def test_below_256_colours_a_selected_tinted_row_is_reverse_video_and_the_ground_is_not(
+    monkeypatch, tmp_path
+):
+    terminal(monkeypatch, tmp_path, 8)
+    attributes = status._attributes()
+
+    for filled in (screen.FAILED_TINT, screen.RUNNING_TINT, screen.SELECTION):
+        assert attributes(screen.TEXT, filled, False) & curses.A_REVERSE
+    assert not attributes(screen.TEXT, None, False) & curses.A_REVERSE
 
 
 def test_a_surface_write_is_clipped_at_the_right_edge_and_dropped_past_it():
