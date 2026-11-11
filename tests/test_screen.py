@@ -494,10 +494,14 @@ def test_a_builds_head_is_its_phase_text_until_the_first_count_over_a_bar_of_33_
 
 def test_a_running_now_row_widens_its_recipe_and_task_columns_to_the_longest_name_plus_two():
     stamp = "2026-11-10 03:11:00 - INFO     - NOTE: "
-    grid, _ = build_head(
+    run = parsed_build(
         stamp + "Running task 5 of 9 (/l/a.bb:do_rootfs)",
         stamp + "recipe core-image-base-1.0-r0: task do_rootfs: Started",
         stamp + "recipe zlib-1.3-r0: task do_package_write_ipk: Started",
     )
+    size = (SIZE[0], 120)
+    frame = view.resolve(view.State(), view.Snapshot([run], LIVE, NOW, DIRECTORY), *size)
+    grid = Grid(*size)
+    screen.draw(grid, frame)
     grid.find(r"^.{37}" + re.escape(f"{'core-image-base':<17}{'do_rootfs':<22}") + r"\d+m\d\ds")
     grid.find(r"^.{37}" + re.escape(f"{'zlib':<17}{'do_package_write_ipk':<22}") + r"\d+m\d\ds")
