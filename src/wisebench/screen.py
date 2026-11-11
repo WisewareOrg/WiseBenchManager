@@ -24,6 +24,7 @@ SELECTION = "#1f2a36"
 _STAGES_WIDTH, _DIVIDER, _PANE = 34, 35, 37
 _START_COL, _TOOK_COL = 17, 27
 _BAR_CELLS = 33
+_NAME_MIN = 14
 _KEY_WIDTH, _HELP_GAP = 7, 3
 _BODY_INDENT = " " * 6
 _HINT = "Enter into the log   za fold   Esc back to stages"
@@ -385,21 +386,19 @@ def _plain_head(surface, frame):
 def _running_tasks(surface, frame, top):
     """The `running now` rows from row `top`: recipe, task and elapsed time in columns.
 
-    Each name column is its longest name plus two, at least 14. The elapsed time always shows
-    whole: when the columns would overflow the pane, the excess comes off the recipe column down
-    to 14, then off the task column down to 14, and a name is cut to its column minus two.
+    Each name column is its longest name plus two, at least `_NAME_MIN`. The elapsed time always
+    shows whole: when the columns would overflow the pane, the excess comes off the recipe column
+    down to `_NAME_MIN`, then off the task column down to it, and a name is cut to its column
+    minus two.
     """
     tooks = [_duration(frame.now - t.started) if t.started else DASH for t in frame.tasks]
-    widths = [
-        max(14, max((len(name) for name in names), default=0) + 2)
-        for names in ([t.recipe for t in frame.tasks], [t.task for t in frame.tasks])
-    ]
-    excess = sum(widths) + max(map(len, tooks), default=0) - (frame.layout.cols - _PANE)
-    for column in (0, 1):
-        cut = min(max(excess, 0), widths[column] - 14)
-        widths[column] -= cut
-        excess -= cut
-    recipe_width, task_width = widths
+    recipe_width = max(_NAME_MIN, max((len(t.recipe) for t in frame.tasks), default=0) + 2)
+    task_width = max(_NAME_MIN, max((len(t.task) for t in frame.tasks), default=0) + 2)
+    took_width = max(map(len, tooks), default=0)
+    excess = recipe_width + task_width + took_width - (frame.layout.cols - _PANE)
+    cut = min(max(excess, 0), recipe_width - _NAME_MIN)
+    recipe_width -= cut
+    task_width -= min(max(excess - cut, 0), task_width - _NAME_MIN)
     for offset, (task, took) in enumerate(zip(frame.tasks, tooks, strict=True)):
         names = f"{task.recipe[: recipe_width - 2]:<{recipe_width}}"
         names += f"{task.task[: task_width - 2]:<{task_width}}"
