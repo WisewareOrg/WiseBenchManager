@@ -1,6 +1,7 @@
 """Isolates every test's HOME, and supplies the autospec `BenchTest` the runner tests share."""
 
 import subprocess
+import time
 from unittest.mock import create_autospec
 
 import pytest
@@ -65,3 +66,17 @@ def timer_disable(monkeypatch):
 
     monkeypatch.setattr(bench_run.subprocess, "run", run)
     return units
+
+
+@pytest.fixture
+def local_zone(monkeypatch):
+    """Pin the process time zone to UTC+3, so the local clock text a screen shows is fixed.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores the environment at teardown.
+    """
+    monkeypatch.setenv("TZ", "ABC-3")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()

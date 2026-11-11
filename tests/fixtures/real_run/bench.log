@@ -1,0 +1,452 @@
+bench: 2026-11-10T03:07:15+00:00 run started kind=test ref=39e00d73b0cded0356bd0ea54f81eac78f8151ae
+bench: 2026-11-10T03:07:15+00:00 stage checkout started
+HEAD is now at 39e00d7 chore(deps): lock file maintenance (#311)
+bench: 2026-11-10T03:07:15+00:00 stage checkout passed sha=39e00d73b0cded0356bd0ea54f81eac78f8151ae
+bench: 2026-11-10T03:07:15+00:00 stage precondition started
+bench: 2026-11-10T03:07:15+00:00 stage precondition passed
+bench: 2026-11-10T03:07:15+00:00 stage build started
+tools/kas-run.sh build kiosk-zero-w.yaml
+build rev unchanged: 39e00d73b0cded0356bd0ea54f81eac78f8151ae
+2026-11-09 22:07:17 - INFO     - kas 5.4 started on Debian GNU/Linux trixie
+2026-11-09 22:07:18 - INFO     - Using /repo as root for repository meta-wisekiosk
+2026-11-09 22:07:18 - INFO     - Repository meta-rauc already contains d63878f20eba7a85ecf53566e7a3377e78bb46ac as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-autonomos already contains 1fd4eb55c2ef0902176986bb0dea90e7c34d02bf as commit
+2026-11-09 22:07:18 - INFO     - Repository poky already contains 9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184 as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-openembedded already contains 2db6aece32c7f8ebf6015b468e1b4e21de072e3b as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-arm already contains 0a4b911d9fd63ab29c4532a907fae3282dbdcfe4 as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-virtualization already contains 6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819 as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-raspberrypi already contains 018d44467c4f09eb63f8ea5e86e85d755250cf89 as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-rauc-community already contains f037f3a81ef64d6ef99218b7252a1736c3867a03 as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-lts-mixins-go already contains 36dd94f649fb6ee137273e41ff5d7ea84701c956 as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-lts-mixins already contains a44882db02a0ed0f149371831bfbe067665eb42b as commit
+2026-11-09 22:07:18 - INFO     - Repository meta-rauc checked out to d63878f20eba7a85ecf53566e7a3377e78bb46ac
+2026-11-09 22:07:18 - INFO     - Repository meta-autonomos checked out to 1fd4eb55c2ef0902176986bb0dea90e7c34d02bf
+2026-11-09 22:07:18 - INFO     - Repository poky checked out to 9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184
+2026-11-09 22:07:19 - INFO     - Repository meta-openembedded checked out to 2db6aece32c7f8ebf6015b468e1b4e21de072e3b
+2026-11-09 22:07:19 - INFO     - Repository meta-arm checked out to 0a4b911d9fd63ab29c4532a907fae3282dbdcfe4
+2026-11-09 22:07:19 - INFO     - Repository meta-virtualization checked out to 6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819
+2026-11-09 22:07:19 - INFO     - Repository meta-lts-mixins-go checked out to 36dd94f649fb6ee137273e41ff5d7ea84701c956
+2026-11-09 22:07:19 - INFO     - Repository meta-raspberrypi checked out to 018d44467c4f09eb63f8ea5e86e85d755250cf89
+2026-11-09 22:07:19 - INFO     - Repository meta-lts-mixins checked out to a44882db02a0ed0f149371831bfbe067665eb42b
+2026-11-09 22:07:19 - INFO     - Repository meta-rauc-community checked out to f037f3a81ef64d6ef99218b7252a1736c3867a03
+2026-11-09 22:07:19 - INFO     - Patch applied. (patch path: /repo/patches/meta-autonomos/0001-distro-make-graphics-strip-conditional.patch, repo: meta-autonomos, patch entry: 01-graphics)
+2026-11-09 22:07:19 - INFO     - Patch applied. (patch path: /repo/patches/meta-autonomos/0002-wpa-supplicant-stop-baking-credentials.patch, repo: meta-autonomos, patch entry: 02-wpa)
+2026-11-09 22:07:21 - INFO     - WARNING: You have included the meta-virtualization layer, but 'virtualization' has not been enabled in your DISTRO_FEATURES. Some bbappend files may not take effect. See the meta-virtualization README for details on enabling virtualization support.
+2026-11-09 22:07:21 - INFO     - WARNING: Host distribution "debian-13" has not been validated with this version of the build system; you may possibly experience unexpected failures. It is recommended that you use a tested distribution.
+2026-11-09 22:07:26 - INFO     - Loading cache...done.
+2026-11-09 22:07:34 - INFO     - Loaded 5018 entries from dependency cache.
+2026-11-09 22:07:37 - INFO     - Parsing recipes...done.
+2026-11-09 22:07:37 - INFO     - Parsing of 3047 .bb files complete (3044 cached, 3 parsed). 5018 targets, 520 skipped, 0 masked, 0 errors.
+2026-11-09 22:07:37 - INFO     - NOTE: Resolving any missing task queue dependencies
+2026-11-09 22:07:43 - INFO     - 
+2026-11-09 22:07:43 - INFO     - Build Configuration:
+2026-11-09 22:07:43 - INFO     - BB_VERSION           = "2.8.1"
+2026-11-09 22:07:43 - INFO     - BUILD_SYS            = "x86_64-linux"
+2026-11-09 22:07:43 - INFO     - NATIVELSBSTRING      = "universal"
+2026-11-09 22:07:43 - INFO     - TARGET_SYS           = "arm-poky-linux-gnueabi"
+2026-11-09 22:07:43 - INFO     - MACHINE              = "raspberrypi0-wifi"
+2026-11-09 22:07:43 - INFO     - DISTRO               = "autonomos"
+2026-11-09 22:07:43 - INFO     - DISTRO_VERSION       = "0.1"
+2026-11-09 22:07:43 - INFO     - TUNE_FEATURES        = "arm thumb vfp arm1176jzfs callconvention-hard"
+2026-11-09 22:07:43 - INFO     - TARGET_FPU           = "hard"
+2026-11-09 22:07:43 - INFO     - meta-arm
+2026-11-09 22:07:43 - INFO     - meta-arm-toolchain   = "scarthgap:0a4b911d9fd63ab29c4532a907fae3282dbdcfe4"
+2026-11-09 22:07:43 - INFO     - meta-autonomos-core
+2026-11-09 22:07:43 - INFO     - meta-autonomos-raspberrypi = "patched-1fd4eb55c2ef0902176986bb0dea90e7c34d02bf:2398fc3463d8b34508564dc1865fd1824e0cba63"
+2026-11-09 22:07:43 - INFO     - meta-lts-mixins      = "scarthgap/u-boot:a44882db02a0ed0f149371831bfbe067665eb42b"
+2026-11-09 22:07:43 - INFO     - meta-lts-mixins-go   = "scarthgap/go:36dd94f649fb6ee137273e41ff5d7ea84701c956"
+2026-11-09 22:07:43 - INFO     - meta-filesystems
+2026-11-09 22:07:43 - INFO     - meta-networking
+2026-11-09 22:07:43 - INFO     - meta-oe
+2026-11-09 22:07:43 - INFO     - meta-python          = "scarthgap:2db6aece32c7f8ebf6015b468e1b4e21de072e3b"
+2026-11-09 22:07:43 - INFO     - meta-raspberrypi     = "scarthgap:018d44467c4f09eb63f8ea5e86e85d755250cf89"
+2026-11-09 22:07:43 - INFO     - meta-rauc            = "scarthgap:d63878f20eba7a85ecf53566e7a3377e78bb46ac"
+2026-11-09 22:07:43 - INFO     - meta-rauc-raspberrypi = "scarthgap:f037f3a81ef64d6ef99218b7252a1736c3867a03"
+2026-11-09 22:07:43 - INFO     - meta-virtualization  = "scarthgap:6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819"
+2026-11-09 22:07:43 - INFO     - meta-wisekiosk       = "HEAD:39e00d73b0cded0356bd0ea54f81eac78f8151ae"
+2026-11-09 22:07:43 - INFO     - meta
+2026-11-09 22:07:43 - INFO     - meta-poky
+2026-11-09 22:07:43 - INFO     - meta-yocto-bsp       = "scarthgap:9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184"
+2026-11-09 22:07:43 - INFO     - 
+2026-11-09 22:08:03 - INFO     - Initialising tasks...Sstate summary: Wanted 83 Local 83 Mirrors 0 Missed 0 Current 3532 (100% match, 100% complete)
+2026-11-09 22:08:05 - INFO     - done.
+2026-11-09 22:08:05 - INFO     - NOTE: Executing Tasks
+2026-11-09 22:08:13 - INFO     - NOTE: Tasks Summary: Attempted 7291 tasks of which 7291 didn't need to be rerun and all succeeded.
+2026-11-09 22:08:13 - INFO     - NOTE: Writing buildhistory
+2026-11-09 22:08:21 - INFO     - NOTE: Writing buildhistory took: 8 seconds
+2026-11-09 22:08:21 - INFO     - 
+2026-11-09 22:08:21 - INFO     - Summary: There were 2 WARNING messages.
+bench: 2026-11-10T03:08:22+00:00 stage build passed
+bench: 2026-11-10T03:08:22+00:00 stage bundle started
+tools/kas-run.sh shell kiosk-zero-w.yaml -c "bitbake update-bundle"
+build rev unchanged: 39e00d73b0cded0356bd0ea54f81eac78f8151ae
+2026-11-09 22:08:23 - INFO     - kas 5.4 started on Debian GNU/Linux trixie
+2026-11-09 22:08:23 - INFO     - Using /repo as root for repository meta-wisekiosk
+2026-11-09 22:08:23 - INFO     - Repository meta-rauc already contains d63878f20eba7a85ecf53566e7a3377e78bb46ac as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-autonomos already contains 1fd4eb55c2ef0902176986bb0dea90e7c34d02bf as commit
+2026-11-09 22:08:23 - INFO     - Repository poky already contains 9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184 as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-openembedded already contains 2db6aece32c7f8ebf6015b468e1b4e21de072e3b as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-arm already contains 0a4b911d9fd63ab29c4532a907fae3282dbdcfe4 as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-virtualization already contains 6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819 as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-lts-mixins-go already contains 36dd94f649fb6ee137273e41ff5d7ea84701c956 as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-raspberrypi already contains 018d44467c4f09eb63f8ea5e86e85d755250cf89 as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-lts-mixins already contains a44882db02a0ed0f149371831bfbe067665eb42b as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-rauc-community already contains f037f3a81ef64d6ef99218b7252a1736c3867a03 as commit
+2026-11-09 22:08:23 - INFO     - Repository meta-rauc checked out to d63878f20eba7a85ecf53566e7a3377e78bb46ac
+2026-11-09 22:08:23 - INFO     - Repository meta-autonomos checked out to 1fd4eb55c2ef0902176986bb0dea90e7c34d02bf
+2026-11-09 22:08:23 - INFO     - Repository poky checked out to 9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184
+2026-11-09 22:08:23 - INFO     - Repository meta-openembedded checked out to 2db6aece32c7f8ebf6015b468e1b4e21de072e3b
+2026-11-09 22:08:23 - INFO     - Repository meta-arm checked out to 0a4b911d9fd63ab29c4532a907fae3282dbdcfe4
+2026-11-09 22:08:23 - INFO     - Repository meta-virtualization checked out to 6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819
+2026-11-09 22:08:23 - INFO     - Repository meta-lts-mixins-go checked out to 36dd94f649fb6ee137273e41ff5d7ea84701c956
+2026-11-09 22:08:23 - INFO     - Repository meta-raspberrypi checked out to 018d44467c4f09eb63f8ea5e86e85d755250cf89
+2026-11-09 22:08:23 - INFO     - Repository meta-lts-mixins checked out to a44882db02a0ed0f149371831bfbe067665eb42b
+2026-11-09 22:08:23 - INFO     - Repository meta-rauc-community checked out to f037f3a81ef64d6ef99218b7252a1736c3867a03
+2026-11-09 22:08:23 - INFO     - Patch applied. (patch path: /repo/patches/meta-autonomos/0001-distro-make-graphics-strip-conditional.patch, repo: meta-autonomos, patch entry: 01-graphics)
+2026-11-09 22:08:24 - INFO     - Patch applied. (patch path: /repo/patches/meta-autonomos/0002-wpa-supplicant-stop-baking-credentials.patch, repo: meta-autonomos, patch entry: 02-wpa)
+2026-11-09 22:08:24 - INFO     - To start the default build, run: bitbake -c build core-image-base kiosk-bootprof
+WARNING: You have included the meta-virtualization layer, but 'virtualization' has not been enabled in your DISTRO_FEATURES. Some bbappend files may not take effect. See the meta-virtualization README for details on enabling virtualization support.
+WARNING: Host distribution "debian-13" has not been validated with this version of the build system; you may possibly experience unexpected failures. It is recommended that you use a tested distribution.
+Loading cache...done.
+Loaded 5018 entries from dependency cache.
+Parsing recipes...done.
+Parsing of 3047 .bb files complete (3044 cached, 3 parsed). 5018 targets, 520 skipped, 0 masked, 0 errors.
+NOTE: Resolving any missing task queue dependencies
+
+Build Configuration:
+BB_VERSION           = "2.8.1"
+BUILD_SYS            = "x86_64-linux"
+NATIVELSBSTRING      = "universal"
+TARGET_SYS           = "arm-poky-linux-gnueabi"
+MACHINE              = "raspberrypi0-wifi"
+DISTRO               = "autonomos"
+DISTRO_VERSION       = "0.1"
+TUNE_FEATURES        = "arm thumb vfp arm1176jzfs callconvention-hard"
+TARGET_FPU           = "hard"
+meta-arm             
+meta-arm-toolchain   = "scarthgap:0a4b911d9fd63ab29c4532a907fae3282dbdcfe4"
+meta-autonomos-core  
+meta-autonomos-raspberrypi = "patched-1fd4eb55c2ef0902176986bb0dea90e7c34d02bf:2398fc3463d8b34508564dc1865fd1824e0cba63"
+meta-lts-mixins      = "scarthgap/u-boot:a44882db02a0ed0f149371831bfbe067665eb42b"
+meta-lts-mixins-go   = "scarthgap/go:36dd94f649fb6ee137273e41ff5d7ea84701c956"
+meta-filesystems     
+meta-networking      
+meta-oe              
+meta-python          = "scarthgap:2db6aece32c7f8ebf6015b468e1b4e21de072e3b"
+meta-raspberrypi     = "scarthgap:018d44467c4f09eb63f8ea5e86e85d755250cf89"
+meta-rauc            = "scarthgap:d63878f20eba7a85ecf53566e7a3377e78bb46ac"
+meta-rauc-raspberrypi = "scarthgap:f037f3a81ef64d6ef99218b7252a1736c3867a03"
+meta-virtualization  = "scarthgap:6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819"
+meta-wisekiosk       = "HEAD:39e00d73b0cded0356bd0ea54f81eac78f8151ae"
+meta                 
+meta-poky            
+meta-yocto-bsp       = "scarthgap:9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184"
+
+Initialising tasks...Sstate summary: Wanted 83 Local 83 Mirrors 0 Missed 0 Current 3535 (100% match, 100% complete)
+done.
+NOTE: Executing Tasks
+NOTE: Tasks Summary: Attempted 7308 tasks of which 7308 didn't need to be rerun and all succeeded.
+NOTE: Writing buildhistory
+NOTE: Writing buildhistory took: 5 seconds
+
+Summary: There were 2 WARNING messages.
+bench: 2026-11-10T03:09:08+00:00 stage bundle passed
+bench: 2026-11-10T03:09:08+00:00 stage host_suite started
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.2.0, pluggy-1.7.0
+rootdir: /srv/bench
+configfile: pyproject.toml
+plugins: reportlog-1.0.0, labgrid-26.0.1, wisebench-0.7.1.dev33+g8156c98b6
+collected 2 items
+bench: 2026-11-10T03:09:09+00:00 test queued tests/host_suite/test_reproducibility.py::test_reproducibility_gate
+bench: 2026-11-10T03:09:09+00:00 test queued tests/host_suite/test_units.py::test_units_verify_and_are_enabled
+
+tests/host_suite/test_reproducibility.py 
+bench: 2026-11-10T03:09:09+00:00 test started tests/host_suite/test_reproducibility.py::test_reproducibility_gate
+ok    working tree is clean
+ok    HEAD (39e00d73b0cded0356bd0ea54f81eac78f8151ae) is published on origin
+ok    image names HEAD (39e00d73b0cded0356bd0ea54f81eac78f8151ae)
+
+reproducibility gate passed
+.                               [ 50%]
+tests/host_suite/test_units.py 
+bench: 2026-11-10T03:09:11+00:00 test started tests/host_suite/test_units.py::test_units_verify_and_are_enabled
+.                                         [100%]
+
+- generated report log file: /srv/bench/records/20261110T030715Z/host_suite/report.jsonl -
+============================== 2 passed in 13.80s ==============================
+bench: 2026-11-10T03:09:23+00:00 stage host_suite passed
+bench: 2026-11-10T03:09:23+00:00 stage target_suite started
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.2.0, pluggy-1.7.0
+rootdir: /srv/bench
+configfile: pyproject.toml
+plugins: reportlog-1.0.0, labgrid-26.0.1, wisebench-0.7.1.dev33+g8156c98b6
+collected 4 items
+bench: 2026-11-10T03:09:24+00:00 test queued tests/target_suite/test_target_commit.py::test_buildinfo_names_commit
+bench: 2026-11-10T03:09:24+00:00 test queued tests/target_suite/test_wisekiosk.py::test_page_serves
+bench: 2026-11-10T03:09:24+00:00 test queued tests/target_suite/test_wisekiosk.py::test_backend_crash
+bench: 2026-11-10T03:09:24+00:00 test queued tests/target_suite/test_wisekiosk_reaches_out.py::test_instance_reaches_out[/srv/bench/tests/replay/sets/cards4-live/flows.har]
+
+tests/target_suite/test_target_commit.py 
+bench: 2026-11-10T03:09:24+00:00 setup install_candidate started
+tools/kas-run.sh shell kiosk-zero-w.yaml -c "bitbake update-bundle"
+build rev unchanged: 39e00d73b0cded0356bd0ea54f81eac78f8151ae
+2026-11-09 22:09:25 - INFO     - kas 5.4 started on Debian GNU/Linux trixie
+2026-11-09 22:09:25 - INFO     - Using /repo as root for repository meta-wisekiosk
+2026-11-09 22:09:25 - INFO     - Repository meta-rauc already contains d63878f20eba7a85ecf53566e7a3377e78bb46ac as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-autonomos already contains 1fd4eb55c2ef0902176986bb0dea90e7c34d02bf as commit
+2026-11-09 22:09:25 - INFO     - Repository poky already contains 9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184 as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-openembedded already contains 2db6aece32c7f8ebf6015b468e1b4e21de072e3b as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-arm already contains 0a4b911d9fd63ab29c4532a907fae3282dbdcfe4 as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-virtualization already contains 6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819 as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-lts-mixins-go already contains 36dd94f649fb6ee137273e41ff5d7ea84701c956 as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-raspberrypi already contains 018d44467c4f09eb63f8ea5e86e85d755250cf89 as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-lts-mixins already contains a44882db02a0ed0f149371831bfbe067665eb42b as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-rauc-community already contains f037f3a81ef64d6ef99218b7252a1736c3867a03 as commit
+2026-11-09 22:09:25 - INFO     - Repository meta-rauc checked out to d63878f20eba7a85ecf53566e7a3377e78bb46ac
+2026-11-09 22:09:25 - INFO     - Repository meta-autonomos checked out to 1fd4eb55c2ef0902176986bb0dea90e7c34d02bf
+2026-11-09 22:09:25 - INFO     - Repository poky checked out to 9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184
+2026-11-09 22:09:25 - INFO     - Repository meta-openembedded checked out to 2db6aece32c7f8ebf6015b468e1b4e21de072e3b
+2026-11-09 22:09:25 - INFO     - Repository meta-arm checked out to 0a4b911d9fd63ab29c4532a907fae3282dbdcfe4
+2026-11-09 22:09:25 - INFO     - Repository meta-virtualization checked out to 6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819
+2026-11-09 22:09:25 - INFO     - Repository meta-lts-mixins-go checked out to 36dd94f649fb6ee137273e41ff5d7ea84701c956
+2026-11-09 22:09:25 - INFO     - Repository meta-raspberrypi checked out to 018d44467c4f09eb63f8ea5e86e85d755250cf89
+2026-11-09 22:09:25 - INFO     - Repository meta-lts-mixins checked out to a44882db02a0ed0f149371831bfbe067665eb42b
+2026-11-09 22:09:25 - INFO     - Repository meta-rauc-community checked out to f037f3a81ef64d6ef99218b7252a1736c3867a03
+2026-11-09 22:09:25 - INFO     - Patch applied. (patch path: /repo/patches/meta-autonomos/0001-distro-make-graphics-strip-conditional.patch, repo: meta-autonomos, patch entry: 01-graphics)
+2026-11-09 22:09:25 - INFO     - Patch applied. (patch path: /repo/patches/meta-autonomos/0002-wpa-supplicant-stop-baking-credentials.patch, repo: meta-autonomos, patch entry: 02-wpa)
+2026-11-09 22:09:25 - INFO     - To start the default build, run: bitbake -c build core-image-base kiosk-bootprof
+WARNING: You have included the meta-virtualization layer, but 'virtualization' has not been enabled in your DISTRO_FEATURES. Some bbappend files may not take effect. See the meta-virtualization README for details on enabling virtualization support.
+WARNING: Host distribution "debian-13" has not been validated with this version of the build system; you may possibly experience unexpected failures. It is recommended that you use a tested distribution.
+Loading cache...done.
+Loaded 5018 entries from dependency cache.
+Parsing recipes...done.
+Parsing of 3047 .bb files complete (3044 cached, 3 parsed). 5018 targets, 520 skipped, 0 masked, 0 errors.
+NOTE: Resolving any missing task queue dependencies
+
+Build Configuration:
+BB_VERSION           = "2.8.1"
+BUILD_SYS            = "x86_64-linux"
+NATIVELSBSTRING      = "universal"
+TARGET_SYS           = "arm-poky-linux-gnueabi"
+MACHINE              = "raspberrypi0-wifi"
+DISTRO               = "autonomos"
+DISTRO_VERSION       = "0.1"
+TUNE_FEATURES        = "arm thumb vfp arm1176jzfs callconvention-hard"
+TARGET_FPU           = "hard"
+meta-arm             
+meta-arm-toolchain   = "scarthgap:0a4b911d9fd63ab29c4532a907fae3282dbdcfe4"
+meta-autonomos-core  
+meta-autonomos-raspberrypi = "patched-1fd4eb55c2ef0902176986bb0dea90e7c34d02bf:2398fc3463d8b34508564dc1865fd1824e0cba63"
+meta-lts-mixins      = "scarthgap/u-boot:a44882db02a0ed0f149371831bfbe067665eb42b"
+meta-lts-mixins-go   = "scarthgap/go:36dd94f649fb6ee137273e41ff5d7ea84701c956"
+meta-filesystems     
+meta-networking      
+meta-oe              
+meta-python          = "scarthgap:2db6aece32c7f8ebf6015b468e1b4e21de072e3b"
+meta-raspberrypi     = "scarthgap:018d44467c4f09eb63f8ea5e86e85d755250cf89"
+meta-rauc            = "scarthgap:d63878f20eba7a85ecf53566e7a3377e78bb46ac"
+meta-rauc-raspberrypi = "scarthgap:f037f3a81ef64d6ef99218b7252a1736c3867a03"
+meta-virtualization  = "scarthgap:6e8e75775f1c73c7d5e8ffa9b1eb6040f7d10819"
+meta-wisekiosk       = "HEAD:39e00d73b0cded0356bd0ea54f81eac78f8151ae"
+meta                 
+meta-poky            
+meta-yocto-bsp       = "scarthgap:9517df0a9af21f1e0f9d6ba5a78c5ae1d7c83184"
+
+Initialising tasks...Sstate summary: Wanted 83 Local 83 Mirrors 0 Missed 0 Current 3535 (100% match, 100% complete)
+done.
+NOTE: Executing Tasks
+NOTE: Tasks Summary: Attempted 7308 tasks of which 7308 didn't need to be rerun and all succeeded.
+NOTE: Writing buildhistory
+NOTE: Writing buildhistory took: 5 seconds
+
+Summary: There were 2 WARNING messages.
+ok    working tree is clean
+ok    HEAD (39e00d73b0cded0356bd0ea54f81eac78f8151ae) is published on origin
+ok    image names HEAD (39e00d73b0cded0356bd0ea54f81eac78f8151ae)
+
+reproducibility gate passed
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+rootfs image  : 2147483648
+slot A / B    : 2147483648 / 2147483648
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+/data free    : 375132KB, need 131682KB
+preflight OK
+ok    working tree is clean
+ok    HEAD (39e00d73b0cded0356bd0ea54f81eac78f8151ae) is published on origin
+
+reproducibility gate passed
+sending build/tmp-raspberrypi0-wifi/deploy/images/raspberrypi0-wifi/update-bundle-raspberrypi0-wifi.raucb (126454469 B, md5 a708d6fa9af6b7d8d0b2fe3f5a47b4cb) -> root@192.0.2.1:/data/update.raucb
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+transferred in 49s (2520 KB/s)
+  local  a708d6fa9af6b7d8d0b2fe3f5a47b4cb
+  remote a708d6fa9af6b7d8d0b2fe3f5a47b4cb
+  MATCH
+tools/kiosk-install.sh root@192.0.2.1
+ok    working tree is clean
+ok    HEAD (39e00d73b0cded0356bd0ea54f81eac78f8151ae) is published on origin
+
+reproducibility gate passed
+== before
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+BOOT_ORDER=B A
+BOOT_A_LEFT=3
+BOOT_B_LEFT=3
+Booted from: rootfs.1 (B)
+Activated: rootfs.1 (B)
+      boot status: [32mgood[0m
+      boot status: [32mgood[0m
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+== clock: device epoch 1794280278, host 1794280278, skew 0s
+== verifying bundle signature against the device keyring
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+rauc-Message: 22:11:19.018: Using central status file /data/rauc/rauc.status
+rauc-Message: 22:11:19.052: Using system config file /etc/rauc/system.conf
+rauc-Message: 22:11:19.053: Reading bundle: /data/update.raucb
+rauc-Message: 22:11:19.134: Verifying bundle signature... 
+rauc-Message: 22:11:19.162: Verified inline signature by 'CN = WiseKiosk Signing Key 2026, O = WiseKiosk, C = US'
+Compatible:     'autonomos-raspberrypi0-wifi'
+Version:        '0.1'
+Description:    'AutonomOS Update Bundle'
+Build:          '20261109161527'
+Hooks:          ''
+Bundle Format:  verity
+  Verity Salt:  '46edada2a51bfe60102509cf218f0da01a8bc01faacd5df6ed4d45555de50f26'
+  Verity Hash:  'f24531234b0661ef79fc919b7cfdd1063005d99fb8c3a1c11f682798b6fa6ced'
+  Verity Size:  995328
+Manifest Hash:  'de460a394c8047c00d769f82086a36f5a627656fdb98f9a22ab8ded971826bb3'
+
+
+1 Image:
+  [1m[rootfs][0m
+    Filename:  core-image-base-raspberrypi0-wifi.rootfs.ext4
+    Type:      ext4 (detected)
+    Checksum:  0fc27fa00e02788882fecb714d631742aa71ba7a5e2e259234353e617d67b3b7
+    Size:      2.1?GB (2147483648 bytes)
+    Hooks:     post-install
+
+Certificate Chain:
+ 0 Subject: CN = WiseKiosk Signing Key 2026, O = WiseKiosk, C = US
+   Issuer: CN = WiseKiosk Signing Key 2026, O = WiseKiosk, C = US
+   SPKI sha256: 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
+   Not Before: Aug 15 02:56:16 2026 GMT
+   Not After:  Aug 12 02:56:16 2036 GMT
+
+== installing
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+installing
+  0% Installing
+  0% Determining slot states
+ 10% Determining slot states done.
+ 10% Checking bundle
+ 10% Verifying signature
+ 20% Verifying signature done.
+ 20% Checking bundle done.
+ 20% Checking manifest contents
+ 30% Checking manifest contents done.
+ 30% Determining target install group
+ 40% Determining target install group done.
+ 40% Updating slots
+ 40% Checking slot rootfs.0 (A)
+ 46% Checking slot rootfs.0 (A) done.
+ 46% Copying image to rootfs.0
+ 47% Copying image to rootfs.0
+ 48% Copying image to rootfs.0
+ 49% Copying image to rootfs.0
+ 50% Copying image to rootfs.0
+ 51% Copying image to rootfs.0
+ 52% Copying image to rootfs.0
+ 53% Copying image to rootfs.0
+ 54% Copying image to rootfs.0
+ 55% Copying image to rootfs.0
+ 56% Copying image to rootfs.0
+ 57% Copying image to rootfs.0
+ 58% Copying image to rootfs.0
+ 59% Copying image to rootfs.0
+ 60% Copying image to rootfs.0
+ 61% Copying image to rootfs.0
+ 62% Copying image to rootfs.0
+ 63% Copying image to rootfs.0
+ 64% Copying image to rootfs.0
+ 65% Copying image to rootfs.0
+ 66% Copying image to rootfs.0
+ 67% Copying image to rootfs.0
+ 68% Copying image to rootfs.0
+ 69% Copying image to rootfs.0
+ 70% Copying image to rootfs.0
+ 71% Copying image to rootfs.0
+ 72% Copying image to rootfs.0
+ 73% Copying image to rootfs.0
+ 74% Copying image to rootfs.0
+ 75% Copying image to rootfs.0
+ 76% Copying image to rootfs.0
+ 77% Copying image to rootfs.0
+ 78% Copying image to rootfs.0
+ 79% Copying image to rootfs.0
+ 80% Copying image to rootfs.0
+ 81% Copying image to rootfs.0
+ 82% Copying image to rootfs.0
+ 83% Copying image to rootfs.0
+ 84% Copying image to rootfs.0
+ 85% Copying image to rootfs.0
+ 86% Copying image to rootfs.0
+ 87% Copying image to rootfs.0
+ 88% Copying image to rootfs.0
+ 89% Copying image to rootfs.0
+ 90% Copying image to rootfs.0
+ 91% Copying image to rootfs.0
+ 92% Copying image to rootfs.0
+ 93% Copying image to rootfs.0
+ 94% Copying image to rootfs.0
+ 95% Copying image to rootfs.0
+ 96% Copying image to rootfs.0
+ 97% Copying image to rootfs.0
+ 98% Copying image to rootfs.0
+ 99% Copying image to rootfs.0
+ 99% Copying image to rootfs.0 done.
+ 99% Updating slots done.
+100% Installing done.
+idle
+Installing `/data/update.raucb` succeeded
+== after
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+BOOT_ORDER=A B
+BOOT_A_LEFT=3
+BOOT_B_LEFT=3
+Booted from: rootfs.1 (B)
+Activated: rootfs.0 (A)
+      boot status: [32mgood[0m
+      boot status: [32mgood[0m
+Now: just kiosk-reboot   (fallback slot stays bootable if it fails)
+Delivered and installed. Verify, then: just kiosk-reboot root@192.0.2.1
+back after 68s, boot_id 3efda888-bec0-4370-bd94-6c2f7f7b1729
+Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.
+Booted from: rootfs.0 (A)
+      boot status: [32mgood[0m
+      boot status: [32mgood[0m
+active
+BOOT_ORDER=A B
+BOOT_A_LEFT=3
+BOOT_B_LEFT=3
+board_commit=39e00d73b0cded0356bd0ea54f81eac78f8151ae
+bench: 2026-11-10T03:15:51+00:00 test started tests/target_suite/test_target_commit.py::test_buildinfo_names_commit
+.                               [ 25%]
+tests/target_suite/test_wisekiosk.py 
+bench: 2026-11-10T03:15:51+00:00 test started tests/target_suite/test_wisekiosk.py::test_page_serves
+.
+bench: 2026-11-10T03:15:51+00:00 test started tests/target_suite/test_wisekiosk.py::test_backend_crash
+.                                  [ 75%]
+tests/target_suite/test_wisekiosk_reaches_out.py 
+bench: 2026-11-10T03:16:17+00:00 test started tests/target_suite/test_wisekiosk_reaches_out.py::test_instance_reaches_out[/srv/bench/tests/replay/sets/cards4-live/flows.har]
+.                       [100%]
+
+- generated report log file: /srv/bench/records/20261110T030715Z/target_suite/report.jsonl -
+======================== 4 passed in 484.26s (0:08:04) =========================
+bench: 2026-11-10T03:17:28+00:00 stage target_suite passed
+bench: 2026-11-10T03:17:28+00:00 run passed

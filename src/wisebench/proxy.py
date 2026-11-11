@@ -170,8 +170,9 @@ class Proxy:
         return flows
 
     def _wait_until_listening(self):
-        """Retry a loopback connect to `self.port` until it succeeds, mitmdump exits, or the
-        wait bound elapses.
+        """Retry a loopback connect to `self.port` until it succeeds.
+
+        Stops early if mitmdump exits or the wait bound elapses.
 
         Raises:
             OSError: mitmdump exited, or no connection succeeded within the wait bound.

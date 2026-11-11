@@ -1,5 +1,4 @@
-"""pytest plugin: the `bench_candidate` and `proxy` fixtures, pytest-reportlog's record, and
-run.json.
+"""pytest plugin: the `bench_candidate` and `proxy` fixtures, the record and run.json.
 
 Each run writes `report.jsonl` and `run.json` directly into `BENCH_RECORD_DIR` when it is set,
 otherwise under `<BENCH_RESULT_DIR>/<UTC timestamp>/`. With `BENCH_RECORD_DIR` set it also
@@ -48,8 +47,9 @@ SETUP_ERROR_EXIT_STATUS = 90
 
 
 def write_mark(fd, event):
-    """Append one `bench: <iso> <event>` line to the file behind `fd`, a leading newline first
-    if the file does not already end in one.
+    """Append one `bench: <iso> <event>` line to the file behind `fd`.
+
+    A leading newline goes first if the file does not already end in one.
 
     Args:
         fd (int): A file descriptor open for reading and appending.
@@ -63,8 +63,9 @@ def write_mark(fd, event):
 
 
 def _run_dir(config):
-    """The directory this run's records go in: BENCH_RECORD_DIR when set, otherwise
-    BENCH_RESULT_DIR, then this run's timestamp.
+    """The directory this run's records go in.
+
+    BENCH_RECORD_DIR when set, otherwise BENCH_RESULT_DIR, then this run's timestamp.
 
     Args:
         config (pytest.Config): The session's pytest configuration.

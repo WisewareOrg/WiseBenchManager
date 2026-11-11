@@ -73,6 +73,11 @@ class BenchRun:
             summary = os.path.relpath(self._result_dir, self.checkout)
 
             def post(failure):
+                """Post the check: success without a failure, else failure with its first line.
+
+                Args:
+                    failure (CandidateFailure | None): What failed the candidate; None if it passed.
+                """
                 if failure is None:
                     check.post(sha, "success", "PASS", summary)
                 else:
