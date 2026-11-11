@@ -11,14 +11,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from wisebench.bench_state import Bench
-from wisebench.runlog import Run, Section, Stage, Task
+from wisebench.runlog import KAS_STAMP, Run, Section, Stage, Task
 
 TAIL = "tail"
 MIN_ROWS, MIN_COLS = 24, 80
 MIN_LOG_ROWS = 3
 
-# kas's log prefix at any level; `runlog._KAS_PREFIX` reads only the INFO form, for start times.
-_LOG_PREFIX = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d - [A-Z]+\s+- ")
+_LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _ENTER = ("\n", "\r")
 _BACKSPACE = ("\x7f", "\b")
 _ESC = "\x1b"
@@ -87,8 +86,11 @@ class Layout:
         bar (int): The status bar's row.
         prompt (int | None): The command line's row while it is open.
         pane_top (int): The first row of the panes.
-        pane_bottom (int): The row below the panes: the hint row and the History footer.
+        pane_bottom (int): The last row of the panes: the hint row and the History footer.
         too_small (bool): The screen is below the smallest drawable size.
+        rule_top (int): The rule under the tab line.
+        header (int): The row of a tab's header line, between the rules.
+        rule_bottom (int): The rule over the status bar.
     """
 
     rows: int
@@ -98,6 +100,9 @@ class Layout:
     pane_top: int
     pane_bottom: int
     too_small: bool
+    rule_top: int
+    header: int
+    rule_bottom: int
 
 
 @dataclass(frozen=True)
@@ -236,7 +241,19 @@ def _layout(rows, cols, prompt_open):
     bar = rows - 2 if prompt_open else rows - 1
     prompt = rows - 1 if prompt_open else None
     too_small = rows < MIN_ROWS or cols < MIN_COLS
-    return Layout(rows, cols, bar, prompt, 3, bar - 2, too_small)
+    rule_top, header, rule_bottom = 1, 2, bar - 1
+    return Layout(
+        rows,
+        cols,
+        bar,
+        prompt,
+        header + 1,
+        rule_bottom - 1,
+        too_small,
+        rule_top,
+        header,
+        rule_bottom,
+    )
 
 
 def _stage(chosen, run, newest, bench):

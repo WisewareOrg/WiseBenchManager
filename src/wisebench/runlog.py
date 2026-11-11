@@ -27,7 +27,8 @@ _PHASES = (
 _TASK = re.compile(
     r"recipe (?P<recipe>\S+): task (?P<task>\S+): (?P<what>Started|Succeeded|Failed)"
 )
-_KAS_PREFIX = re.compile(r"^(?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) - INFO\s+- NOTE: ")
+KAS_STAMP = r"^(?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) - "
+_KAS_PREFIX = re.compile(KAS_STAMP + r"INFO\s+- NOTE: ")
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,7 @@ class BuildProgress:
     done: int
     total: int
     tasks: tuple[Task, ...]
-    phase: str = "task"
+    phase: str
 
 
 @dataclass(frozen=True)

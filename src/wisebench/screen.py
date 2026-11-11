@@ -73,7 +73,7 @@ def draw(surface, frame):
         surface.put(0, 0, "terminal too small", TEXT)
         return
     _tab_line(surface, frame)
-    for y in (1, lay.bar - 1):
+    for y in (lay.rule_top, lay.rule_bottom):
         surface.put(y, 0, "─" * lay.cols, RULE)
     _status_bar(surface, frame)
     if lay.prompt is not None:
@@ -82,7 +82,7 @@ def draw(surface, frame):
     if frame.tab == "history":
         _history(surface, frame)
     elif frame.tab == "help":
-        _help(surface)
+        _help(surface, lay)
     else:
         _run(surface, frame)
 
@@ -240,7 +240,7 @@ def _run(surface, frame):
     """The Run tab: the header, the stage list, the divider and the pane of the stage shown."""
     lay = frame.layout
     if frame.run is None:
-        surface.put(2, 0, _record_count(frame), DIM)
+        surface.put(lay.header, 0, _record_count(frame), DIM)
         return
     _run_header(surface, frame)
     surface.put(
@@ -264,7 +264,7 @@ def _run(surface, frame):
 
 
 def _run_header(surface, frame):
-    """Row 2: the title and `<sha7>  record <id>`; a prefix when idle, the result when past."""
+    """The header row: title and `<sha7>  record <id>`; a prefix when idle, the result when past."""
     run, bench = frame.run, frame.bench
     title = _what(run)
     rest = f"{_sha7(run)}  record {run.record}"
@@ -281,7 +281,7 @@ def _run_header(surface, frame):
         parts = [("last run  ", DIM, False), (title, BRIGHT, True), (f"  {rest}", DIM, False)]
     else:
         parts = [(title, BRIGHT, True), (f"  {rest}", DIM, False)]
-    _put_parts(surface, 2, 0, parts)
+    _put_parts(surface, frame.layout.header, 0, parts)
 
 
 def _stage_row(surface, y, stage, frame):
@@ -359,14 +359,14 @@ def _plain_head(surface, frame):
     stage, top = frame.stage, frame.layout.pane_top
     if frame.pane_head == "build":
         progress = stage.progress
-        task_line = f"  {progress.phase}"
+        progress_line = f"  {progress.phase}"
         filled = 0
         if progress.total:
             percent = progress.done * 100 // progress.total
             filled = round(_BAR_CELLS * progress.done / progress.total)
-            task_line += f" {progress.done} of {progress.total}  {percent}%"
+            progress_line += f" {progress.done} of {progress.total}  {percent}%"
         _, colour, _ = _tone(stage.state, _running(frame, stage))
-        _put_parts(surface, top, _PANE, [("build", colour, True), (task_line, TEXT, False)])
+        _put_parts(surface, top, _PANE, [("build", colour, True), (progress_line, TEXT, False)])
         _put_parts(
             surface,
             top + 1,
@@ -447,7 +447,7 @@ def _history(surface, frame):
     lay = frame.layout
     width = max(18, max((len(r.record) for r in frame.history), default=0) + 2)
     header = "record".ljust(width) + "what".ljust(22) + "sha".ljust(9) + "result".ljust(13)
-    surface.put(2, 0, header + "took", DIM)
+    surface.put(lay.header, 0, header + "took", DIM)
     window = frame.history[frame.history_scroll : frame.history_scroll + frame.history_room]
     for offset, run in enumerate(window):
         index = frame.history_scroll + offset
@@ -478,16 +478,16 @@ def _history_row(surface, y, run, index, frame, width):
     _put_parts(surface, y, 0, parts, bg)
 
 
-def _help(surface):
+def _help(surface, lay):
     """The Help tab: the `keys` title over three columns, each as wide as its widest entry."""
-    surface.put(2, 0, "keys", BRIGHT, bold=True)
+    surface.put(lay.header, 0, "keys", BRIGHT, bold=True)
     start = 0
     for heading, entries in _HELP:
-        surface.put(3, start, heading, BLUE)
+        surface.put(lay.pane_top, start, heading, BLUE)
         for offset, (key, words) in enumerate(entries):
             _put_parts(
                 surface,
-                4 + offset,
+                lay.pane_top + 1 + offset,
                 start,
                 [(key.ljust(_KEY_WIDTH), AMBER, False), (words, TEXT, False)],
             )
