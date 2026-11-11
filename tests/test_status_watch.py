@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from wisebench import status
+from wisebench import screen, status
 
 ROWS, COLS = 24, 80
 
@@ -84,7 +84,7 @@ class FakeScreen:
         return lambda *args, **kwargs: None
 
 
-def terminal(monkeypatch, tmp_path, colours):
+def terminal(monkeypatch, tmp_path, colours, redefinable=False):
     """Fake a terminal of `colours` colours (0: none) with no `bench.toml` in the working directory.
 
     Returns the colour pairs initialised, number to (fg, bg), and the `init_color` calls.
@@ -98,6 +98,7 @@ def terminal(monkeypatch, tmp_path, colours):
     monkeypatch.setattr(curses, "init_pair", lambda n, fg, bg: pairs.__setitem__(n, (fg, bg)))
     monkeypatch.setattr(curses, "color_pair", lambda n: n << 8)
     monkeypatch.setattr(curses, "init_color", lambda *args: touched.append(args))
+    monkeypatch.setattr(curses, "can_change_color", lambda: redefinable)
     return pairs, touched
 
 
@@ -133,6 +134,28 @@ def test_256_colours_draw_each_canvas_colour_as_its_fixed_xterm_pair(monkeypatch
     assert pairs[(attribute(fake, "1 Run") >> 8) & 0xFF] == (232, 252)
     assert pairs[(attribute(fake, "IDLE") >> 8) & 0xFF] == (231, 237)
     assert touched == []
+
+
+def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_exactly(
+    monkeypatch, tmp_path
+):
+    pairs, touched = terminal(monkeypatch, tmp_path, 256, redefinable=True)
+    fake = FakeScreen(keys=["q"])
+    status._loop(fake, tmp_path)
+
+    order = [
+        screen.GROUND, screen.TEXT, screen.DIM, screen.LOG, screen.RULE, screen.BRIGHT,
+        screen.GREEN, screen.AMBER, screen.RED, screen.BLUE, screen.RUNNING_TINT,
+        screen.FAILED_TINT, screen.SELECTION,
+    ]  # fmt: skip
+    expected = [
+        (16 + position, *(round(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5)))
+        for position, hexed in enumerate(order)
+    ]
+    assert touched == expected
+    assert (28, 122, 165, 212) in touched
+    pair = pairs[(attribute(fake, "IDLE") >> 8) & 0xFF]
+    assert pair == (16 + order.index(screen.BRIGHT), 16 + order.index(screen.RULE))
 
 
 def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkeypatch, tmp_path):

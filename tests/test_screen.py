@@ -58,21 +58,43 @@ def stage_row(glyph, name, start="", took=""):
     return f"{glyph} {name}".ljust(17) + start.ljust(10) + took
 
 
-def test_the_meaning_colours_map_to_distinct_256_colour_indices():
-    meanings = [
-        getattr(screen, name)
-        for name in (
-            "GROUND",
-            "GREEN",
-            "AMBER",
-            "RED",
-            "BLUE",
-            "RUNNING_TINT",
-            "FAILED_TINT",
-            "SELECTION",
-        )
-    ]
-    assert len({status._XTERM[colour] for colour in meanings}) == len(meanings)
+def test_the_256_colour_fallback_is_the_nearest_xterm_index_of_each_canvas_colour():
+    assert status._XTERM == {
+        screen.GROUND: 232,
+        screen.TEXT: 252,
+        screen.DIM: 245,
+        screen.LOG: 248,
+        screen.RULE: 237,
+        screen.BRIGHT: 231,
+        screen.GREEN: 108,
+        screen.AMBER: 180,
+        screen.RED: 168,
+        screen.BLUE: 75,
+        screen.RUNNING_TINT: 235,
+        screen.FAILED_TINT: 235,
+        screen.SELECTION: 235,
+    }
+
+
+def stage_grounds(grid):
+    """The ground of each stage-list row's first cell, by the row's text."""
+    return {grid.text(y)[:17].strip(): grid.cells[y][0][2] for y in range(2, SIZE[0] - 1)}
+
+
+def test_only_the_selected_stage_row_is_grounded_and_the_summary_grounds_none():
+    failed, _ = drawn([failing_at(STAMP, "bundle")], DISABLED, stage="checkout")
+    grounds = stage_grounds(failed)
+    assert grounds["✓ checkout"] == screen.SELECTION
+    assert grounds["✗ bundle"] is None
+    assert failed.span(r"✗ bundle +\S+ +\S+")[0][1] == screen.RED
+
+    running, _ = drawn([building(3)], LIVE, stage="checkout")
+    assert stage_grounds(running)["● build"] is None
+    assert running.span(r"● build +\S+ +\S+")[0][1] == screen.AMBER
+
+    summary, frame = drawn([failing_at(STAMP, "bundle")], DISABLED)
+    assert frame.stage is None
+    assert {summary.cells[y][0][2] for y in range(2, SIZE[0] - 1)} == {None}
 
 
 SCENES = {
@@ -230,6 +252,28 @@ def test_the_log_rows_drawn_are_the_frames_window_and_only_the_cursor_row_is_sel
     column = grid.text(cursor_row).index(frame.rows[frame.cursor].text)
     selected = [y for y in range(SIZE[0]) if grid.cells[y][column][2] == screen.SELECTION]
     assert selected == [cursor_row]
+
+
+def test_the_log_cursor_row_is_selected_only_while_the_log_has_focus():
+    anchor = (
+        view.resolve(
+            view.State(stage="host_suite"), view.Snapshot([LONG], IDLE, NOW, DIRECTORY), *SIZE
+        )
+        .rows[25]
+        .anchor
+    )
+    pane = 37
+
+    def log_grounds(grid):
+        """Every ground drawn in the log pane's columns."""
+        return {cell[2] for row in grid.cells[2:-1] for cell in row[pane:]}
+
+    stages, frame = drawn([LONG], stage="host_suite", focus="stages", cursor=anchor)
+    assert screen.SELECTION not in log_grounds(stages)
+    assert frame.focus == "stages"
+    log, frame = drawn([LONG], stage="host_suite", focus="log", cursor=anchor)
+    assert screen.SELECTION in log_grounds(log)
+    assert frame.focus == "log"
 
 
 def test_the_history_rows_drawn_are_the_frames_window_and_the_selected_one_is_selected():
