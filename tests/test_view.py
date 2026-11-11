@@ -22,7 +22,9 @@ from status_helpers import (
     run,
     running_test,
     sid,
+    stage,
     suite,
+    t,
 )
 
 from wisebench import screen, view
@@ -655,3 +657,37 @@ def test_l_on_history_keeps_the_selection():
     state = view.State(tab="history", history_record=OLDER)
     press(state, THREE, "l", LIVE)
     assert (state.tab, state.history_record) == ("history", OLDER)
+
+
+def test_the_panes_start_on_row_3_and_end_two_rows_above_the_status_bar():
+    lay = resolve([run()]).layout
+    assert (lay.pane_top, lay.bar, lay.pane_bottom) == (3, SIZE[0] - 1, SIZE[0] - 3)
+    prompted = resolve([run()], state=view.State(prompt=":")).layout
+    assert (prompted.pane_top, prompted.bar, prompted.pane_bottom) == (3, SIZE[0] - 2, SIZE[0] - 4)
+
+
+KAS_LINES = [
+    "2026-11-10 03:10:00 - INFO     - NOTE: first",
+    "2026-11-10 03:10:01 - WARNING  - NOTE: second",
+    "2026-11-10 03:10:02 - ERROR    - NOTE: third",
+    "NOTE: bare",
+]
+
+
+def test_a_plain_stages_log_rows_drop_the_kas_prefix_and_search_matches_what_is_shown():
+    shown = stage("posted", "open", t(3, 10), lines=KAS_LINES)
+    runs = [live("build", posted=shown)]
+    state = view.State(stage="posted", focus="log", cursor=("posted", None, 2))
+    frame = resolve(runs, LIVE, state)
+    assert [row.text for row in frame.rows] == [
+        "NOTE: first",
+        "NOTE: second",
+        "NOTE: third",
+        "NOTE: bare",
+    ]
+    assert shown.lines == tuple(KAS_LINES)
+
+    press(state, runs, "/2026" + ENTER, LIVE)
+    assert state.cursor == ("posted", None, 2)
+    press(state, runs, "/first" + ENTER, LIVE)
+    assert state.cursor == ("posted", None, 0)

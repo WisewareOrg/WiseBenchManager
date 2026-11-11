@@ -19,6 +19,7 @@ from status_helpers import (
     building,
     failing_at,
     live,
+    mark,
     real_run,
     run,
     running_test,
@@ -78,7 +79,7 @@ def test_the_256_colour_fallback_is_the_nearest_xterm_index_of_each_canvas_colou
 
 def stage_grounds(grid):
     """The ground of each stage-list row's first cell, by the row's text."""
-    return {grid.text(y)[:17].strip(): grid.cells[y][0][2] for y in range(2, SIZE[0] - 1)}
+    return {grid.text(y)[:17].strip(): grid.cells[y][0][2] for y in range(3, SIZE[0] - 2)}
 
 
 def test_only_the_selected_stage_row_is_grounded_and_the_summary_grounds_none():
@@ -94,7 +95,7 @@ def test_only_the_selected_stage_row_is_grounded_and_the_summary_grounds_none():
 
     summary, frame = drawn([failing_at(STAMP, "bundle")], IDLE)
     assert frame.stage is None
-    assert {summary.cells[y][0][2] for y in range(2, SIZE[0] - 1)} == {None}
+    assert {summary.cells[y][0][2] for y in range(3, SIZE[0] - 2)} == {None}
 
 
 SCENES = {
@@ -192,7 +193,7 @@ def test_an_open_prompt_takes_the_last_row_under_the_status_bar():
 )
 def test_the_run_header_names_the_run_and_its_state(runs, bench, state, header):
     grid, _ = drawn(runs, bench, **state)
-    assert re.search(header, grid.text(1))
+    assert re.search(header, grid.text(2))
 
 
 def test_a_stage_row_is_glyph_name_start_and_took_under_the_column_header():
@@ -217,8 +218,9 @@ def test_a_suite_pane_is_its_counts_then_a_header_per_section_with_fold_glyphs()
 def test_a_live_build_pane_is_its_progress_bar_running_tasks_and_bottom_aligned_output():
     grid, frame = drawn([building(2)], LIVE, now=t(3, 15, 10))
     grid.find(r"build  task 1204 of 3311  36%")
-    bar = grid.span(r"█+")
+    bar = grid.span(r"▉+")
     assert len(bar) == 33
+    assert not any("█" in grid.text(y) for y in range(SIZE[0]))
     assert {cell[1] for cell in bar[:12]} == {screen.AMBER}
     assert {cell[1] for cell in bar[12:]} == {screen.RULE}
     grid.find("running now")
@@ -381,7 +383,7 @@ def test_a_past_builds_label_and_log_window_start_below_its_head_and_fill_the_ro
 
 def test_a_passed_past_builds_head_is_not_drawn_amber():
     grid, _ = drawn([past_build()], IDLE, stage="build")
-    head = [*grid.span(r"build  task"), *grid.span(r"█+")]
+    head = [*grid.span(r"build  task"), *grid.span(r"▉+")]
     assert screen.AMBER not in {cell[1] for cell in head}
 
 
@@ -410,3 +412,52 @@ def test_changing_the_stage_resets_the_scroll_so_the_new_stages_rows_above_the_c
 def resolve_frame(runs, state):
     """The frame for `runs` in `state` at the default size."""
     return view.resolve(state, view.Snapshot(runs, IDLE, NOW, DIRECTORY), *SIZE)
+
+
+TABS = {
+    "run": (lambda: drawn([run()], IDLE), r"^last run  PR #31"),
+    "empty run": (lambda: drawn([], IDLE), r"^0 records in"),
+    "history": (lambda: drawn(HISTORY, LIVE, tab="history"), r"^record +what +sha"),
+    "help": (lambda: drawn([run()], tab="help"), r"^keys"),
+}
+
+
+@pytest.mark.parametrize(("scene", "first"), TABS.values(), ids=TABS)
+def test_a_rule_sits_under_the_tab_line_and_over_the_status_bar_with_the_content_between(
+    scene, first
+):
+    grid, frame = scene()
+    rule = "─" * SIZE[1]
+    for y in (1, frame.layout.bar - 1):
+        assert grid.text(y) == rule
+        assert {cell[1] for cell in grid.cells[y]} == {screen.RULE}
+    assert re.search(first, grid.text(2))
+    assert frame.layout.bar == SIZE[0] - 1
+
+
+def test_the_history_footer_is_the_row_above_the_lower_rule():
+    grid, frame = drawn(HISTORY, LIVE, tab="history")
+    assert grid.text(frame.layout.bar - 2).startswith(f"{len(HISTORY)} records in")
+
+
+def parsed_build(*lines):
+    """A live run parsed from a log whose build stage has started and printed `lines`."""
+    text = mark("run started kind=test ref=main") + mark("stage build started", 0, 1)
+    return runlog.parse_run(STAMP, text + "".join(f"{x}\n" for x in lines), {})
+
+
+def build_head(*lines):
+    """The grid of a live run parsed from `lines`, and the row of its `build` head line."""
+    grid, _ = drawn([parsed_build(*lines)], LIVE)
+    return grid, grid.find(r"^.{37}build\b")[0]
+
+
+def test_a_running_now_row_widens_its_recipe_and_task_columns_to_the_longest_name_plus_two():
+    stamp = "2026-11-10 03:11:00 - INFO     - NOTE: "
+    grid, _ = build_head(
+        stamp + "Running task 5 of 9 (/l/a.bb:do_rootfs)",
+        stamp + "recipe core-image-base-1.0-r0: task do_rootfs: Started",
+        stamp + "recipe zlib-1.3-r0: task do_package_write_ipk: Started",
+    )
+    grid.find(r"^.{37}" + re.escape(f"{'core-image-base':<17}{'do_rootfs':<22}") + r"\d+m\d\ds")
+    grid.find(r"^.{37}" + re.escape(f"{'zlib':<17}{'do_package_write_ipk':<22}") + r"\d+m\d\ds")
