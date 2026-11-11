@@ -529,3 +529,15 @@ def test_a_running_now_row_keeps_its_elapsed_time_at_80_columns_by_cutting_the_r
     shown = re.fullmatch(r"(\S+) {2,}(\S+) {2,}(\d+m\d\ds) *", grid.text(y)[screen._PANE :])
     assert shown is not None, grid.text(y)
     assert shown.group(1, 2) == ("core-image-b", "do_package_write_ipk")
+
+
+def test_a_running_now_row_at_80_columns_spills_the_excess_into_the_task_column_past_the_recipe():
+    stamp = "2026-11-10 03:11:00 - INFO     - NOTE: "
+    grid, _ = build_head(
+        stamp + "Running task 5 of 9 (/l/a.bb:do_rootfs)",
+        stamp + "recipe core-image-base-1.0-r0: task do_package_qa_setscene: Started",
+    )
+    y = grid.find(rf"^.{{{screen._PANE}}}core-image")[0]
+    row = grid.text(y)[screen._PANE :].rstrip()
+    assert re.fullmatch(r"core-image-b {2}do_package_qa_setsce {2}\d+m\d\ds", row), row
+    assert len(row) <= SIZE[1] - screen._PANE
