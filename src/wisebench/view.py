@@ -6,6 +6,7 @@ that frame and `handle` acts on the same frame, so a row a key moves to is a row
 `State` left None means "derive it every frame"; a value means the user chose it.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -14,6 +15,7 @@ from wisebench.runlog import Run, Section, Stage, Task
 
 TAIL = "tail"
 MIN_ROWS, MIN_COLS = 24, 80
+_KAS_PREFIX = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d - [A-Z]+\s+- ")
 MIN_LOG_ROWS = 3
 
 _ENTER = ("\n", "\r")
@@ -105,7 +107,8 @@ class Row:
         anchor (tuple): (stage name, section id or None, line); a section header is line 0.
         kind (str): "line" for the stage's own lines, "head" for a section header, "body" for a
             section's line.
-        text (str): The raw line, or the section's name.
+        text (str): The stage's own line without kas's log prefix, a section line raw, or the
+            section's name.
         section (Section | None): The section a header or body line belongs to.
         opened (bool): Whether a header's body shows.
         end (datetime | None): When a header's section ended: the next section's start, else the
@@ -232,7 +235,7 @@ def _layout(rows, cols, prompt_open):
     bar = rows - 2 if prompt_open else rows - 1
     prompt = rows - 1 if prompt_open else None
     too_small = rows < MIN_ROWS or cols < MIN_COLS
-    return Layout(rows, cols, bar, prompt, 2, bar - 1, too_small)
+    return Layout(rows, cols, bar, prompt, 3, bar - 2, too_small)
 
 
 def _stage(chosen, run, newest, bench):
@@ -300,7 +303,10 @@ def _rows(stage, folds, expand=False):
     Returns:
         list[Row]: The rows in display order.
     """
-    rows = [Row((stage.name, None, i), "line", line) for i, line in enumerate(stage.lines)]
+    rows = [
+        Row((stage.name, None, i), "line", _KAS_PREFIX.sub("", line))
+        for i, line in enumerate(stage.lines)
+    ]
     for section, end in zip(stage.sections, _section_ends(stage), strict=True):
         opened = _is_open(folds, section)
         rows.append(Row((stage.name, section.id, 0), "head", section.name, section, opened, end))

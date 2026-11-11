@@ -19,7 +19,11 @@ _STAGE_RESULT = re.compile(
 _QUEUED = re.compile(r"^test queued (?P<name>.*)$")
 _TEST_STARTED = re.compile(r"^test started (?P<name>.*)$")
 _SETUP_STARTED = re.compile(r"^setup (?P<name>\S+) started$")
-_RUNNING_TASK = re.compile(r"Running task (?P<done>\d+) of (?P<total>\d+)")
+_RUNNING_TASK = re.compile(r"Running (?P<phase>setscene task|task) (?P<done>\d+) of (?P<total>\d+)")
+_PHASES = (
+    ("Loading cache...done.", "parsing recipes"),
+    ("Parsing recipes...done.", "initialising tasks"),
+)
 _TASK = re.compile(
     r"recipe (?P<recipe>\S+): task (?P<task>\S+): (?P<what>Started|Succeeded|Failed)"
 )
@@ -46,14 +50,18 @@ class BuildProgress:
     """The build stage's bitbake progress.
 
     Args:
-        done (int): The task number of the last `Running task N of M` line.
-        total (int): Its M.
+        done (int): The N of the last `Running task N of M` or `Running setscene task N of M`
+            line; 0 before any.
+        total (int): Its M; 0 before any.
         tasks (tuple[Task, ...]): Tasks started and not finished.
+        phase (str): "setscene" or "task" from the last count line; before one, the phase the
+            output has reached: "starting", "parsing recipes" or "initialising tasks".
     """
 
     done: int
     total: int
     tasks: tuple[Task, ...]
+    phase: str = "task"
 
 
 @dataclass(frozen=True)
@@ -130,11 +138,15 @@ class Run:
 
 
 def _progress(lines):
-    """Bitbake progress from a build stage's output lines, or None without a `Running task` line."""
-    counts, running = None, {}
+    """Bitbake progress from a started build stage's output lines."""
+    counts, phase, running = (0, 0), "starting", {}
+    counted = False
     for line in lines:
         if found := _RUNNING_TASK.search(line):
-            counts = (int(found["done"]), int(found["total"]))
+            counts, counted = (int(found["done"]), int(found["total"])), True
+            phase = found["phase"].split()[0]
+        elif not counted:
+            phase = next((text for marker, text in _PHASES if marker in line), phase)
         if task := _TASK.search(line):
             key = (task["recipe"], task["task"])
             running.pop(key, None)
@@ -142,13 +154,11 @@ def _progress(lines):
                 prefix = _KAS_PREFIX.match(line)
                 stamp = prefix and datetime.strptime(prefix["ts"], "%Y-%m-%d %H:%M:%S")
                 running[key] = stamp.astimezone() if stamp else None
-    if counts is None:
-        return None
     tasks = []
     for (recipe, task), started in running.items():
         parts = recipe.split("-")
         tasks.append(Task("-".join(parts[:-2]) if len(parts) >= 3 else recipe, task, started))
-    return BuildProgress(*counts, tuple(tasks))
+    return BuildProgress(*counts, tuple(tasks), phase)
 
 
 def _failure(phases):
@@ -294,7 +304,8 @@ class _StageBuilder:
             sections.append(
                 Section(row.id, row.kind, row.name, outcome, row.started, tuple(row.lines), failure)
             )
-        progress = _progress(self.lines) if self.name == "build" else None
+        started = self.state not in ("not-started", "skipped")
+        progress = _progress(self.lines) if self.name == "build" and started else None
         return Stage(
             self.name,
             self.state,
