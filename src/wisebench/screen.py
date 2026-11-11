@@ -375,16 +375,35 @@ def _plain_head(surface, frame):
         )
         if _running(frame, stage):
             surface.put(top + 2, _PANE, "running now", DIM)
-            recipe_width = max(14, max((len(t.recipe) for t in frame.tasks), default=0) + 2)
-            task_width = max(14, max((len(t.task) for t in frame.tasks), default=0) + 2)
-            for offset, task in enumerate(frame.tasks):
-                took = _duration(frame.now - task.started) if task.started else DASH
-                names = f"{task.recipe:<{recipe_width}}{task.task:<{task_width}}"
-                surface.put(top + 3 + offset, _PANE, names + took, TEXT)
+            _running_tasks(surface, frame, top + 3)
     shown = len(frame.rows[frame.scroll : frame.scroll + frame.room])
     first = top + frame.head_height + frame.room - shown
     surface.put(first - 1, _PANE, "this stage's output", DIM)
     _log_window(surface, frame, first)
+
+
+def _running_tasks(surface, frame, top):
+    """The `running now` rows from row `top`: recipe, task and elapsed time in columns.
+
+    Each name column is its longest name plus two, at least 14. The elapsed time always shows
+    whole: when the columns would overflow the pane, the excess comes off the recipe column down
+    to 14, then off the task column down to 14, and a name is cut to its column minus two.
+    """
+    tooks = [_duration(frame.now - t.started) if t.started else DASH for t in frame.tasks]
+    widths = [
+        max(14, max((len(name) for name in names), default=0) + 2)
+        for names in ([t.recipe for t in frame.tasks], [t.task for t in frame.tasks])
+    ]
+    excess = sum(widths) + max(map(len, tooks), default=0) - (frame.layout.cols - _PANE)
+    for column in (0, 1):
+        cut = min(max(excess, 0), widths[column] - 14)
+        widths[column] -= cut
+        excess -= cut
+    recipe_width, task_width = widths
+    for offset, (task, took) in enumerate(zip(frame.tasks, tooks, strict=True)):
+        names = f"{task.recipe[: recipe_width - 2]:<{recipe_width}}"
+        names += f"{task.task[: task_width - 2]:<{task_width}}"
+        surface.put(top + offset, _PANE, names + took, TEXT)
 
 
 def _log_window(surface, frame, top):
