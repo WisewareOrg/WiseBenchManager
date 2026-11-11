@@ -285,7 +285,8 @@ def _run_header(surface, frame):
 def _stage_row(surface, y, stage, frame):
     """One stage row, glyph, name, start and took, in the stage's colour across the row.
 
-    The ground is the running tint, else the failed tint, else the selection when shown.
+    Only the shown stage's row has a ground: the running tint, else the failed tint, else the
+    selection.
     """
     running = _running(frame, stage)
     glyph, colour, bold = _tone(stage.state, running)
@@ -293,14 +294,14 @@ def _stage_row(surface, y, stage, frame):
     if stage.started is not None and stage.state not in ("not-started", "skipped"):
         took = _took(stage.started, stage.ended, running, frame.now)
         text += _clock(stage.started).ljust(_TOOK_COL - _START_COL) + took
-    if running:
-        bg = RUNNING_TINT
-    elif stage.state in ("failed", "error"):
-        bg = FAILED_TINT
-    elif stage is frame.stage:
-        bg = SELECTION
-    else:
-        bg = None
+    bg = None
+    if stage is frame.stage:
+        if running:
+            bg = RUNNING_TINT
+        elif stage.state in ("failed", "error"):
+            bg = FAILED_TINT
+        else:
+            bg = SELECTION
     surface.put(y, 0, text.ljust(_STAGES_WIDTH)[:_STAGES_WIDTH], colour, bg, bold)
 
 
@@ -381,12 +382,13 @@ def _plain_head(surface, frame):
 
 
 def _log_window(surface, frame, top):
-    """The log rows the frame scrolled to, from row `top`, the cursor's row selected."""
+    """The log rows the frame scrolled to, from row `top`, the cursor's row selected in the log."""
     cols = frame.layout.cols
     running = _running(frame, frame.stage)
     for offset, row in enumerate(frame.rows[frame.scroll : frame.scroll + frame.room]):
         y = top + offset
-        bg = SELECTION if frame.scroll + offset == frame.cursor else None
+        selected = frame.focus == "log" and frame.scroll + offset == frame.cursor
+        bg = SELECTION if selected else None
         if bg is not None:
             surface.put(y, _PANE, " " * (cols - _PANE), TEXT, bg)
         if row.kind == "head":

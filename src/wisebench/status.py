@@ -15,8 +15,22 @@ from wisebench import screen, view
 from wisebench.bench_state import read_bench, read_run_unit
 from wisebench.records import Records
 
-# The three grounds are not the nearest index to the canvas: that is 235 for all three, which
-# would make the running row, the failed row and the selection look the same.
+_CANVAS = (
+    screen.GROUND,
+    screen.TEXT,
+    screen.DIM,
+    screen.LOG,
+    screen.RULE,
+    screen.BRIGHT,
+    screen.GREEN,
+    screen.AMBER,
+    screen.RED,
+    screen.BLUE,
+    screen.RUNNING_TINT,
+    screen.FAILED_TINT,
+    screen.SELECTION,
+)
+_FIRST_COLOUR = 16
 _XTERM = {
     screen.GROUND: 232,
     screen.TEXT: 252,
@@ -28,9 +42,9 @@ _XTERM = {
     screen.AMBER: 180,
     screen.RED: 168,
     screen.BLUE: 75,
-    screen.RUNNING_TINT: 58,
-    screen.FAILED_TINT: 52,
-    screen.SELECTION: 17,
+    screen.RUNNING_TINT: 235,
+    screen.FAILED_TINT: 235,
+    screen.SELECTION: 235,
 }
 _TINTS = (screen.RUNNING_TINT, screen.FAILED_TINT)
 _KEYS = {curses.KEY_ENTER: "\n", curses.KEY_BACKSPACE: "\x7f"}
@@ -85,7 +99,8 @@ def _loop(window, directory):
 def _attributes():
     """A function from `(fg, bg, bold)` to curses attributes for this terminal.
 
-    With 256 colours each canvas colour is its fixed xterm index and a `bg` of None the ground.
+    With 256 colours each canvas colour is defined exactly at its own number from 16 when the
+    terminal can redefine colours, else it is its nearest xterm index. A `bg` of None is the ground.
     With fewer, a filled ground other than a tint is reverse video, and bold stays bold.
     """
     if not (curses.has_colors() and curses.COLORS >= 256):
@@ -96,11 +111,17 @@ def _attributes():
             return (curses.A_REVERSE if filled else curses.A_NORMAL) | _bold(bold)
 
         return reverse
+    numbers = _XTERM
+    if curses.can_change_color():
+        numbers = {hexed: _FIRST_COLOUR + i for i, hexed in enumerate(_CANVAS)}
+        for hexed, number in numbers.items():
+            channels = (round(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5))
+            curses.init_color(number, *channels)
     pairs = {}
 
     def colour(fg, bg, bold):
         """The colour pair of `fg` on `bg`, made on first use; bold as bold."""
-        pair = (_XTERM[fg], _XTERM[bg or screen.GROUND])
+        pair = (numbers[fg], numbers[bg or screen.GROUND])
         if pair not in pairs:
             pairs[pair] = len(pairs) + 1
             curses.init_pair(pairs[pair], *pair)

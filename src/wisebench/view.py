@@ -146,6 +146,7 @@ class Frame:
         history_cursor (int): Index of the History selection.
         history_scroll (int): Index of the first History row drawn.
         history_room (int): How many History rows are drawn.
+        focus (str): "stages" or "log", the pane the movement keys act on.
     """
 
     tab: str
@@ -169,6 +170,7 @@ class Frame:
     history_cursor: int
     history_scroll: int
     history_room: int
+    focus: str
 
 
 def resolve(state, snap, rows, cols):
@@ -221,6 +223,7 @@ def resolve(state, snap, rows, cols):
         history_cursor=history_cursor,
         history_scroll=_scroll(state.history_scroll, history_cursor, len(runs), history_room),
         history_room=history_room,
+        focus=state.focus,
     )
 
 
