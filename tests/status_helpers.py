@@ -173,7 +173,7 @@ def building(tasks):
     """A run executing its build: bitbake at task 1204 of 3311 with `tasks` tasks running,
     `r<i>` started at 03:11:<i>."""
     running = tuple(runlog.Task(f"r{i}", "do_compile", t(3, 11, i)) for i in range(tasks))
-    progress = runlog.BuildProgress(1204, 3311, running)
+    progress = runlog.BuildProgress(1204, 3311, running, phase="task")
     lines = ["NOTE: Running task 1204 of 3311"]
     return live("build", build=stage("build", "open", t(3, 10), lines=lines, progress=progress))
 

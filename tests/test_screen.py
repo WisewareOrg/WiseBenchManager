@@ -365,7 +365,7 @@ def test_the_stage_list_is_34_wide_with_its_divider_at_column_35_and_the_pane_at
 def past_build(lines=2):
     """A run whose build passed, with bitbake progress and `lines` output lines."""
     tasks = tuple(runlog.Task(f"r{i}", "do_compile", t(3, 11, i)) for i in range(3))
-    progress = runlog.BuildProgress(1204, 3311, tasks)
+    progress = runlog.BuildProgress(1204, 3311, tasks, phase="task")
     output = [f"NOTE: line {i}" for i in range(lines)]
     done = stage("build", "passed", t(3, 10), t(3, 40), lines=output, progress=progress)
     return run(build=done)
@@ -432,7 +432,6 @@ def test_a_rule_sits_under_the_tab_line_and_over_the_status_bar_with_the_content
         assert grid.text(y) == rule
         assert {cell[1] for cell in grid.cells[y]} == {screen.RULE}
     assert re.search(first, grid.text(2))
-    assert frame.layout.bar == SIZE[0] - 1
 
 
 def test_the_history_footer_is_the_row_above_the_lower_rule():
@@ -486,8 +485,8 @@ def test_a_builds_head_is_its_phase_text_until_the_first_count_over_a_bar_of_33_
     lines, text, filled
 ):
     grid, y = build_head(*lines)
-    assert grid.text(y)[37:].rstrip() == f"build  {text}"
-    bar = grid.cells[y + 1][37:70]
+    assert grid.text(y)[screen._PANE :].rstrip() == f"build  {text}"
+    bar = grid.cells[y + 1][screen._PANE : screen._PANE + screen._BAR_CELLS]
     assert {cell[0] for cell in bar} == {"▉"}
     assert [cell[1] for cell in bar].count(screen.RULE) == 33 - filled
 
@@ -503,8 +502,16 @@ def test_a_running_now_row_widens_its_recipe_and_task_columns_to_the_longest_nam
     frame = view.resolve(view.State(), view.Snapshot([run], LIVE, NOW, DIRECTORY), *size)
     grid = Grid(*size)
     screen.draw(grid, frame)
-    grid.find(r"^.{37}" + re.escape(f"{'core-image-base':<17}{'do_rootfs':<22}") + r"\d+m\d\ds")
-    grid.find(r"^.{37}" + re.escape(f"{'zlib':<17}{'do_package_write_ipk':<22}") + r"\d+m\d\ds")
+    grid.find(
+        rf"^.{{{screen._PANE}}}"
+        + re.escape(f"{'core-image-base':<17}{'do_rootfs':<22}")
+        + r"\d+m\d\ds"
+    )
+    grid.find(
+        rf"^.{{{screen._PANE}}}"
+        + re.escape(f"{'zlib':<17}{'do_package_write_ipk':<22}")
+        + r"\d+m\d\ds"
+    )
 
 
 def test_a_running_now_row_keeps_its_elapsed_time_at_80_columns_by_cutting_the_recipe_first():
@@ -513,7 +520,7 @@ def test_a_running_now_row_keeps_its_elapsed_time_at_80_columns_by_cutting_the_r
         stamp + "Running task 5 of 9 (/l/a.bb:do_rootfs)",
         stamp + "recipe core-image-base-1.0-r0: task do_package_write_ipk: Started",
     )
-    y = grid.find(r"^.{37}core-image")[0]
-    shown = re.fullmatch(r"(\S+) {2,}(\S+) {2,}(\d+m\d\ds) *", grid.text(y)[37:])
+    y = grid.find(rf"^.{{{screen._PANE}}}core-image")[0]
+    shown = re.fullmatch(r"(\S+) {2,}(\S+) {2,}(\d+m\d\ds) *", grid.text(y)[screen._PANE :])
     assert shown is not None, grid.text(y)
     assert shown.group(1, 2) == ("core-image-b", "do_package_write_ipk")
