@@ -15,9 +15,10 @@ from wisebench.runlog import Run, Section, Stage, Task
 
 TAIL = "tail"
 MIN_ROWS, MIN_COLS = 24, 80
-_KAS_PREFIX = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d - [A-Z]+\s+- ")
 MIN_LOG_ROWS = 3
 
+# kas's log prefix at any level; `runlog._KAS_PREFIX` reads only the INFO form, for start times.
+_LOG_PREFIX = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d - [A-Z]+\s+- ")
 _ENTER = ("\n", "\r")
 _BACKSPACE = ("\x7f", "\b")
 _ESC = "\x1b"
@@ -304,7 +305,7 @@ def _rows(stage, folds, expand=False):
         list[Row]: The rows in display order.
     """
     rows = [
-        Row((stage.name, None, i), "line", _KAS_PREFIX.sub("", line))
+        Row((stage.name, None, i), "line", _LOG_PREFIX.sub("", line))
         for i, line in enumerate(stage.lines)
     ]
     for section, end in zip(stage.sections, _section_ends(stage), strict=True):
