@@ -262,6 +262,7 @@ def test_the_log_cursor_row_is_selected_only_while_the_log_has_focus():
         .rows[25]
         .anchor
     )
+
     def log_grounds(grid):
         """Every ground drawn in the log pane's columns."""
         return {cell[2] for row in grid.cells[2:-1] for cell in row[screen._PANE :]}
