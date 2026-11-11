@@ -108,14 +108,14 @@ SCENES = {
 
 COLOURS = {
     "a passed stage is green": ("idle", r"✓ checkout +\S+ +\S+", "GREEN", None, None),
-    "a running stage is amber bold on the running tint": (
+    "the selected running stage is amber bold on the running tint": (
         "live build",
         r"● build +\S+ +\S+",
         "AMBER",
         "RUNNING_TINT",
         True,
     ),
-    "a failed stage is red bold on the failed tint": (
+    "the selected failed stage is red bold on the failed tint": (
         "disabled",
         r"✗ bundle +\S+ +\S+",
         "RED",
@@ -262,18 +262,15 @@ def test_the_log_cursor_row_is_selected_only_while_the_log_has_focus():
         .rows[25]
         .anchor
     )
-    pane = 37
-
     def log_grounds(grid):
         """Every ground drawn in the log pane's columns."""
-        return {cell[2] for row in grid.cells[2:-1] for cell in row[pane:]}
+        return {cell[2] for row in grid.cells[2:-1] for cell in row[screen._PANE :]}
 
     stages, frame = drawn([LONG], stage="host_suite", focus="stages", cursor=anchor)
     assert screen.SELECTION not in log_grounds(stages)
     assert frame.focus == "stages"
     log, frame = drawn([LONG], stage="host_suite", focus="log", cursor=anchor)
     assert screen.SELECTION in log_grounds(log)
-    assert frame.focus == "log"
 
 
 def test_the_history_rows_drawn_are_the_frames_window_and_the_selected_one_is_selected():

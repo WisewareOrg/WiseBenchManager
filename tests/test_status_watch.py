@@ -2,7 +2,6 @@
 
 import curses
 import fcntl
-import math
 import os
 import select
 import shutil
@@ -121,10 +120,10 @@ def test_a_write_into_the_bottom_right_cell_is_tolerated_and_one_on_another_row_
 
 def test_the_loop_redraws_after_the_one_second_timeout_and_returns_0_on_q(monkeypatch, tmp_path):
     terminal(monkeypatch, tmp_path, 0)
-    screen = FakeScreen(keys=[curses.error("no input"), "q"])
+    fake = FakeScreen(keys=[curses.error("no input"), "q"])
 
-    assert status._loop(screen, tmp_path) == 0
-    assert screen.events == ["frame", "key", "frame", "key"]
+    assert status._loop(fake, tmp_path) == 0
+    assert fake.events == ["frame", "key", "frame", "key"]
 
 
 def test_256_colours_draw_each_canvas_colour_as_its_fixed_xterm_pair(monkeypatch, tmp_path):
@@ -144,19 +143,24 @@ def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_ex
     fake = FakeScreen(keys=["q"])
     status._loop(fake, tmp_path)
 
-    order = [
-        screen.GROUND, screen.TEXT, screen.DIM, screen.LOG, screen.RULE, screen.BRIGHT,
-        screen.GREEN, screen.AMBER, screen.RED, screen.BLUE, screen.RUNNING_TINT,
-        screen.FAILED_TINT, screen.SELECTION,
-    ]  # fmt: skip
     expected = [
-        (16 + position, *(math.ceil(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5)))
-        for position, hexed in enumerate(order)
+        (16, 48, 48, 48),
+        (17, 800, 800, 800),
+        (18, 546, 546, 546),
+        (19, 659, 659, 659),
+        (20, 228, 228, 228),
+        (21, 1000, 1000, 1000),
+        (22, 597, 765, 475),
+        (23, 899, 753, 483),
+        (24, 879, 424, 459),
+        (25, 381, 687, 938),
+        (26, 165, 150, 79),
+        (27, 228, 114, 126),
+        (28, 122, 165, 212),
     ]
     assert touched == expected
-    assert (28, 122, 165, 212) in touched
     pair = pairs[(attribute(fake, "IDLE") >> 8) & 0xFF]
-    assert pair == (16 + order.index(screen.BRIGHT), 16 + order.index(screen.RULE))
+    assert pair == (21, 20)
 
 
 def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkeypatch, tmp_path):
