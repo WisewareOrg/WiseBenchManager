@@ -472,6 +472,11 @@ HEADS = {
         "setscene 1000 of 3300  30%",
         10,
     ),
+    "a phase line after a count leaves the counts": (
+        ["NOTE: Running task 5 of 10 (/l/b.bb:do_compile)", "Parsing recipes...done."],
+        "task 5 of 10  50%",
+        16,
+    ),
     "a task count replaces the phase": (
         ["Loading cache...done.", "NOTE: Running task 5 of 10 (/l/b.bb:do_compile)"],
         "task 5 of 10  50%",

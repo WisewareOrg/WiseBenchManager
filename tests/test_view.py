@@ -691,3 +691,12 @@ def test_a_plain_stages_log_rows_drop_the_kas_prefix_and_search_matches_what_is_
     assert state.cursor == ("posted", None, 2)
     press(state, runs, "/first" + ENTER, LIVE)
     assert state.cursor == ("posted", None, 0)
+
+
+def test_the_kas_prefix_is_dropped_only_at_the_start_of_a_plain_stages_own_line():
+    inner = "2026-11-10 03:10:00 - INFO     - NOTE: in a section body"
+    midline = "NOTE: retry at 2026-11-10 03:10:01 - INFO     - NOTE: again"
+    shown = suite("host_suite", ["failed"], bodies={0: [inner]}, lead=[midline])
+    frame = resolve([live("build", host_suite=shown)], LIVE, view.State(stage="host_suite"))
+    assert midline in texts(frame)
+    assert inner in texts(frame)
