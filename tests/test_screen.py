@@ -92,7 +92,7 @@ def test_only_the_selected_stage_row_is_grounded_and_the_summary_grounds_none():
     assert stage_grounds(running)["● build"] is None
     assert running.span(r"● build +\S+ +\S+")[0][1] == screen.AMBER
 
-    summary, frame = drawn([failing_at(STAMP, "bundle")], DISABLED)
+    summary, frame = drawn([failing_at(STAMP, "bundle")], IDLE)
     assert frame.stage is None
     assert {summary.cells[y][0][2] for y in range(2, SIZE[0] - 1)} == {None}
 
