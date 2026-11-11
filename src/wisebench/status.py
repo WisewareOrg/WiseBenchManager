@@ -6,6 +6,7 @@ a lock.
 """
 
 import curses
+import math
 import os
 import sys
 from datetime import UTC, datetime
@@ -31,7 +32,6 @@ _XTERM = {
     screen.FAILED_TINT: 235,
     screen.SELECTION: 235,
 }
-_TINTS = (screen.RUNNING_TINT, screen.FAILED_TINT)
 _KEYS = {curses.KEY_ENTER: "\n", curses.KEY_BACKSPACE: "\x7f"}
 
 
@@ -86,13 +86,13 @@ def _attributes():
 
     With 256 colours each canvas colour is defined exactly at its own number from 16 when the
     terminal can redefine colours, else it is its nearest xterm index. A `bg` of None is the ground.
-    With fewer, a filled ground other than a tint is reverse video, and bold stays bold.
+    With fewer, a filled ground is reverse video, and bold stays bold.
     """
     if not (curses.has_colors() and curses.COLORS >= 256):
 
         def reverse(fg, bg, bold):
             """Reverse video for the selection, a tab, a badge or a box; bold as bold."""
-            filled = bg is not None and bg not in _TINTS
+            filled = bg is not None
             return (curses.A_REVERSE if filled else curses.A_NORMAL) | _bold(bold)
 
         return reverse
@@ -100,7 +100,7 @@ def _attributes():
     if curses.can_change_color():
         numbers = {hexed: _FIRST_COLOUR + i for i, hexed in enumerate(_XTERM)}
         for hexed, number in numbers.items():
-            channels = (round(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5))
+            channels = (math.ceil(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5))
             curses.init_color(number, *channels)
     pairs = {}
 
