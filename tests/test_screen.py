@@ -505,3 +505,15 @@ def test_a_running_now_row_widens_its_recipe_and_task_columns_to_the_longest_nam
     screen.draw(grid, frame)
     grid.find(r"^.{37}" + re.escape(f"{'core-image-base':<17}{'do_rootfs':<22}") + r"\d+m\d\ds")
     grid.find(r"^.{37}" + re.escape(f"{'zlib':<17}{'do_package_write_ipk':<22}") + r"\d+m\d\ds")
+
+
+def test_a_running_now_row_keeps_its_elapsed_time_at_80_columns_by_cutting_the_recipe_first():
+    stamp = "2026-11-10 03:11:00 - INFO     - NOTE: "
+    grid, _ = build_head(
+        stamp + "Running task 5 of 9 (/l/a.bb:do_rootfs)",
+        stamp + "recipe core-image-base-1.0-r0: task do_package_write_ipk: Started",
+    )
+    y = grid.find(r"^.{37}core-image")[0]
+    shown = re.fullmatch(r"(\S+) {2,}(\S+) {2,}(\d+m\d\ds) *", grid.text(y)[37:])
+    assert shown is not None, grid.text(y)
+    assert shown.group(1, 2) == ("core-image-b", "do_package_write_ipk")
