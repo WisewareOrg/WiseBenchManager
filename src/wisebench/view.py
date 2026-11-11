@@ -146,7 +146,7 @@ class Frame:
         history_cursor (int): Index of the History selection.
         history_scroll (int): Index of the first History row drawn.
         history_room (int): How many History rows are drawn.
-        focus (str): "stages" or "log", the pane the movement keys act on.
+        focus (str): "stages" or "log", the pane with focus.
     """
 
     tab: str

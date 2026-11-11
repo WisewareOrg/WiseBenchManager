@@ -15,21 +15,6 @@ from wisebench import screen, view
 from wisebench.bench_state import read_bench, read_run_unit
 from wisebench.records import Records
 
-_CANVAS = (
-    screen.GROUND,
-    screen.TEXT,
-    screen.DIM,
-    screen.LOG,
-    screen.RULE,
-    screen.BRIGHT,
-    screen.GREEN,
-    screen.AMBER,
-    screen.RED,
-    screen.BLUE,
-    screen.RUNNING_TINT,
-    screen.FAILED_TINT,
-    screen.SELECTION,
-)
 _FIRST_COLOUR = 16
 _XTERM = {
     screen.GROUND: 232,
@@ -113,7 +98,7 @@ def _attributes():
         return reverse
     numbers = _XTERM
     if curses.can_change_color():
-        numbers = {hexed: _FIRST_COLOUR + i for i, hexed in enumerate(_CANVAS)}
+        numbers = {hexed: _FIRST_COLOUR + i for i, hexed in enumerate(_XTERM)}
         for hexed, number in numbers.items():
             channels = (round(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5))
             curses.init_color(number, *channels)
