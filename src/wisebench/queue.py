@@ -94,8 +94,8 @@ class Queue:
         Runs `head()`, so it fetches from `origin`.
 
         Returns:
-            list[dict]: A hand entry is `{kind: "hand", id, added, ref, sha, set, skip_build,
-            args}`; the merge head is `{kind: "merge", ref, sha, pr}`.
+            list[dict]: A hand entry is `{kind: "test", id, added, ref, sha, set, skip_build,
+            args}`; the merge head is `{kind: "run", ref, sha, pr}`.
 
         Raises:
             BenchFailure: More than one merge-queue ref qualifies.
@@ -105,12 +105,12 @@ class Queue:
         with closing(self._db()) as db:
             rows = db.execute("SELECT id, added, entry FROM queue ORDER BY id").fetchall()
         entries = [
-            {"kind": "hand", "id": id_, "added": added, **json.loads(entry)}
+            {"kind": "test", "id": id_, "added": added, **json.loads(entry)}
             for id_, added, entry in rows
         ]
         head = self.head()
         if head is not None:
-            entries.append({"kind": "merge", **head})
+            entries.append({"kind": "run", **head})
         return entries
 
     def remove(self, entry_id):
@@ -141,7 +141,7 @@ class Queue:
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
         for entry in self.entries():
-            if entry["kind"] == "merge" or self.remove(entry["id"]):
+            if entry["kind"] == "run" or self.remove(entry["id"]):
                 return entry
         return None
 

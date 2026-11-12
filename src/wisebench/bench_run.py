@@ -41,8 +41,8 @@ class BenchRun:
     def run(self, lg_env):
         """Execute one cycle: take the next queue entry and run it.
 
-        A run queued by hand is recorded as `kind=test` and posts nothing; a candidate failure
-        in it is not a bench fault. A merge-queue entry's verdict is posted.
+        An entry of kind `test` (queued by hand) is recorded as `kind=test` and posts nothing; a
+        candidate failure in it is not a bench fault. A merge-queue entry's verdict is posted.
 
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`), passed through to
@@ -63,7 +63,7 @@ class BenchRun:
             if entry is None:
                 print("bench run: no job")
                 return
-            if entry["kind"] == "hand":
+            if entry["kind"] == "test":
                 self._run_hand(entry, lg_env)
                 return
             ref, sha, pr = entry["ref"], entry["sha"], entry["pr"]
@@ -90,7 +90,9 @@ class BenchRun:
                     check.post(sha, "failure", str(failure).splitlines()[0], summary)
 
             try:
-                BenchTest(self.checkout, sha, None, kind="run", pr=pr).run(lg_env, [], post=post)
+                BenchTest(self.checkout, sha, None, kind=entry["kind"], pr=pr).run(
+                    lg_env, [], post=post
+                )
             except CandidateFailure:
                 return
         except Exception as exc:
@@ -116,7 +118,7 @@ class BenchRun:
             entry["ref"],
             entry["set"],
             skip_build=entry["skip_build"],
-            kind="test",
+            kind=entry["kind"],
             sha=entry["sha"],
         )
         try:
