@@ -42,7 +42,8 @@ class Queue:
         db.execute("PRAGMA journal_mode=WAL")
         db.execute(
             "CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "added TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, entry TEXT NOT NULL)"
+            "added TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')), "
+            "entry TEXT NOT NULL)"
         )
         return db
 
