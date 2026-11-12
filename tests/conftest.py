@@ -23,7 +23,7 @@ def _isolated_home(monkeypatch, tmp_path):
 
 @pytest.fixture
 def bench_test_class(monkeypatch):
-    """Replace `BenchTest` in `cli` and `bench_run` with an autospec of the real class.
+    """Replace `BenchTest` in `bench_run`, and in `cli` if it still names it, with an autospec.
 
     The mock takes the real constructor and `run` signatures, so a test fails when either
     changes. It has no behaviour; a test sets `bench_test_class.return_value.run.side_effect`
@@ -36,7 +36,7 @@ def bench_test_class(monkeypatch):
         unittest.mock.MagicMock: The mocked class, callable; its `return_value` is the instance.
     """
     mock = create_autospec(BenchTest)
-    monkeypatch.setattr(cli, "BenchTest", mock)
+    monkeypatch.setattr(cli, "BenchTest", mock, raising=False)
     monkeypatch.setattr(bench_run, "BenchTest", mock)
     return mock
 
