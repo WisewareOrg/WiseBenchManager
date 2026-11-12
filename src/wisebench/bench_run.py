@@ -1,5 +1,6 @@
-"""BenchRun: one `bench run` cycle -- the queue head, through `BenchTest`, to one check run."""
+"""BenchRun: one `bench run` cycle -- the next queue entry, through `BenchTest`."""
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -11,19 +12,19 @@ from wisebench.queue import Queue
 
 
 class BenchRun:
-    """One `bench run` cycle: the queue head, through `BenchTest` in-process, to one check run.
+    """One `bench run` cycle: the next queue entry, through `BenchTest` in-process.
 
     Holds the checkout, the loaded `Config` and the result directory `DISABLED` sits in. Knows
     nothing about the lock shared with `bench test` -- the CLI holds that for this call's whole
-    duration. The verdict is posted by `BenchTest`'s `posted` stage, through a callable this
-    class passes to `BenchTest.run`.
+    duration. A merge-queue entry's verdict is posted by `BenchTest`'s `posted` stage, through a
+    callable this class passes to `BenchTest.run`; a run queued by hand posts nothing.
     """
 
     def __init__(self, checkout, config, result_dir):
         """Bind one BenchRun to a checkout, its loaded configuration and its result directory.
 
         Args:
-            checkout (pathlib.Path): The layer's clone this run reads the queue head against,
+            checkout (pathlib.Path): The layer's clone this run reads the queue against,
                 fetches the job's ref into, and tests.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
                 names the systemd unit this run disables on the bench's own failure.
@@ -39,7 +40,10 @@ class BenchRun:
         self._result_dir = result_dir
 
     def run(self, lg_env):
-        """Execute one cycle: the queue head, the job, the verdict.
+        """Execute one cycle: take the next queue entry and run it.
+
+        A run queued by hand is recorded as `kind=test` and posts nothing; a candidate failure
+        in it is not a bench fault. A merge-queue entry's verdict is posted.
 
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`), passed through to
@@ -56,11 +60,23 @@ class BenchRun:
             return
 
         try:
-            head = Queue(self.checkout).head()
-            if head is None:
+            entry = Queue(self.checkout, self._result_dir).take()
+            if entry is None:
                 print("bench run: no job")
                 return
-            ref, sha, pr = head
+            if "id" in entry:
+                hand = BenchTest(
+                    self.checkout,
+                    entry["ref"],
+                    entry["set"],
+                    skip_build=entry["skip_build"],
+                    kind="test",
+                    sha=entry["sha"],
+                )
+                with contextlib.suppress(CandidateFailure):
+                    hand.run(lg_env, entry["args"])
+                return
+            ref, sha, pr = entry["ref"], entry["sha"], entry["pr"]
 
             subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
 
