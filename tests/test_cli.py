@@ -3,11 +3,14 @@
 import contextlib
 import fcntl
 import os
+import re
 import signal
+import subprocess
 
 import pytest
+from helpers import repo_with_one_commit
 
-from wisebench import bench_run, bench_test, cli
+from wisebench import bench_run, bench_test, cli, queue
 from wisebench.lock import Lock
 
 
@@ -26,61 +29,113 @@ def made(monkeypatch, bench_test_class):
     yield bench_test_class
 
 
-def test_main_returns_0_on_a_clean_run(made, monkeypatch, tmp_path):
-    """main returns 0 on a clean bench test run."""
+def _spy_add(monkeypatch, result=(7, "deadbeef", 3)):
+    """Replace `Queue.add` with a recorder returning `result`; return the recorded calls."""
+    calls = []
+
+    def add(self, ref, set_name, skip_build, pytest_args):
+        calls.append((ref, set_name, skip_build, pytest_args))
+        return result
+
+    monkeypatch.setattr(queue.Queue, "add", add)
+    return calls
+
+
+def test_main_test_queues_the_run_and_prints_id_sha_and_place(made, monkeypatch, tmp_path, capsys):
+    """`bench test` hands Queue.add its ref, set, skip-build flag and pytest args, then returns."""
     monkeypatch.chdir(tmp_path)
+    calls = _spy_add(monkeypatch)
+
+    assert cli.main(["test", "HEAD", "--set", "s1", "--skip-build", "--", "-k", "x"]) == 0
+
+    assert calls == [("HEAD", "s1", True, ["-k", "x"])]
+    assert capsys.readouterr().out.splitlines() == ["queued 7 deadbeef place 3"]
+    made.assert_not_called()
+
+
+def test_main_test_defaults_to_no_set_no_skip_build_and_no_pytest_args(made, monkeypatch, tmp_path):
+    """`bench test <ref>` alone hands Queue.add set None, skip-build False and no pytest args."""
+    monkeypatch.chdir(tmp_path)
+    calls = _spy_add(monkeypatch)
     assert cli.main(["test", "HEAD"]) == 0
-    made.return_value.run.assert_called_once_with("unused.yaml", [])
+    assert calls == [("HEAD", None, False, [])]
 
 
-def test_main_returns_1_on_a_candidate_failure(made, monkeypatch, tmp_path):
-    """main returns 1 on a candidate failure."""
-    monkeypatch.chdir(tmp_path)
-    made.return_value.run.side_effect = bench_test.CandidateFailure("build exited 1")
-    assert cli.main(["test", "HEAD"]) == 1
-
-
-def test_main_returns_2_on_a_bench_failure(made, monkeypatch, tmp_path):
-    """main returns 2 on a bench failure."""
-    monkeypatch.chdir(tmp_path)
-    made.return_value.run.side_effect = bench_test.BenchFailure("precondition exited 2")
-    assert cli.main(["test", "HEAD"]) == 2
-
-
-def test_main_returns_2_on_a_raw_exception_run_never_wraps(made, monkeypatch, tmp_path):
-    """main returns 2 on an exception that is neither BenchFailure nor CandidateFailure."""
-    monkeypatch.chdir(tmp_path)
-    made.return_value.run.side_effect = RuntimeError("tree is dirty: [' M x']")
-    assert cli.main(["test", "HEAD"]) == 2
-
-
-def test_main_returns_2_when_lg_env_is_not_set(monkeypatch, tmp_path):
-    """main returns 2 for bench test when LG_ENV is not set."""
+def test_main_test_needs_neither_lg_env_nor_the_lock(monkeypatch, tmp_path, capsys):
+    """`bench test` queues with LG_ENV unset and the lock held, in the real repo, and returns 0."""
+    repo_with_one_commit(tmp_path)
     monkeypatch.delenv("LG_ENV", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["test", "HEAD"]) == 2
+    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    with _hold_lock(tmp_path):
+        assert cli.main(["test", "HEAD"]) == 0
+
+    out = capsys.readouterr().out
+    assert re.fullmatch(rf"queued \d+ {sha} place 1\n", out)
+    assert (tmp_path / "records" / "queue.db").is_file()
+    entries = queue.Queue(tmp_path, tmp_path / "records").entries()
+    assert [(entry["ref"], entry["sha"]) for entry in entries] == [("HEAD", sha)]
 
 
-def test_main_passes_set_name_and_pytest_args_through(made, monkeypatch, tmp_path):
-    """main passes --set and the trailing pytest args through to BenchTest."""
+def test_main_test_refuses_a_ref_that_is_not_a_commit(monkeypatch, tmp_path, capsys):
+    """An unresolvable ref exits 2 with the named error and queues nothing."""
+    repo_with_one_commit(tmp_path)
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["test", "HEAD", "--set", "scratch-set", "--", "-k", "x"]) == 0
-    assert made.call_args.args[2] == "scratch-set"
-    made.return_value.run.assert_called_once_with("unused.yaml", ["-k", "x"])
+    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+
+    assert cli.main(["test", "no-such-ref"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "BENCH ERROR: no-such-ref does not resolve to a commit"
+    assert captured.out == ""
+    assert queue.Queue(tmp_path, tmp_path / "records").entries() == []
 
 
-def test_main_passes_skip_build_through(made, monkeypatch, tmp_path):
-    """main passes --skip-build through to BenchTest.skip_build."""
+def test_main_unqueue_removes_a_queued_run(monkeypatch, tmp_path, capsys):
+    """`bench unqueue <id>` removes the entry, prints `removed <id>`, needs no LG_ENV or lock."""
+    repo_with_one_commit(tmp_path)
+    monkeypatch.delenv("LG_ENV", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["test", "HEAD", "--skip-build"]) == 0
-    assert made.call_args.kwargs["skip_build"] is True
+    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    store = queue.Queue(tmp_path, tmp_path / "records")
+
+    with _hold_lock(tmp_path):
+        entry_id, _, _ = store.add("HEAD", None, False, [])
+        other_id, _, _ = store.add("HEAD", None, False, [])
+        assert cli.main(["unqueue", str(entry_id)]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [f"removed {entry_id}"]
+    assert [entry["id"] for entry in store.entries()] == [other_id]
 
 
-def test_main_defaults_skip_build_to_false(made, monkeypatch, tmp_path):
-    """main defaults BenchTest.skip_build to False."""
+def test_main_unqueue_of_an_id_not_queued_exits_2(monkeypatch, tmp_path, capsys):
+    """`bench unqueue <id>` of a run that is not queued exits 2 with the named error."""
+    repo_with_one_commit(tmp_path)
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["test", "HEAD"]) == 0
-    assert made.call_args.kwargs["skip_build"] is False
+    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+
+    assert cli.main(["unqueue", "99"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "BENCH ERROR: no queued run 99"
+    assert captured.out == ""
+
+
+def test_main_unqueue_of_a_run_already_taken_exits_2(monkeypatch, tmp_path, capsys):
+    """A taken (running) entry cannot be unqueued."""
+    repo_with_one_commit(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    store = queue.Queue(tmp_path, tmp_path / "records")
+    entry_id, _, _ = store.add("HEAD", None, False, [])
+    assert store.take()["id"] == entry_id
+
+    assert cli.main(["unqueue", str(entry_id)]) == 2
+    assert capsys.readouterr().err.strip() == f"BENCH ERROR: no queued run {entry_id}"
 
 
 @contextlib.contextmanager
@@ -94,14 +149,6 @@ def _hold_lock(tmp_path):
             yield
         finally:
             fcntl.flock(held, fcntl.LOCK_UN)
-
-
-def test_main_test_returns_2_when_the_lock_is_already_held(made, monkeypatch, tmp_path):
-    """main returns 2 for bench test when the lock is already held."""
-    monkeypatch.chdir(tmp_path)
-    with _hold_lock(tmp_path):
-        assert cli.main(["test", "HEAD"]) == 2
-    made.return_value.run.assert_not_called()
 
 
 def _write_bench_toml(repo):
@@ -268,11 +315,11 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
     monkeypatch.setattr(bench_run.subprocess, "run", fake_subprocess_run)
 
     class _StubQueue:
-        def __init__(self, checkout):
+        def __init__(self, checkout, directory):
             pass
 
-        def head(self):
-            return ("main", "deadbeef", 1)
+        def take(self):
+            return {"ref": "main", "sha": "deadbeef", "pr": 1}
 
     class _StubCheck:
         def __init__(self, *a, **kw):
