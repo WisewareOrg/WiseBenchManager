@@ -41,7 +41,8 @@ class BenchTest:
 
         Args:
             checkout (pathlib.Path): The layer's clone to resolve, check out and test.
-            ref (str): The git ref to resolve, check out and test.
+            ref (str): The git ref to resolve, check out and test; with `sha` given, only the name
+                the record shows.
             set_name (str | None): The replay set name from `--set`, or None.
             skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
                 with `bench_candidate` `None`, against the board as it is.

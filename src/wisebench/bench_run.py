@@ -1,6 +1,5 @@
 """BenchRun: one `bench run` cycle -- the next queue entry, through `BenchTest`."""
 
-import contextlib
 import os
 import subprocess
 import sys
@@ -65,16 +64,7 @@ class BenchRun:
                 print("bench run: no job")
                 return
             if "id" in entry:
-                hand = BenchTest(
-                    self.checkout,
-                    entry["ref"],
-                    entry["set"],
-                    skip_build=entry["skip_build"],
-                    kind="test",
-                    sha=entry["sha"],
-                )
-                with contextlib.suppress(CandidateFailure):
-                    hand.run(lg_env, entry["args"])
+                self._run_hand(entry, lg_env)
                 return
             ref, sha, pr = entry["ref"], entry["sha"], entry["pr"]
 
@@ -115,3 +105,21 @@ class BenchRun:
             if result.returncode != 0:
                 print(f"bench run: systemctl failed: {result.stderr.strip()}", file=sys.stderr)
             raise
+
+    def _run_hand(self, entry, lg_env):
+        """Run a hand entry as `kind=test`: its queued sha and options, nothing posted.
+
+        A candidate failure is recorded by `BenchTest` and ends the run normally.
+        """
+        hand = BenchTest(
+            self.checkout,
+            entry["ref"],
+            entry["set"],
+            skip_build=entry["skip_build"],
+            kind="test",
+            sha=entry["sha"],
+        )
+        try:
+            hand.run(lg_env, entry["args"])
+        except CandidateFailure:
+            return

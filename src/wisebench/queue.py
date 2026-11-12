@@ -15,8 +15,9 @@ class Queue:
     """Runs queued by hand, then the GitHub merge queue's head entry, for one checkout.
 
     Hand entries live in the `queue` table of `<directory>/queue.db`; the merge queue's head is
-    read with `git ls-remote` against the checkout. `take()` is the whole run order; `head()` is
-    swappable for a different queue adapter (e.g. Mergify) behind the same signature.
+    read with `git ls-remote` against the checkout. `entries()` defines the run order and `take()`
+    claims its first entry; `head()` is swappable for a different queue adapter (e.g. Mergify)
+    behind the same signature.
     """
 
     def __init__(self, checkout, directory):
