@@ -36,7 +36,7 @@ class CandidateFailure(Exception):
 class BenchTest:
     """One `bench test <ref>` run: the checkout, ref, replay set name and skip-build flag."""
 
-    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test", pr=None):
+    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test", pr=None, sha=None):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
         Args:
@@ -48,6 +48,8 @@ class BenchTest:
             kind (str): `"test"` or `"run"`, for the run-started line only; set by `BenchRun`.
             pr (int | None): The PR a queue entry names, appended to the run-started line as
                 `pr=<n>` when given; set by `BenchRun`.
+            sha (str | None): The commit to build, when queued by hand; `ref` is then only the
+                name the record shows. None resolves `ref` at run time.
         """
         self.checkout = checkout
         self.ref = ref
@@ -55,6 +57,7 @@ class BenchTest:
         self.skip_build = skip_build
         self.kind = kind
         self.pr = pr
+        self.sha = sha
 
     def run(self, lg_env, pytest_args, post=None):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
@@ -192,7 +195,7 @@ class BenchTest:
             self._mark(log, f"stage {name} passed{sha}")
 
     def _checkout_commit(self, log):
-        """Resolve `self.ref` to a commit, refuse a dirty tree, and check out that commit.
+        """Resolve `self.ref` (or take the pinned `self.sha`), refuse a dirty tree, check it out.
 
         Git's own output lands in `log`.
 
@@ -203,14 +206,16 @@ class BenchTest:
             RuntimeError: The tree has modified or staged tracked files.
             subprocess.CalledProcessError: The ref did not resolve, or the checkout failed.
         """
-        commit = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{self.ref}^{{commit}}"],
-            cwd=self.checkout,
-            stdout=subprocess.PIPE,
-            stderr=log,
-            text=True,
-            check=True,
-        ).stdout.strip()
+        commit = self.sha
+        if commit is None:
+            commit = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{self.ref}^{{commit}}"],
+                cwd=self.checkout,
+                stdout=subprocess.PIPE,
+                stderr=log,
+                text=True,
+                check=True,
+            ).stdout.strip()
         status = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=self.checkout,
