@@ -2,18 +2,20 @@
 
 **Status:** accepted
 **Decided:** 2026-10-11 (the runner survey that founded this repository; built in WisewareOrg/WiseBenchManager#6 `bench run`)
-**Rev:** 1
+**Rev:** 2
 
 ## Revisions
 
+- **rev 2** — 2026-11-12 — a tick takes a run queued by hand before the merge queue's head, and
+  the lock is the tick's alone (ADR 0005 rev 1; #60 Queue behaviour); the decision is unchanged.
 - **rev 1** — 2026-10-29 — first written (WisewareOrg/WiseBenchManager PR #31 ADR 0001 as trade studies).
 
 ## Context
 
 The merge queue's head is gated by a run on the one physical board, from the build host beside it.
 Something has to notice that the queue has an entry, start a run for it, keep a second run off the
-board while one is going — including a hand `bench test` started for an investigation — and get the
-verdict back to GitHub.
+board while one is going, and get the verdict back to GitHub. A run queued by hand for an
+investigation (ADR 0005 rev 1) goes through the same trigger and the same exclusion.
 
 GitHub has a mechanism built for exactly this, and it is the obvious answer: a self-hosted Actions
 runner listening for `merge_group`. It would select the entry, serialise jobs and report status
@@ -28,11 +30,13 @@ host. What the choice is held to:
 
 **A systemd user timer starts `bench run`; an `fcntl.flock` keeps the board to one run.**
 
-- Each tick reads the merge queue's head from the `gh-readonly-queue` refs, taking the entry whose
-  base is `main`'s current tip. With none, it exits.
-- `bench run` and `bench test` share one lock file beside the records. A tick that finds it held
-  backs off; a hand run that finds it held refuses.
-- Reading the queue head is one class, `Queue.head()`, so a different queue is a different class.
+- Each tick takes the first entry of the queue of ADR 0005 rev 1: the oldest run queued by hand, else
+  the merge queue's head, read from the `gh-readonly-queue` refs, taking the entry whose base is
+  `main`'s current tip. With none, it exits.
+- `bench run` holds one lock file beside the records for the whole of a run. A tick that finds it
+  held backs off.
+- Reading the merge queue's head is `Queue.head()` inside the one `Queue` class, so a different merge
+  queue is a different `head()`.
 
 ## Alternatives considered
 
@@ -43,8 +47,8 @@ host. What the choice is held to:
 
 ## Consequences
 
-- **A queue entry waits for the next tick** before a run picks it up, and for the current job too if
-  the lock is held.
+- **A queue entry, merge-queue or queued by hand, waits for the next tick** before a run picks it
+  up, and for the current job too if the lock is held.
 - **Queue-head selection is our code**, a `git ls-remote` read kept behind one class, where an
   Actions runner would have done it for free.
 - **The bench stops itself.** The timer is the unit the bench's own failure disables, so a broken

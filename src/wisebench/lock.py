@@ -1,4 +1,4 @@
-"""Lock: the exclusive, non-blocking lock `bench test` and `bench run` share."""
+"""Lock: the exclusive, non-blocking lock `bench run` holds for the whole of a run."""
 
 import fcntl
 
@@ -10,7 +10,7 @@ class Lock:
 
     Holds the directory the lock file (`lock`) sits in; opens and locks it in `__enter__`, so a
     directory that does not yet exist is created rather than failing before the lock is
-    attempted. The CLI holds one `Lock` for the whole of a `bench test` or `bench run`
+    attempted. The CLI holds one `Lock` for the whole of a `bench run`
     invocation; neither `BenchTest` nor `BenchRun` takes one of their own.
     """
 

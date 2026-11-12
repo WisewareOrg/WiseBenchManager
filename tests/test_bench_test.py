@@ -8,6 +8,7 @@ import sys
 
 import pytest
 from helpers import (
+    git,
     marker_lines,
     repo_with_one_commit,
     write_bench_toml,
@@ -305,6 +306,32 @@ def test_run_started_line_carries_the_pr_number_when_one_is_given(monkeypatch, t
         if line.startswith("bench: ")
     ]
     assert lines[0] == "run started kind=run ref=HEAD pr=7"
+
+
+def test_a_pinned_sha_is_built_though_the_ref_now_names_another_commit(monkeypatch, tmp_path):
+    """BenchTest(sha=...) builds `sha`; the record still says `ref=<as typed>`."""
+    monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
+    monkeypatch.chdir(tmp_path)
+    repo_with_one_commit(tmp_path)
+    pinned = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (tmp_path / "tracked.txt").write_text("two\n")
+    git(tmp_path, "commit", "-q", "-am", "second")
+    write_bench_toml(tmp_path, precondition="printf %s $BENCH_SHA > bench_sha.txt")
+    write_suite(tmp_path, "host_suite", passing=True)
+    write_suite(tmp_path, "target_suite", passing=True)
+    lg_env = write_lg_env(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, sha=pinned)
+
+    bench.run(lg_env, [])
+
+    assert (tmp_path / "bench_sha.txt").read_text() == pinned
+    assert (tmp_path / "tracked.txt").read_text() == "one\n"
+    lines = marker_lines(tmp_path)
+    assert lines[0] == "run started kind=test ref=HEAD"
+    assert f"stage checkout passed sha={pinned}" in lines
+    assert lines[-1] == "run passed"
 
 
 def _recording_post(tmp_path):

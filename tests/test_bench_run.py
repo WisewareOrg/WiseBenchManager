@@ -1,5 +1,6 @@
 """`BenchRun.run`: `DISABLED`, the queue head, and the posted verdict."""
 
+import inspect
 import subprocess
 from unittest.mock import ANY
 
@@ -15,6 +16,7 @@ from helpers import (
 
 from wisebench import bench_run, bench_test
 from wisebench.config import Config
+from wisebench.queue import Queue
 
 
 def _config(run_unit="bench-run"):
@@ -35,12 +37,16 @@ def _make_run(tmp_path, *, run_unit="bench-run"):
 
 
 class _FakeQueue:
-    """Scripted stand-in for `wisebench.queue.Queue`; `head()` returns or raises."""
+    """Scripted stand-in for `wisebench.queue.Queue`; `take()` returns or raises."""
 
-    def __init__(self, checkout):
+    constructed = []
+
+    def __init__(self, checkout, directory):
         self.checkout = checkout
+        self.directory = directory
+        _FakeQueue.constructed.append((checkout, directory))
 
-    def head(self):
+    def take(self):
         if isinstance(_FakeQueue.outcome, Exception):
             raise _FakeQueue.outcome
         return _FakeQueue.result
@@ -75,6 +81,7 @@ def made(monkeypatch):
     monkeypatch.setattr(bench_run, "Check", _FakeCheck)
     _FakeQueue.result = None
     _FakeQueue.outcome = None
+    _FakeQueue.constructed = []
     _FakeCheck.instances = []
     _FakeCheck.posts = []
     _FakeCheck.init_outcome = None
@@ -114,7 +121,22 @@ def _stub_subprocess(monkeypatch, timer_disable, *, error_on=None):
     return calls
 
 
-_QUEUE_HEAD = ("refs/heads/gh-readonly-queue/main/pr-14-cafef00d", "cafef00d", 14)
+_QUEUE_HEAD = {
+    "kind": "run",
+    "ref": "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
+    "sha": "cafef00d",
+    "pr": 14,
+}
+_HAND_ENTRY = {
+    "kind": "test",
+    "id": 3,
+    "added": "2026-11-12 09:00:00",
+    "ref": "feature/x",
+    "sha": "0123abcd",
+    "set": "s1",
+    "skip_build": True,
+    "args": ["-k", "x"],
+}
 
 
 def _run_of(bench_test_class):
@@ -379,7 +401,7 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
-    _FakeQueue.result = ("HEAD", sha, 14)
+    _FakeQueue.result = {"kind": "run", "ref": "HEAD", "sha": sha, "pr": 14}
     seen = []
     monkeypatch.setattr(
         _FakeCheck,
@@ -398,3 +420,149 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
     assert lines_at_post[-1] == "stage posted started"
     final = marker_lines(tmp_path)
     assert final[-3:] == ["stage posted started", "stage posted passed", "run failed"]
+
+
+# -- a hand entry: kind=test, the queued sha and options, nothing posted ---------------------
+
+
+def _bound(signature, call, *leading):
+    """The arguments of a recorded mock `call` bound to `signature`, defaults applied."""
+    bound = signature.bind(*leading, *call.args, **call.kwargs)
+    bound.apply_defaults()
+    return bound.arguments
+
+
+def _ctor_args(bench_test_class):
+    """The arguments BenchRun constructed `BenchTest` with, by parameter name."""
+    signature = inspect.signature(bench_test.BenchTest.__init__)
+    return _bound(signature, bench_test_class.call_args, None)
+
+
+def _run_args(bench_test_class):
+    """The arguments BenchRun called `BenchTest.run` with, by parameter name."""
+    signature = inspect.signature(bench_test.BenchTest.run)
+    return _bound(signature, _run_of(bench_test_class).call_args, None)
+
+
+def test_run_takes_from_the_queue_in_the_records_directory(
+    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """BenchRun reads the queue at `Queue(checkout, result_dir)`, where `bench test` writes."""
+    _stub_subprocess(monkeypatch, timer_disable)
+    _FakeQueue.result = None
+    _make_run(tmp_path).run("env.yaml")
+    assert _FakeQueue.constructed == [(tmp_path, tmp_path / "records")]
+
+
+def test_run_of_a_hand_entry_reaches_bench_test_as_kind_test_with_the_queued_options(
+    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """A hand entry runs as kind=test: ref as typed, the queued sha, set, skip_build and args."""
+    _stub_subprocess(monkeypatch, timer_disable)
+    _FakeQueue.result = dict(_HAND_ENTRY)
+    _make_run(tmp_path).run("env.yaml")
+
+    bench_test_class.assert_called_once()
+    ctor = _ctor_args(bench_test_class)
+    assert ctor["checkout"] == tmp_path
+    assert ctor["ref"] == "feature/x"
+    assert ctor["sha"] == "0123abcd"
+    assert ctor["set_name"] == "s1"
+    assert ctor["skip_build"] is True
+    assert ctor["kind"] == "test" == _HAND_ENTRY["kind"]
+    _run_of(bench_test_class).assert_called_once()
+    run_args = _run_args(bench_test_class)
+    assert run_args["lg_env"] == "env.yaml"
+    assert run_args["pytest_args"] == ["-k", "x"]
+    assert timer_disable == []
+
+
+def test_run_of_a_hand_entry_builds_no_check_and_posts_nothing(
+    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """A hand run constructs no `Check` and hands `BenchTest.run` no `post`."""
+    _stub_subprocess(monkeypatch, timer_disable)
+    _FakeQueue.result = dict(_HAND_ENTRY)
+    _make_run(tmp_path).run("env.yaml")
+
+    assert _FakeCheck.instances == []
+    assert _FakeCheck.posts == []
+    assert _run_args(bench_test_class)["post"] is None
+
+
+def test_run_of_a_hand_entry_with_a_candidate_failure_returns_without_disabling(
+    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """A hand run's CandidateFailure: no DISABLED, no timer disable, normal return, no post."""
+    _stub_subprocess(monkeypatch, timer_disable)
+    _FakeQueue.result = dict(_HAND_ENTRY)
+    _run_of(bench_test_class).side_effect = bench_test.CandidateFailure("target_suite failed")
+
+    _make_run(tmp_path).run("env.yaml")
+
+    assert not (tmp_path / "records" / "DISABLED").exists()
+    assert timer_disable == []
+    assert _FakeCheck.instances == []
+    assert _FakeCheck.posts == []
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        bench_test.BenchFailure("precondition exited 9"),
+        RuntimeError("tree is dirty: [' M x']"),
+        subprocess.CalledProcessError(128, ["git", "checkout", "0123abcd"]),
+    ],
+    ids=["bench-failure", "dirty-tree", "checkout-failure"],
+)
+def test_run_of_a_hand_entry_with_any_other_failure_is_a_bench_fault(
+    made, bench_test_class, timer_disable, monkeypatch, tmp_path, fault
+):
+    """Anything but CandidateFailure from a hand run writes DISABLED, disables the timer, raises."""
+    _stub_subprocess(monkeypatch, timer_disable)
+    _FakeQueue.result = dict(_HAND_ENTRY)
+    _run_of(bench_test_class).side_effect = fault
+
+    with pytest.raises(type(fault)):
+        _make_run(tmp_path, run_unit="scratch-unit").run("env.yaml")
+
+    disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
+    assert len(disabled) == 2
+    assert timer_disable == ["scratch-unit"]
+    assert _FakeCheck.posts == []
+
+
+def test_run_of_an_entry_queued_by_the_real_queue_reaches_bench_test_with_what_was_queued(
+    bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """What `Queue.add` stores is what `BenchRun.run` reads: no hand-copied entry between them."""
+    repo_with_one_commit(tmp_path)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    monkeypatch.setattr(Queue, "head", lambda self: None)
+    Queue(tmp_path, tmp_path / "records").add("HEAD", "s1", True, ["-k", "x"])
+
+    _make_run(tmp_path).run("env.yaml")
+
+    ctor = _ctor_args(bench_test_class)
+    assert ctor["ref"] == "HEAD"
+    assert ctor["sha"] == sha
+    assert ctor["set_name"] == "s1"
+    assert ctor["skip_build"] is True
+    assert ctor["kind"] == "test"
+    assert _run_args(bench_test_class)["pytest_args"] == ["-k", "x"]
+    assert timer_disable == []
+
+
+def test_run_routes_on_kind_so_a_merge_head_carrying_an_id_still_takes_the_merge_path(
+    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """A merge entry is run as kind=run with a Check even if it has an `id` key."""
+    _stub_subprocess(monkeypatch, timer_disable)
+    _FakeQueue.result = {**_QUEUE_HEAD, "id": 99}
+    _make_run(tmp_path).run("env.yaml")
+
+    assert len(_FakeCheck.instances) == 1
+    assert _ctor_args(bench_test_class)["kind"] == "run" == _QUEUE_HEAD["kind"]
+    assert _run_args(bench_test_class)["post"] is not None

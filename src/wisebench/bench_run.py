@@ -1,4 +1,4 @@
-"""BenchRun: one `bench run` cycle -- the queue head, through `BenchTest`, to one check run."""
+"""BenchRun: one `bench run` cycle -- the next queue entry, through `BenchTest`."""
 
 import os
 import subprocess
@@ -11,19 +11,19 @@ from wisebench.queue import Queue
 
 
 class BenchRun:
-    """One `bench run` cycle: the queue head, through `BenchTest` in-process, to one check run.
+    """One `bench run` cycle: the next queue entry, through `BenchTest` in-process.
 
     Holds the checkout, the loaded `Config` and the result directory `DISABLED` sits in. Knows
-    nothing about the lock shared with `bench test` -- the CLI holds that for this call's whole
-    duration. The verdict is posted by `BenchTest`'s `posted` stage, through a callable this
-    class passes to `BenchTest.run`.
+    nothing about the lock `bench run` holds -- the CLI holds that for this call's whole
+    duration. A merge-queue entry's verdict is posted by `BenchTest`'s `posted` stage, through a
+    callable this class passes to `BenchTest.run`; a run queued by hand posts nothing.
     """
 
     def __init__(self, checkout, config, result_dir):
         """Bind one BenchRun to a checkout, its loaded configuration and its result directory.
 
         Args:
-            checkout (pathlib.Path): The layer's clone this run reads the queue head against,
+            checkout (pathlib.Path): The layer's clone this run reads the queue against,
                 fetches the job's ref into, and tests.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
                 names the systemd unit this run disables on the bench's own failure.
@@ -39,7 +39,10 @@ class BenchRun:
         self._result_dir = result_dir
 
     def run(self, lg_env):
-        """Execute one cycle: the queue head, the job, the verdict.
+        """Execute one cycle: take the next queue entry and run it.
+
+        An entry of kind `test` (queued by hand) is recorded as `kind=test` and posts nothing; a
+        candidate failure in it is not a bench fault. A merge-queue entry's verdict is posted.
 
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`), passed through to
@@ -56,11 +59,14 @@ class BenchRun:
             return
 
         try:
-            head = Queue(self.checkout).head()
-            if head is None:
+            entry = Queue(self.checkout, self._result_dir).take()
+            if entry is None:
                 print("bench run: no job")
                 return
-            ref, sha, pr = head
+            if entry["kind"] == "test":
+                self._run_hand(entry, lg_env)
+                return
+            ref, sha, pr = entry["ref"], entry["sha"], entry["pr"]
 
             subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
 
@@ -84,7 +90,9 @@ class BenchRun:
                     check.post(sha, "failure", str(failure).splitlines()[0], summary)
 
             try:
-                BenchTest(self.checkout, sha, None, kind="run", pr=pr).run(lg_env, [], post=post)
+                BenchTest(self.checkout, sha, None, kind=entry["kind"], pr=pr).run(
+                    lg_env, [], post=post
+                )
             except CandidateFailure:
                 return
         except Exception as exc:
@@ -99,3 +107,21 @@ class BenchRun:
             if result.returncode != 0:
                 print(f"bench run: systemctl failed: {result.stderr.strip()}", file=sys.stderr)
             raise
+
+    def _run_hand(self, entry, lg_env):
+        """Run a hand entry as `kind=test`: its queued sha and options, nothing posted.
+
+        A candidate failure is recorded by `BenchTest` and ends the run normally.
+        """
+        hand = BenchTest(
+            self.checkout,
+            entry["ref"],
+            entry["set"],
+            skip_build=entry["skip_build"],
+            kind=entry["kind"],
+            sha=entry["sha"],
+        )
+        try:
+            hand.run(lg_env, entry["args"])
+        except CandidateFailure:
+            return
