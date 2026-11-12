@@ -5,28 +5,45 @@ Yocto layer through build and test to a verdict, and it knows nothing about the 
 runs — installing a candidate on the board is the layer's own job, through its own fixture. Design
 decisions are in [`docs/decisions/`](docs/decisions/README.md).
 
-## Three commands
+## Four commands
 
 ```sh
-bench run                      # on a timer: if the merge queue has an entry, build it, run the
-                               # suites (the layer's own fixture installs it on the board), report
-                               # pass or fail to GitHub; if the bench itself broke, post nothing
-                               # and stop the timer
+bench run                      # on a timer: take one entry -- the oldest run queued by hand, else the
+                               # merge queue's head -- build it, run the suites (the layer's own
+                               # fixture installs it on the board); a merge-queue entry's pass or
+                               # fail is reported to GitHub, a run queued by hand posts nothing; if
+                               # the bench itself broke, post nothing and stop the timer
 bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
-                               # by hand, for investigations: the same path, results on the terminal;
-                               # --set names a replay set for tests that use one; --skip-build tests
-                               # the board as it already is, with no build and no install
+                               # by hand, for investigations: queue a run of <ref> and return; the
+                               # next `bench run` takes it; --set names a replay set for tests that
+                               # use one; --skip-build tests the board as it already is, with no
+                               # build and no install
+bench unqueue <id>             # remove a run queued by hand that `bench run` has not taken yet
 bench status --watch           # read-only: the run in progress and every run on disk
 ```
 
-`bench test` resolves the ref to a commit and refuses a dirty tree, then builds from that commit --
-unless `--skip-build`, which skips the build, `bundle` and the host suite entirely. A built run's
+`bench test` runs nothing. It resolves the ref to a commit in the bench checkout, queues the run in
+`records/queue.db`, and prints `queued <id> <sha> place <n>`: the id for `bench unqueue`, the commit
+the run will build, and its place among the runs queued by hand. A ref that does not resolve to a
+commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the merge
+queue's head, one entry per start; to run one now, start `bench run` by hand. A run queued by hand
+posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an entry is deleted: it
+cannot be removed, and it is not queued again if its run ends in the bench's failure.
+
+`bench test` does not fetch: it resolves the ref in the bench checkout, which refreshes `origin/*` on
+every idle tick. For a branch pushed since, run `git fetch origin <branch>` there first. Queue from
+the bench checkout -- the directory `bench run`'s service runs in -- with the service's own
+`BENCH_RESULT_DIR` if its environment file sets one: the entry is written to that directory's
+`records/queue.db`, and an entry queued anywhere else is never taken.
+
+A queued run builds the commit resolved when it was queued -- unless `--skip-build`, which skips the
+build, `bundle` and the host suite entirely -- and refuses a dirty tree when it starts. A built run's
 target suite gets that commit as the `bench_candidate` fixture's value; a layer's own fixture installs
 it on the board, and the first target-suite test asserts the booted board's `/etc/buildinfo` names that
 commit. A `--skip-build` run's target suite gets `bench_candidate` `None` instead, and runs against the
 board as it already is; its record carries an explicit `skip_build` field, and such a run is never
-evidence for a review or an investigation, both of which need a build. `bench run` never skips the
-build. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, whatever a
+evidence for a review or an investigation, both of which need a build. A merge-queue run never skips
+the build. Arguments after `--` reach pytest unchanged; the record lists the tests that ran, whatever a
 layer's own tests recorded against them, and the exact command line.
 
 ## The job
@@ -37,12 +54,12 @@ layer's own tests recorded against them, and the exact command line.
 4. `target_suite` — pytest against the board, with labgrid's own env file and the built commit as the
    `bench_candidate` fixture's value. A layer's own session fixture reads it and installs that commit on
    the board, through the layer's own update procedure, before any test in the suite runs.
-5. Verdict — one GitHub check run via `Check.post`, naming the verdict and the report path
-   (`bench run`), or the terminal (`bench test`).
+5. Verdict — for a merge-queue entry, one GitHub check run via `Check.post`, naming the verdict and
+   the report path; for a run queued by hand, the record alone.
 
 `--skip-build` skips steps 2 and 3 entirely; step 4 then gets `bench_candidate` `None`.
 
-A failing hook or test is the candidate's failure and is posted. An error in a fixture or the
+A failing hook or test is the candidate's failure and, for a merge-queue entry, is posted. An error in a fixture or the
 precondition is the bench's failure: a `DISABLED` marker is written, the timer is stopped,
 nothing is posted. pytest's own setup/call distinction is what tells the two apart: a fixture
 erroring during setup or teardown is never read as the candidate's test failing.
@@ -77,11 +94,11 @@ unit        = "bench-run"  # bench run disables bench-run.timer on the bench's o
 `[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
 layer's own repository, `app_id` the App's id, `private_key` a filesystem path to the App's
 PEM-encoded private key outside any tree (`~` is expanded), `check` the check run's name,
-exactly as the layer's ruleset lists it as a required check. `bench test` does not read
-`[github]`; a `bench.toml` without the table is fine for it. `Check`, built only by `bench run`,
-raises if any of the four is missing.
+exactly as the layer's ruleset lists it as a required check. A run queued by hand does not read
+`[github]`; a `bench.toml` without the table is fine for it. `Check`, built only for a merge-queue
+entry, raises if any of the four is missing.
 
-`bench run` calls:
+For a merge-queue entry, `bench run` calls:
 
 ```python
 Check(repo, app_id, private_key, check).post(sha, conclusion, title, summary)
@@ -144,7 +161,7 @@ the suites run with `--capture=tee-sys` and `PYTHONUNBUFFERED=1`, so a line is i
 printed. The runner's own lines start `bench: <ISO time> ` and sit on their own line:
 
 - `run started kind=<test|run> ref=<ref>`, with ` pr=<n>` (the PR its queue entry names) for a
-  `bench run`;
+  merge-queue run;
 - `stage <name> started`, then `passed`, `failed` or `error`, for `checkout`, `precondition`,
   `build`, `bundle`, `host_suite`, `target_suite` and, when the result is posted, `posted`;
   `stage <name> skipped` for `build`, `bundle` and `host_suite` of a `--skip-build` run;
@@ -164,7 +181,7 @@ maintained tool writes these markers, so the plugin does.
 Each suite's `run.json` is written at session end, so a run that fails halfway still leaves
 everything up to that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
 line, the start and end times, and the exit status. The plugin reads whichever of a set of
-`BENCH_*` variables `bench test` set are present and writes each into `run.json` under its own
+`BENCH_*` variables the runner set are present and writes each into `run.json` under its own
 field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
 `BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
 one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
@@ -210,12 +227,13 @@ Three facts from labgrid 26.0 are the contract between this runner and the layer
 That env file, and everything else naming this board, lives in the layer, not here.
 
 The runner is cloned on the pipeline host and run from its checkout at a tag; the record names the
-tag. `bench run` is started by a systemd user timer; the lock it shares with `bench test` (a
-`fcntl.flock` on a `lock` file beside the records) means a hand `bench test` started during a job
-refuses rather than clashing with it, and `bench run` itself backs off with exit 0 if the lock is
-already held. It asks `Queue.head()` for the merge queue's head entry -- the `gh-readonly-queue`
-ref whose own base is `origin/main`'s current tip, read with `git ls-remote` -- and posts the
-verdict as a GitHub check run (`Check.post`). `bench status --watch` is the read-only view of all
+tag. `bench run` is started by a systemd user timer and holds a `fcntl.flock` on a `lock` file beside the
+records for the whole of a run; it backs off with exit 0 if the lock is already held. It asks
+`Queue.take()` for one entry: the oldest run queued by hand, else `Queue.head()`'s merge queue head
+entry -- the `gh-readonly-queue` ref whose own base is `origin/main`'s current tip, read with
+`git ls-remote` -- whose verdict it posts as a GitHub check run (`Check.post`). A waiting run queued
+by hand starts only when that read of the merge queue succeeds: a `git fetch` or `ls-remote` fault,
+or more than one qualifying ref, writes `DISABLED` as on any tick, before the hand entry runs. `bench status --watch` is the read-only view of all
 of it, run from the directory `bench run` runs in. It is a curses screen refreshed once a second:
 Run shows the newest run's stages and the selected stage's log, headed by bitbake's task progress
 while a build runs, and History lists every run on disk. It reads `records/*/bench.log`, each
@@ -241,7 +259,9 @@ clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
 A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`, writes
 `DISABLED` beside the records and disables that timer. Clearing it is a by-hand step, not
 something `bench run` does itself: read `DISABLED`, remove it, then `systemctl --user enable
---now <unit>.timer` again.
+--now <unit>.timer` again. The run that faulted is not queued again; queue it again after clearing
+`DISABLED`. If the reason is a database error, remove `records/queue.db` as well; the runs queued by
+hand in it are lost.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

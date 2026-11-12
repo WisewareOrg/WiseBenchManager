@@ -15,7 +15,7 @@ class BenchRun:
     """One `bench run` cycle: the next queue entry, through `BenchTest` in-process.
 
     Holds the checkout, the loaded `Config` and the result directory `DISABLED` sits in. Knows
-    nothing about the lock shared with `bench test` -- the CLI holds that for this call's whole
+    nothing about the lock `bench run` holds -- the CLI holds that for this call's whole
     duration. A merge-queue entry's verdict is posted by `BenchTest`'s `posted` stage, through a
     callable this class passes to `BenchTest.run`; a run queued by hand posts nothing.
     """
