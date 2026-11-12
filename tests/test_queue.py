@@ -223,7 +223,7 @@ def test_entries_is_empty_with_no_hand_entry_and_no_merge_head(hand):
 
 def test_entries_lists_the_merge_head_alone_as_its_dict_without_an_id(hand, monkeypatch):
     _with_merge_head(monkeypatch)
-    assert hand.entries() == [{**_MERGE_HEAD, "kind": "merge"}]
+    assert hand.entries() == [{**_MERGE_HEAD, "kind": "run"}]
 
 
 def test_entries_lists_hand_entries_oldest_first_then_the_merge_head(hand, monkeypatch, tmp_path):
@@ -234,8 +234,8 @@ def test_entries_lists_hand_entries_oldest_first_then_the_merge_head(hand, monke
     entries = hand.entries()
 
     assert [entry.get("id") for entry in entries] == [first, second, None]
-    assert entries[2] == {**_MERGE_HEAD, "kind": "merge"}
-    assert [entry["kind"] for entry in entries] == ["hand", "hand", "merge"]
+    assert entries[2] == {**_MERGE_HEAD, "kind": "run"}
+    assert [entry["kind"] for entry in entries] == ["test", "test", "run"]
     one = entries[0]
     assert {key: one[key] for key in ("ref", "sha", "set", "skip_build", "args")} == {
         "ref": "HEAD",
@@ -291,13 +291,13 @@ def test_a_taken_entry_is_deleted_and_never_returned_again(hand, monkeypatch, tm
     assert hand.take()["id"] == first
     assert [entry.get("id") for entry in hand.entries()] == [second, None]
     assert queue.Queue(tmp_path, tmp_path / "records").take()["id"] == second
-    assert hand.take() == {**_MERGE_HEAD, "kind": "merge"}
+    assert hand.take() == {**_MERGE_HEAD, "kind": "run"}
     assert [entry["id"] for entry in hand.entries() if "id" in entry] == []
 
 
 def test_take_returns_the_merge_head_when_no_hand_entry_waits(hand, monkeypatch):
     _with_merge_head(monkeypatch)
-    assert hand.take() == {**_MERGE_HEAD, "kind": "merge"}
+    assert hand.take() == {**_MERGE_HEAD, "kind": "run"}
 
 
 def test_take_returns_none_when_nothing_is_queued(hand):
@@ -325,7 +325,7 @@ def test_take_skips_an_entry_removed_between_listing_and_claiming(hand, monkeypa
     assert hand.remove(first) is True
     monkeypatch.setattr(queue.Queue, "entries", lambda self: listed)
 
-    assert hand.take() == {**_MERGE_HEAD, "kind": "merge"}
+    assert hand.take() == {**_MERGE_HEAD, "kind": "run"}
 
 
 def test_a_hand_entrys_added_is_an_iso_timestamp_in_utc(hand):

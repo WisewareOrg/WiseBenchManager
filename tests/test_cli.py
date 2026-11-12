@@ -318,7 +318,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
             pass
 
         def take(self):
-            return {"kind": "merge", "ref": "main", "sha": "deadbeef", "pr": 1}
+            return {"kind": "run", "ref": "main", "sha": "deadbeef", "pr": 1}
 
     class _StubCheck:
         def __init__(self, *a, **kw):
