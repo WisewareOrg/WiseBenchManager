@@ -122,11 +122,13 @@ def _stub_subprocess(monkeypatch, timer_disable, *, error_on=None):
 
 
 _QUEUE_HEAD = {
+    "kind": "merge",
     "ref": "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
     "sha": "cafef00d",
     "pr": 14,
 }
 _HAND_ENTRY = {
+    "kind": "hand",
     "id": 3,
     "added": "2026-11-12 09:00:00",
     "ref": "feature/x",
@@ -399,7 +401,7 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
-    _FakeQueue.result = {"ref": "HEAD", "sha": sha, "pr": 14}
+    _FakeQueue.result = {"kind": "merge", "ref": "HEAD", "sha": sha, "pr": 14}
     seen = []
     monkeypatch.setattr(
         _FakeCheck,
@@ -551,3 +553,16 @@ def test_run_of_an_entry_queued_by_the_real_queue_reaches_bench_test_with_what_w
     assert ctor["kind"] == "test"
     assert _run_args(bench_test_class)["pytest_args"] == ["-k", "x"]
     assert timer_disable == []
+
+
+def test_run_routes_on_kind_so_a_merge_head_carrying_an_id_still_takes_the_merge_path(
+    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """A merge entry is run as kind=run with a Check even if it has an `id` key."""
+    _stub_subprocess(monkeypatch, timer_disable)
+    _FakeQueue.result = {**_QUEUE_HEAD, "id": 99}
+    _make_run(tmp_path).run("env.yaml")
+
+    assert len(_FakeCheck.instances) == 1
+    assert _ctor_args(bench_test_class)["kind"] == "run"
+    assert _run_args(bench_test_class)["post"] is not None

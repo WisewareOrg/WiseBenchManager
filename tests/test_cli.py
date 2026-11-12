@@ -385,3 +385,25 @@ def test_main_status_without_watch_exits_2_asking_for_it(watched, capsys):
     assert "--watch" in err
     assert "invalid choice" not in err
     assert watched == []
+
+
+def _corrupt_queue_db(tmp_path):
+    repo_with_one_commit(tmp_path)
+    (tmp_path / "records").mkdir()
+    (tmp_path / "records" / "queue.db").write_bytes(b"this is not a sqlite database" * 100)
+
+
+@pytest.mark.parametrize("argv", [["test", "HEAD"], ["unqueue", "1"]], ids=["test", "unqueue"])
+def test_main_queue_commands_on_an_unreadable_queue_db_exit_2_with_a_bench_error(
+    monkeypatch, tmp_path, capsys, argv
+):
+    """A fault other than a bad ref ends `bench test`/`unqueue` as BENCH ERROR and exit 2."""
+    _corrupt_queue_db(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+
+    assert cli.main(argv) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("BENCH ERROR: ")
+    assert "Traceback" not in captured.err

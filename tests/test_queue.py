@@ -4,6 +4,7 @@ import json
 import sqlite3
 import subprocess
 from contextlib import closing
+from datetime import datetime, timedelta
 
 import pytest
 from helpers import repo_with_one_commit
@@ -222,7 +223,7 @@ def test_entries_is_empty_with_no_hand_entry_and_no_merge_head(hand):
 
 def test_entries_lists_the_merge_head_alone_as_its_dict_without_an_id(hand, monkeypatch):
     _with_merge_head(monkeypatch)
-    assert hand.entries() == [_MERGE_HEAD]
+    assert hand.entries() == [{**_MERGE_HEAD, "kind": "merge"}]
 
 
 def test_entries_lists_hand_entries_oldest_first_then_the_merge_head(hand, monkeypatch, tmp_path):
@@ -233,7 +234,8 @@ def test_entries_lists_hand_entries_oldest_first_then_the_merge_head(hand, monke
     entries = hand.entries()
 
     assert [entry.get("id") for entry in entries] == [first, second, None]
-    assert entries[2] == _MERGE_HEAD
+    assert entries[2] == {**_MERGE_HEAD, "kind": "merge"}
+    assert [entry["kind"] for entry in entries] == ["hand", "hand", "merge"]
     one = entries[0]
     assert {key: one[key] for key in ("ref", "sha", "set", "skip_build", "args")} == {
         "ref": "HEAD",
@@ -324,3 +326,9 @@ def test_take_skips_an_entry_removed_between_listing_and_claiming(hand, monkeypa
     monkeypatch.setattr(queue.Queue, "entries", lambda self: listed)
 
     assert hand.take() == _MERGE_HEAD
+
+
+def test_a_hand_entrys_added_is_an_iso_timestamp_in_utc(hand):
+    hand.add("HEAD", None, False, [])
+    added = datetime.fromisoformat(hand.entries()[0]["added"])
+    assert added.utcoffset() == timedelta(0)
