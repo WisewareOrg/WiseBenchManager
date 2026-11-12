@@ -16,6 +16,7 @@ from helpers import (
 
 from wisebench import bench_run, bench_test
 from wisebench.config import Config
+from wisebench.queue import Queue
 
 
 def _config(run_unit="bench-run"):
@@ -527,3 +528,26 @@ def test_run_of_a_hand_entry_with_any_other_failure_is_a_bench_fault(
     assert len(disabled) == 2
     assert timer_disable == ["scratch-unit"]
     assert _FakeCheck.posts == []
+
+
+def test_run_of_an_entry_queued_by_the_real_queue_reaches_bench_test_with_what_was_queued(
+    bench_test_class, timer_disable, monkeypatch, tmp_path
+):
+    """What `Queue.add` stores is what `BenchRun.run` reads: no hand-copied entry between them."""
+    repo_with_one_commit(tmp_path)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    monkeypatch.setattr(Queue, "head", lambda self: None)
+    Queue(tmp_path, tmp_path / "records").add("HEAD", "s1", True, ["-k", "x"])
+
+    _make_run(tmp_path).run("env.yaml")
+
+    ctor = _ctor_args(bench_test_class)
+    assert ctor["ref"] == "HEAD"
+    assert ctor["sha"] == sha
+    assert ctor["set_name"] == "s1"
+    assert ctor["skip_build"] is True
+    assert ctor["kind"] == "test"
+    assert _run_args(bench_test_class)["pytest_args"] == ["-k", "x"]
+    assert timer_disable == []

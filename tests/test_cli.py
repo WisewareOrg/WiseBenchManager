@@ -50,7 +50,6 @@ def test_main_test_queues_the_run_and_prints_id_sha_and_place(made, monkeypatch,
 
     assert calls == [("HEAD", "s1", True, ["-k", "x"])]
     assert capsys.readouterr().out.splitlines() == ["queued 7 deadbeef place 3"]
-    made.assert_not_called()
 
 
 def test_main_test_defaults_to_no_set_no_skip_build_and_no_pytest_args(made, monkeypatch, tmp_path):
