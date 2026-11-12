@@ -44,8 +44,8 @@ def main(argv=None):
 
     Returns:
         int: 0 queued/removed (or, for `run`, finished/no job/disabled/lock held), 2 a ref that
-        is not a commit, an id not queued, or the bench's own failure; for `status`, the watch
-        loop's exit code.
+        is not a commit, an id not queued, an unreadable queue, or the bench's own failure; for
+        `status`, the watch loop's exit code.
 
     Raises:
         SystemExit: argparse rejected the arguments, or printed `--help`.
@@ -82,11 +82,19 @@ def main(argv=None):
         except subprocess.CalledProcessError:
             print(f"BENCH ERROR: {args.ref} does not resolve to a commit", file=sys.stderr)
             return 2
+        except Exception as exc:
+            print(f"BENCH ERROR: {exc}", file=sys.stderr)
+            return 2
         print(f"queued {entry_id} {sha} place {place}")
         return 0
 
     if args.command == "unqueue":
-        if not Queue(Path.cwd(), directory).remove(args.entry_id):
+        try:
+            removed = Queue(Path.cwd(), directory).remove(args.entry_id)
+        except Exception as exc:
+            print(f"BENCH ERROR: {exc}", file=sys.stderr)
+            return 2
+        if not removed:
             print(f"BENCH ERROR: no queued run {args.entry_id}", file=sys.stderr)
             return 2
         print(f"removed {args.entry_id}")

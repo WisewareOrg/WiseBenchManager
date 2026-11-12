@@ -63,7 +63,7 @@ class BenchRun:
             if entry is None:
                 print("bench run: no job")
                 return
-            if "id" in entry:
+            if entry["kind"] == "hand":
                 self._run_hand(entry, lg_env)
                 return
             ref, sha, pr = entry["ref"], entry["sha"], entry["pr"]
