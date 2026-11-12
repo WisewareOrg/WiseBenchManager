@@ -37,11 +37,11 @@ real board. A check that cannot fail has measured nothing.
 **Provenance is structural where the runner controls it, checked where it does not.** The runner
 names the commit it builds to the layer through `bench_candidate`, the only channel it uses, so a
 build is never swapped for an artefact from outside. The layer's own target-suite setup installs
-what that build produced, and the first target-suite test checks that the booted board names that commit -- checked, not structurally
-guaranteed. `bench test <ref> --skip-build` is the one named exception: it installs nothing and runs
-the target suite against the board as it is, its record says so explicitly, and such a run is never
-evidence for a review or an investigation, which need a build. Do not add another bypass, for any reason, including "the build takes a
-while".
+what that build produced, and the first target-suite test checks that the booted board names that
+commit -- checked, not structurally guaranteed. `bench test <ref> --skip-build` is the one named
+exception: it installs nothing and runs the target suite against the board as it is, its record says
+so explicitly, and such a run is never evidence for a review or an investigation, which need a
+build. Do not add another bypass, for any reason, including "the build takes a while".
 
 **Outcomes are two things only.** A failing hook or test is the candidate's and is posted. An error
 in a fixture or the precondition is the bench's: DISABLED, timer stopped, nothing posted. Never

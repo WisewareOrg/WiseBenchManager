@@ -31,14 +31,13 @@ run queued by hand, else the merge queue's head.**
    resident process would need the queue on disk anyway.
 2. **Hand entries come first, oldest first.** A merge-queue entry waiting on GitHub's timeout behind
    a hand run is accepted.
-3. **The hand queue is one SQLite table in `records/queue.db`, through Python's `sqlite3`.** Ids come
-   from AUTOINCREMENT, so an id `bench test` printed never names another run. Removing an entry and
-   taking one are each a single `DELETE … WHERE id = ?`, which exactly one caller wins. SQLite,
-   through Python's standard `sqlite3`, keeps the queue: it numbers the entries, orders them, and
-   lets exactly one caller delete a row. The queue libraries built on it either took the same entry
-   twice across processes (persist-queue, queuelib, measured), lack a list and a delete-by-id
-   (litequeue), or add a quiet dependency whose defaults evict and pickle for no fewer lines
-   (diskcache). The job runners (pueue, task-spooler, nq) are second schedulers.
+3. **The hand queue is one SQLite table in `records/queue.db`, through Python's `sqlite3`.** Ids
+   come from AUTOINCREMENT, so an id `bench test` printed never names another run. Removing an entry
+   and taking one are each a single `DELETE … WHERE id = ?`, which exactly one caller wins. The
+   queue libraries built on it either took the same entry twice across processes (persist-queue,
+   queuelib, measured), lack a list and a delete-by-id (litequeue), or add a quiet dependency whose
+   defaults evict and pickle for no fewer lines (diskcache). The job runners (pueue, task-spooler,
+   nq) are second schedulers.
 4. **`Queue` is the one entry point.** `add`, `entries` and `remove` serve the terminal and the
    watch view; `take` serves `bench run`. The order is defined once, in `entries()`.
 5. **The merge queue is read live, as its refs show it, the head only.** `head()` still runs

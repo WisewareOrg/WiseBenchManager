@@ -27,8 +27,8 @@ bench status --watch           # read-only: the run in progress and every run on
 the run will build, and its place among the runs queued by hand. A ref that does not resolve to a
 commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the merge
 queue's head, one entry per start; to run one now, start `bench run` by hand. A run queued by hand
-posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an entry is deleted: it
-cannot be removed, and it is not queued again if its run ends in the bench's failure.
+posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an entry cannot be removed
+(ADR 0005 rev 1).
 
 `bench test` does not fetch: it resolves the ref in the bench checkout, which refreshes `origin/*` on
 every idle tick. For a branch pushed since, run `git fetch origin <branch>` there first. Queue from
@@ -59,10 +59,10 @@ layer's own tests recorded against them, and the exact command line.
 
 `--skip-build` skips steps 2 and 3 entirely; step 4 then gets `bench_candidate` `None`.
 
-A failing hook or test is the candidate's failure and, for a merge-queue entry, is posted. An error in a fixture or the
-precondition is the bench's failure: a `DISABLED` marker is written, the timer is stopped,
-nothing is posted. pytest's own setup/call distinction is what tells the two apart: a fixture
-erroring during setup or teardown is never read as the candidate's test failing.
+A failing hook or test is the candidate's failure and, for a merge-queue entry, is posted. An error
+in a fixture or the precondition is the bench's failure: a `DISABLED` marker is written, the timer
+is stopped, nothing is posted. pytest's own setup/call distinction is what tells the two apart: a
+fixture erroring during setup or teardown is never read as the candidate's test failing.
 
 ## What a layer provides
 
@@ -185,7 +185,8 @@ line, the start and end times, and the exit status. The plugin reads whichever o
 field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
 `BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
 one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
-it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds the verdict.
+it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds
+the verdict for a merge-queue entry.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
 stderr to `proxy-<test>-<n>.log` beside that suite's `report.jsonl`, one file per fixture use, with
