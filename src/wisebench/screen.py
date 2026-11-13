@@ -480,20 +480,34 @@ def _queue(surface, frame):
         if y > lay.pane_bottom:
             break
         _queue_row(surface, y, row, offset == frame.queue_cursor, frame.layout.cols)
-    lines = frame.preview_lines or []
-    for offset, line in enumerate(lines):
-        y = lay.pane_bottom - len(lines) + 1 + offset
+    _preview_box(surface, lay, frame.preview_lines or [])
+
+
+def _preview_box(surface, lay, lines):
+    """The preview lines in a blue border whose bottom edge is the pane's last row."""
+    if not lines:
+        return
+    width = max(map(len, lines))
+    top = lay.pane_bottom - len(lines) - 1
+    edges = (("┌", "┐", top), ("└", "┘", lay.pane_bottom))
+    for left, right, y in edges:
         if y >= lay.pane_top:
-            surface.put(y, 0, line, BLUE if offset == 0 else TEXT)
+            surface.put(y, 0, left + "─" * (width + 2) + right, BLUE)
+    for offset, line in enumerate(lines):
+        y = top + 1 + offset
+        if y >= lay.pane_top:
+            surface.put(y, 0, "│", BLUE)
+            surface.put(y, 2, line, BLUE if offset == 0 else TEXT)
+            surface.put(y, width + 3, "│", BLUE)
 
 
 def _queue_row(surface, y, row, selected, cols):
     """One Queue row: marker, source, what, sha and added time, then the running stage.
 
-    The running row is on the running tint, else the selected row on the selection.
+    The selected row is on the selection, else the running row on the running tint.
     """
     running = row.marker == "▶"
-    bg = RUNNING_TINT if running else SELECTION if selected else None
+    bg = SELECTION if selected else RUNNING_TINT if running else None
     if bg is not None:
         surface.put(y, 0, " " * cols, TEXT, bg)
     parts = [

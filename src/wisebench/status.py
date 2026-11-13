@@ -161,13 +161,20 @@ def _perform(queue, reads, state):
             entry_id, sha, _ = queue.add(ref, None, False, [])
         except subprocess.CalledProcessError:
             state.message = f"{ref} does not resolve to a commit"
+        except Exception as exc:
+            state.message = str(exc)
         else:
             state.message = f"queued {entry_id} {sha[:7]}"
         reads.read_at = None
     if state.remove_id is not None:
         entry_id, state.remove_id = state.remove_id, None
-        if not queue.remove(entry_id):
-            state.message = f"no queued run {entry_id}"
+        try:
+            removed = queue.remove(entry_id)
+        except Exception as exc:
+            state.message = str(exc)
+        else:
+            if not removed:
+                state.message = f"no queued run {entry_id}"
         reads.read_at = None
 
 
