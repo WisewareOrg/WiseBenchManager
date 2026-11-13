@@ -762,20 +762,20 @@ def queue_state(**chosen):
 )
 def test_tab_and_shift_tab_cycle_run_queue_history_and_wrap(start, key, expected):
     state = view.State(tab=start)
-    press(state, THREE, key, LIVE, queue=[HAND1])
+    press(state, THREE, [key], LIVE, queue=[HAND1])
     assert state.tab == expected
 
 
 def test_tab_and_shift_tab_are_swallowed_by_help_and_the_command_line():
     state = view.State(tab="help", back="run")
-    press(state, THREE, TAB + BTAB, LIVE)
+    press(state, THREE, [TAB, BTAB], LIVE)
     assert state.tab == "help"
     prompted = view.State(prompt=":ab")
-    press(prompted, THREE, TAB + BTAB, LIVE)
+    press(prompted, THREE, [TAB, BTAB], LIVE)
     assert (prompted.tab, prompted.prompt) == ("run", ":ab")
 
 
-@pytest.mark.parametrize("keys", ["2", TAB, "3" + BTAB], ids=["2", "Tab", "3 then Shift-Tab"])
+@pytest.mark.parametrize("keys", [["2"], [TAB], ["3", BTAB]], ids=["2", "Tab", "3 then Shift-Tab"])
 def test_entering_the_queue_selects_its_first_row_however_it_is_entered(keys):
     state = view.State()
     press(state, THREE, keys, LIVE, queue=[HAND1, HAND2, MERGE])
