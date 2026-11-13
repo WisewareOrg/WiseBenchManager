@@ -1,6 +1,7 @@
 """View: what the user chose, the frame derived from it, and the keys that act on that frame.
 
-`State` holds only the user's intent. `resolve` derives the `Frame` to show from it and one
+`State` holds the user's intent, and the commands (`run_ref`, `remove_id`) and message the shell
+exchanges with `handle`. `resolve` derives the `Frame` to show from it and one
 `Snapshot` of the disk; it is the only code that knows where anything sits. `screen.draw` draws
 that frame and `handle` acts on the same frame, so a row a key moves to is a row drawn. A field of
 `State` left None means "derive it every frame"; a value means the user chose it.
@@ -656,7 +657,7 @@ def _show(state, tab):
 
 def _remove(state, frame):
     """`dd`: ask to remove the selected hand entry; any other row says it cannot be."""
-    if state.tab != "queue" or frame.queue_cursor is None:
+    if frame.queue_cursor is None:
         return
     row = frame.queue_rows[frame.queue_cursor]
     if row.id is None:

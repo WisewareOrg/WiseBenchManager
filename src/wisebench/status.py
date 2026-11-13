@@ -1,4 +1,4 @@
-"""Status: `bench status --watch`, the read-only curses shell around `view` and `screen`.
+"""Status: `bench status --watch`, the curses shell around `view` and `screen`.
 
 Once a second, and on every key, it reads the records and the bench once, resolves a frame, draws
 it and hands the next key to `view.handle` with that frame. Nothing here writes a file or takes a
@@ -44,7 +44,7 @@ _QUEUE_REFRESH = timedelta(seconds=30)
 
 
 def watch(directory):
-    """Run the read-only curses view of the records until the user quits.
+    """Run the curses view of the records and the queue until the user quits.
 
     Args:
         directory (pathlib.Path): The records directory.
@@ -123,15 +123,14 @@ def _collect(results, reads, state):
     The message is not set while the command line is open. The newest result of each kind wins.
     """
     while not results.empty():
-        kind, *outcome = results.get()
+        kind, ref, outcome = results.get()
         if kind == "preview":
-            ref, result = outcome
-            reads.preview = (ref, _reason(result) if isinstance(result, Exception) else result)
-        elif isinstance(outcome[0], Exception):
+            reads.preview = (ref, _reason(outcome) if isinstance(outcome, Exception) else outcome)
+        elif isinstance(outcome, Exception):
             if state.prompt is None:
-                state.message = _reason(outcome[0])
+                state.message = _reason(outcome)
         else:
-            reads.entries = outcome[0]
+            reads.entries = outcome
 
 
 def _request(queue, run, results, reads, state, now):
@@ -144,7 +143,7 @@ def _request(queue, run, results, reads, state, now):
     due = reads.read_at is None or now - reads.read_at >= _QUEUE_REFRESH
     if shown and (due or not reads.shown):
         reads.read_at = now
-        run(lambda: results.put(("entries", _outcome(queue.entries))))
+        run(lambda: results.put(("entries", None, _outcome(queue.entries))))
     reads.shown = shown
     ref = view.typed_ref(state.prompt)
     if ref != reads.asked:

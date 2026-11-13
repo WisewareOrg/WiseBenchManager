@@ -83,8 +83,9 @@ run queued by hand, else the merge queue's head.**
 - **An unreadable `queue.db` is a bench fault** (`sqlite3.DatabaseError`); recovery removes the file,
   and the runs queued by hand in it are lost.
 - **An entry queued outside the bench checkout, or with another `BENCH_RESULT_DIR`, is never taken.**
-- **`take()` fetches and `entries()` does not,** so a view may call `entries()` at a refresh rate, bounded
-  by the 30 second timeout of its `git ls-remote` calls.
+- **`take()` fetches and `entries()` does not,** so a view's read writes nothing into `.git` and cannot
+  collide with a run's git. `entries()` still reaches `origin` with `git ls-remote`, each call bounded by
+  30 seconds, so a view reads it off its draw path.
 
 **Premise that would reopen this:** hand runs needing to start within seconds; GitHub building more
 than one merge-queue entry at a time; organisation policy permitting a resident bench process.

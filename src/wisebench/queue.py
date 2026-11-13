@@ -50,14 +50,14 @@ class Queue:
         )
         return db
 
-    def _git(self, args, network=None):
+    def _git(self, args, network=False):
         """Run one git command in the checkout, silent and detached from the terminal.
 
         Args:
             args (list[str]): The command line after `git`.
-            network (str | None): The command's name when it reaches `origin`, e.g. `"fetch"`.
-                A network call is bounded by a 30 second timeout, and its failure or timeout is
-                raised as `BenchFailure("git <network>: <first stderr line>")`.
+            network (bool): Whether the command reaches `origin`. A network call is bounded by a
+                30 second timeout, and its failure or timeout is raised as
+                `BenchFailure("git <command>: <first stderr line>")`.
 
         Returns:
             subprocess.CompletedProcess: Text output captured; stdout in `.stdout`.
@@ -79,13 +79,13 @@ class Queue:
             )
         except subprocess.TimeoutExpired as exc:
             if network:
-                raise BenchFailure(f"git {network}: timed out after {_NETWORK_TIMEOUT}s") from exc
+                raise BenchFailure(f"git {args[0]}: timed out after {_NETWORK_TIMEOUT}s") from exc
             raise
         except subprocess.CalledProcessError as exc:
             if network:
                 lines = (exc.stderr or "").strip().splitlines()
                 reason = lines[0] if lines else str(exc)
-                raise BenchFailure(f"git {network}: {reason}") from exc
+                raise BenchFailure(f"git {args[0]}: {reason}") from exc
             raise
 
     def _resolve(self, ref):
@@ -210,7 +210,7 @@ class Queue:
                 ls-remote` failed or timed out.
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
-        self._git(["fetch", "origin"], network="fetch")
+        self._git(["fetch", "origin"], network=True)
         for entry in self.entries():
             if entry["kind"] == "run" or self.remove(entry["id"]):
                 return entry
@@ -234,7 +234,7 @@ class Queue:
                 `git ls-remote` failed or timed out.
         """
         main_lines = self._git(
-            ["ls-remote", "origin", "refs/heads/main"], network="ls-remote"
+            ["ls-remote", "origin", "refs/heads/main"], network=True
         ).stdout.splitlines()
         main = next(
             (line.split("\t")[0] for line in main_lines if line.endswith("\trefs/heads/main")),
@@ -243,7 +243,7 @@ class Queue:
         if main is None:
             raise BenchFailure("origin has no refs/heads/main")
         remote = self._git(
-            ["ls-remote", "origin", "refs/heads/gh-readonly-queue/main/*"], network="ls-remote"
+            ["ls-remote", "origin", "refs/heads/gh-readonly-queue/main/*"], network=True
         ).stdout
 
         matches = []
