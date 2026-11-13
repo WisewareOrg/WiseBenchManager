@@ -147,6 +147,16 @@ def stub_popen(monkeypatch, answer, calls=None, kwargs_seen=None, timeouts=None)
     return killed
 
 
+def stop_argv(unit):
+    """The argv that stops `unit`'s timer."""
+    return ["systemctl", "--user", "stop", f"{unit}.timer"]
+
+
+def start_argv(unit):
+    """The argv that starts `unit`'s timer."""
+    return ["systemctl", "--user", "start", f"{unit}.timer"]
+
+
 def stub_fetch(monkeypatch):
     """Make `git fetch` succeed without a remote, for a repo with no `origin`.
 

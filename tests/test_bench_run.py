@@ -9,6 +9,7 @@ from helpers import (
     git,
     marker_lines,
     repo_with_one_commit,
+    stop_argv,
     stub_fetch,
     write_bench_toml,
     write_lg_env,
@@ -90,12 +91,12 @@ def made(monkeypatch):
     yield
 
 
-def _stub_subprocess(monkeypatch, timer_disable, *, error_on=None):
-    """Fake `bench_run.subprocess.run` for `git fetch`; `systemctl` goes to `timer_disable`.
+def _stub_subprocess(monkeypatch, systemctl, *, error_on=None):
+    """Fake `bench_run.subprocess.run` for `git fetch`; `systemctl` goes to the `systemctl` fake.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
-        timer_disable (list[str]): The `timer_disable` fixture, which must already be in place.
+        systemctl (Systemctl): The `systemctl` fixture, which must already be in place.
         error_on (list | None): A command prefix that raises `CalledProcessError` instead of
             succeeding, or None.
 
@@ -159,15 +160,15 @@ def _run_posting(outcome):
     return run
 
 
-def _assert_bench_failure_path(tmp_path, timer_disable, run_unit, reason_substring):
+def _assert_bench_failure_path(tmp_path, systemctl, run_unit, reason_substring):
     """Common assertions for the bench-failure path: nothing posted, `DISABLED` written (two
-    lines, the second the reason's first line), the configured unit's timer disabled, once."""
+    lines, the second the reason's first line), the configured unit's timer stopped, once."""
     assert _FakeCheck.posts == []
     disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
     assert len(disabled) == 2
     assert reason_substring in disabled[1]
     assert "\n" not in disabled[1]
-    assert timer_disable == [run_unit]
+    assert systemctl.calls == [stop_argv(run_unit)]
 
 
 def test_init_raises_valueerror_when_run_unit_is_missing(tmp_path):
@@ -177,10 +178,10 @@ def test_init_raises_valueerror_when_run_unit_is_missing(tmp_path):
 
 
 def test_run_exits_quietly_when_no_job_is_queued(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path, capsys
+    made, bench_test_class, systemctl, monkeypatch, tmp_path, capsys
 ):
     """run exits quietly when the queue has no job, and creates no run directory."""
-    calls = _stub_subprocess(monkeypatch, timer_disable)
+    calls = _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = None
     run = _make_run(tmp_path)
     run.run("env.yaml")
@@ -191,10 +192,10 @@ def test_run_exits_quietly_when_no_job_is_queued(
 
 
 def test_run_refuses_while_disabled_exists(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path, capsys
+    made, bench_test_class, systemctl, monkeypatch, tmp_path, capsys
 ):
     """run refuses while DISABLED exists."""
-    calls = _stub_subprocess(monkeypatch, timer_disable)
+    calls = _stub_subprocess(monkeypatch, systemctl)
     (tmp_path / "records").mkdir()
     (tmp_path / "records" / "DISABLED").write_text("2026-10-12T00:00:00+00:00\nbench failure\n")
     _FakeQueue.result = _QUEUE_HEAD
@@ -206,16 +207,16 @@ def test_run_refuses_while_disabled_exists(
 
 
 def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run fetches and tests the queue head's sha, then posts success; kind=run."""
-    calls = _stub_subprocess(monkeypatch, timer_disable)
+    calls = _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path)
     run.run("env.yaml")
 
     assert calls == [["git", "fetch", "origin", "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"]]
-    assert timer_disable == []
+    assert systemctl.calls == []
     bench_test_class.assert_called_once_with(tmp_path, "cafef00d", None, kind="run", pr=14)
     _run_of(bench_test_class).assert_called_once_with("env.yaml", [], post=ANY)
     assert _FakeCheck.posts == []
@@ -224,10 +225,10 @@ def test_run_fetches_and_tests_the_queue_heads_sha_then_posts_success(
 
 
 def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run posts failure on a candidate failure, without raising or disabling the timer."""
-    calls = _stub_subprocess(monkeypatch, timer_disable)
+    calls = _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = bench_test.CandidateFailure(
         "target_suite failed\nextra detail"
@@ -237,15 +238,15 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(
     _post_of(bench_test_class)(bench_test.CandidateFailure("target_suite failed\nextra detail"))
 
     assert calls == [["git", "fetch", "origin", "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"]]
-    assert timer_disable == []
+    assert systemctl.calls == []
     assert _FakeCheck.posts == [("cafef00d", "failure", "target_suite failed", "records")]
 
 
 def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run on a BenchFailure writes DISABLED, disables the timer, and reraises."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = bench_test.BenchFailure("precondition exited 9")
     run = _make_run(tmp_path, run_unit="scratch-unit")
@@ -253,46 +254,44 @@ def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
     with pytest.raises(bench_test.BenchFailure, match="precondition exited 9"):
         run.run("env.yaml")
 
-    _assert_bench_failure_path(tmp_path, timer_disable, "scratch-unit", "precondition exited 9")
+    _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "precondition exited 9")
 
 
 def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run on more than one queue entry writes DISABLED and disables the timer."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.outcome = bench_test.BenchFailure("more than one gh-readonly-queue ref")
     run = _make_run(tmp_path, run_unit="scratch-unit")
 
     with pytest.raises(bench_test.BenchFailure, match="more than one"):
         run.run("env.yaml")
 
-    _assert_bench_failure_path(tmp_path, timer_disable, "scratch-unit", "more than one")
+    _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "more than one")
     bench_test_class.assert_not_called()
 
 
 def test_run_on_a_failing_fetch_writes_disabled_and_disables_the_timer(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run on a failing fetch writes DISABLED and disables the timer."""
-    _stub_subprocess(monkeypatch, timer_disable, error_on=["git", "fetch"])
+    _stub_subprocess(monkeypatch, systemctl, error_on=["git", "fetch"])
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path, run_unit="scratch-unit")
 
     with pytest.raises(subprocess.CalledProcessError):
         run.run("env.yaml")
 
-    _assert_bench_failure_path(
-        tmp_path, timer_disable, "scratch-unit", "returned non-zero exit status"
-    )
+    _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "returned non-zero exit status")
     bench_test_class.assert_not_called()
 
 
 def test_run_on_check_construction_failing_writes_disabled_and_disables_the_timer(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run on Check construction failing writes DISABLED and disables the timer."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _FakeCheck.init_outcome = OSError("private key path does not exist")
     run = _make_run(tmp_path, run_unit="scratch-unit")
@@ -300,15 +299,15 @@ def test_run_on_check_construction_failing_writes_disabled_and_disables_the_time
     with pytest.raises(OSError, match="private key"):
         run.run("env.yaml")
 
-    _assert_bench_failure_path(tmp_path, timer_disable, "scratch-unit", "private key")
+    _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "private key")
     bench_test_class.assert_not_called()
 
 
 def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disables_the_timer(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run on Check.post failing after a candidate failure writes DISABLED, disables the timer."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = _run_posting(
         bench_test.CandidateFailure("target_suite failed")
@@ -319,14 +318,14 @@ def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disab
     with pytest.raises(RuntimeError, match="github is down"):
         run.run("env.yaml")
 
-    _assert_bench_failure_path(tmp_path, timer_disable, "scratch-unit", "github is down")
+    _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "github is down")
 
 
 def test_run_on_post_failing_after_a_pass_writes_disabled_and_disables_the_timer(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """run on Check.post failing after a pass writes DISABLED and disables the timer."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = _run_posting(None)
     _FakeCheck.post_outcome = RuntimeError("github is down")
@@ -335,14 +334,14 @@ def test_run_on_post_failing_after_a_pass_writes_disabled_and_disables_the_timer
     with pytest.raises(RuntimeError, match="github is down"):
         run.run("env.yaml")
 
-    _assert_bench_failure_path(tmp_path, timer_disable, "scratch-unit", "github is down")
+    _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "github is down")
 
 
 def test_run_disabled_reason_is_only_the_exceptions_first_line(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """DISABLED's reason is only the exception's first line."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = bench_test.BenchFailure(
         "first line\nsecond line\nthird line"
@@ -355,41 +354,31 @@ def test_run_disabled_reason_is_only_the_exceptions_first_line(
     disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
     assert len(disabled) == 2
     assert disabled[1] == "first line"
-    assert timer_disable == ["scratch-unit"]
+    assert systemctl.calls == [stop_argv("scratch-unit")]
 
 
-def test_run_prints_a_failing_systemctl_call_but_still_reraises(
-    made, bench_test_class, monkeypatch, tmp_path, capsys
+def test_run_prints_a_failing_systemctl_stop_but_still_reraises(
+    made, bench_test_class, systemctl, monkeypatch, tmp_path, capsys
 ):
-    """run prints a failing systemctl call but still reraises."""
-
-    def fake_run(command, **kwargs):
-        class _Result:
-            returncode = 1
-            stderr = "Unit scratch-unit.timer not found.\n"
-
-        if command[:2] == ["systemctl", "--user"]:
-            return _Result()
-
-        class _Ok:
-            returncode = 0
-            stderr = ""
-
-        return _Ok()
-
-    monkeypatch.setattr(bench_run.subprocess, "run", fake_run)
+    """A failing `systemctl stop` is printed as `bench run: systemctl failed: <stderr>`, and the
+    original fault is re-raised."""
+    _stub_subprocess(monkeypatch, systemctl)
+    systemctl.answer("stop", returncode=1, stderr="Unit scratch-unit.timer not found.\n")
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = bench_test.BenchFailure("precondition exited 9")
     run = _make_run(tmp_path, run_unit="scratch-unit")
 
-    with pytest.raises(bench_test.BenchFailure):
+    with pytest.raises(bench_test.BenchFailure, match="precondition exited 9"):
         run.run("env.yaml")
 
-    assert "systemctl failed" in capsys.readouterr().err
+    assert capsys.readouterr().err == (
+        "bench run: systemctl failed: Unit scratch-unit.timer not found.\n"
+    )
+    assert (tmp_path / "records" / "DISABLED").exists()
 
 
 def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_run_failed(
-    made, timer_disable, monkeypatch, tmp_path
+    made, systemctl, monkeypatch, tmp_path
 ):
     """BenchRun on the real BenchTest posts a target-suite failure once, in `stage posted`."""
     monkeypatch.chdir(tmp_path)
@@ -414,7 +403,7 @@ def test_a_real_candidate_failure_is_posted_once_inside_the_posted_stage_before_
 
     _make_run(tmp_path).run(lg_env)
 
-    assert timer_disable == []
+    assert systemctl.calls == []
     assert len(seen) == 1
     conclusion, title, lines_at_post = seen[0]
     assert (conclusion, title) == ("failure", "target_suite failed")
@@ -446,20 +435,20 @@ def _run_args(bench_test_class):
 
 
 def test_run_takes_from_the_queue_in_the_records_directory(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """BenchRun reads the queue at `Queue(checkout, result_dir)`, where `bench test` writes."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = None
     _make_run(tmp_path).run("env.yaml")
     assert _FakeQueue.constructed == [(tmp_path, tmp_path / "records")]
 
 
 def test_run_of_a_hand_entry_reaches_bench_test_as_kind_test_with_the_queued_options(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """A hand entry runs as kind=test: ref as typed, the queued sha, set, skip_build and args."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = dict(_HAND_ENTRY)
     _make_run(tmp_path).run("env.yaml")
 
@@ -475,14 +464,14 @@ def test_run_of_a_hand_entry_reaches_bench_test_as_kind_test_with_the_queued_opt
     run_args = _run_args(bench_test_class)
     assert run_args["lg_env"] == "env.yaml"
     assert run_args["pytest_args"] == ["-k", "x"]
-    assert timer_disable == []
+    assert systemctl.calls == []
 
 
 def test_run_of_a_hand_entry_builds_no_check_and_posts_nothing(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """A hand run constructs no `Check` and hands `BenchTest.run` no `post`."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = dict(_HAND_ENTRY)
     _make_run(tmp_path).run("env.yaml")
 
@@ -492,17 +481,17 @@ def test_run_of_a_hand_entry_builds_no_check_and_posts_nothing(
 
 
 def test_run_of_a_hand_entry_with_a_candidate_failure_returns_without_disabling(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """A hand run's CandidateFailure: no DISABLED, no timer disable, normal return, no post."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = dict(_HAND_ENTRY)
     _run_of(bench_test_class).side_effect = bench_test.CandidateFailure("target_suite failed")
 
     _make_run(tmp_path).run("env.yaml")
 
     assert not (tmp_path / "records" / "DISABLED").exists()
-    assert timer_disable == []
+    assert systemctl.calls == []
     assert _FakeCheck.instances == []
     assert _FakeCheck.posts == []
 
@@ -517,10 +506,10 @@ def test_run_of_a_hand_entry_with_a_candidate_failure_returns_without_disabling(
     ids=["bench-failure", "dirty-tree", "checkout-failure"],
 )
 def test_run_of_a_hand_entry_with_any_other_failure_is_a_bench_fault(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path, fault
+    made, bench_test_class, systemctl, monkeypatch, tmp_path, fault
 ):
     """Anything but CandidateFailure from a hand run writes DISABLED, disables the timer, raises."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = dict(_HAND_ENTRY)
     _run_of(bench_test_class).side_effect = fault
 
@@ -529,12 +518,12 @@ def test_run_of_a_hand_entry_with_any_other_failure_is_a_bench_fault(
 
     disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
     assert len(disabled) == 2
-    assert timer_disable == ["scratch-unit"]
+    assert systemctl.calls == [stop_argv("scratch-unit")]
     assert _FakeCheck.posts == []
 
 
 def test_run_of_an_entry_queued_by_the_real_queue_reaches_bench_test_with_what_was_queued(
-    bench_test_class, timer_disable, monkeypatch, tmp_path
+    bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """What `Queue.add` stores is what `BenchRun.run` reads: no hand-copied entry between them."""
     repo_with_one_commit(tmp_path)
@@ -554,14 +543,14 @@ def test_run_of_an_entry_queued_by_the_real_queue_reaches_bench_test_with_what_w
     assert ctor["skip_build"] is True
     assert ctor["kind"] == "test"
     assert _run_args(bench_test_class)["pytest_args"] == ["-k", "x"]
-    assert timer_disable == []
+    assert systemctl.calls == []
 
 
 def test_run_routes_on_kind_so_a_merge_head_carrying_an_id_still_takes_the_merge_path(
-    made, bench_test_class, timer_disable, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """A merge entry is run as kind=run with a Check even if it has an `id` key."""
-    _stub_subprocess(monkeypatch, timer_disable)
+    _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = {**_QUEUE_HEAD, "id": 99}
     _make_run(tmp_path).run("env.yaml")
 
