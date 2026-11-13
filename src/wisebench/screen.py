@@ -484,10 +484,13 @@ def _queue(surface, frame):
 
 
 def _preview_box(surface, lay, lines):
-    """The preview lines in a blue border whose bottom edge is the pane's last row."""
+    """The preview lines in a blue border whose bottom edge is the pane's last row.
+
+    A line wider than the screen is cut to fit between the borders.
+    """
     if not lines:
         return
-    width = max(map(len, lines))
+    width = min(max(map(len, lines)), lay.cols - 4)
     top = lay.pane_bottom - len(lines) - 1
     edges = (("┌", "┐", top), ("└", "┘", lay.pane_bottom))
     for left, right, y in edges:
@@ -497,7 +500,7 @@ def _preview_box(surface, lay, lines):
         y = top + 1 + offset
         if y >= lay.pane_top:
             surface.put(y, 0, "│", BLUE)
-            surface.put(y, 2, line, BLUE if offset == 0 else TEXT)
+            surface.put(y, 2, line[:width], BLUE if offset == 0 else TEXT)
             surface.put(y, width + 3, "│", BLUE)
 
 
