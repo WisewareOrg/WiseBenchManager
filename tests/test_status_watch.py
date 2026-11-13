@@ -547,3 +547,19 @@ def test_dd_on_the_merge_head_refuses_and_calls_remove_for_nothing(monkeypatch, 
     fake = watch_with(monkeypatch, tmp_path, keys)
     assert [call for call in calls if call[0] == "remove"] == []
     assert "only hand-queued runs can be removed" in last_frame(fake)
+
+
+@pytest.mark.parametrize("which", ["add", "remove"])
+def test_any_failure_of_add_or_remove_becomes_the_message_and_the_view_goes_on(
+    monkeypatch, tmp_path, which
+):
+    import sqlite3
+
+    def locked(*arguments):
+        raise sqlite3.OperationalError("database is locked")
+
+    stub_queue(monkeypatch, entries=lambda: [HAND], **{which: locked})
+    typed = ["2", TIMEOUT, TIMEOUT, *":run feature-c", "\n"] if which == "add" else ["2", TIMEOUT]
+    keys = [*typed, *(["d", "d"] if which == "remove" else []), TIMEOUT, TIMEOUT, "q"]
+    fake = watch_with(monkeypatch, tmp_path, keys)
+    assert "database is locked" in last_frame(fake)

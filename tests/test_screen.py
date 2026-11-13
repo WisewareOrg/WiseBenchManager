@@ -704,3 +704,28 @@ def test_the_queue_tab_draws_on_any_size_with_rows_a_preview_and_a_message(size)
         queue=[HAND_ENTRY], prompt=":run feature-c", preview=("feature-c", CLEAN), size=size
     )
     queue_drawn(queue=[HAND_ENTRY], message="queued 5 1234567", size=size)
+
+
+def test_the_selected_row_draws_on_the_selection_even_when_it_is_the_running_row():
+    grid, _ = queue_drawn([live("build")], LIVE, queue=[HAND_ENTRY])
+    for pattern in (r"▶", r"merge queue +PR #31 +a1b2c3d", r"running, build"):
+        assert {cell[2] for cell in grid.span(pattern)} == {screen.SELECTION}
+    assert grid.span(r"▶")[0][1] == screen.AMBER
+    assert {cell[1] for cell in grid.span(r"running, build")} == {screen.AMBER}
+    assert {cell[2] for cell in grid.span(r"by hand +feature-a")} == {None}
+
+
+def test_the_preview_box_has_a_blue_border_around_its_lines():
+    state = {"prompt": ":run feature-c", "preview": ("feature-c", CLEAN)}
+    grid, frame = queue_drawn(queue=[HAND_ENTRY], **state)
+    title, start, end = grid.find(r"will queue")
+    last, _, _ = grid.find(r"joins as 2, after feature-a")
+
+    def blue(y, x0=0, x1=SIZE[1]):
+        return [c for c in grid.cells[y][x0:x1] if c[0] != " " and c[1] == screen.BLUE]
+
+    assert len(blue(title - 1)) >= end - start
+    assert len(blue(last + 1)) >= end - start
+    assert last + 1 < frame.layout.bar
+    for y in range(title, last + 1):
+        assert blue(y, 0, start) and blue(y, end)
