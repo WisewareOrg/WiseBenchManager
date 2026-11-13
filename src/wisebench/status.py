@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import SimpleQueue
@@ -70,6 +70,8 @@ class _Reads:
         preview (tuple[str, dict | str] | None): The last `Queue.preview` outcome with its ref.
         read_at (datetime | None): When `entries` was last requested; None asks again.
         asked (str | None): The ref last previewed.
+        pending (set[str]): The kinds of read ("entries", "preview") requested and not yet
+            returned; the worker has one at a time of each.
         shown (bool): The Queue tab showed on the previous turn.
     """
 
@@ -78,6 +80,7 @@ class _Reads:
     read_at: datetime | None = None
     asked: str | None = None
     shown: bool = False
+    pending: set = field(default_factory=set)
 
 
 def _serve(requests):
@@ -107,16 +110,6 @@ def _outcome(call):
         return exc
 
 
-def _reason(exc):
-    """The first stderr line of a failed git call, else the exception's text."""
-    lines = (
-        (exc.stderr or "").strip().splitlines()
-        if isinstance(exc, subprocess.CalledProcessError)
-        else []
-    )
-    return lines[0] if lines else str(exc)
-
-
 def _collect(results, reads, state):
     """Take every finished background read into `reads`; a failed `entries()` becomes a message.
 
@@ -124,11 +117,12 @@ def _collect(results, reads, state):
     """
     while not results.empty():
         kind, ref, outcome = results.get()
+        reads.pending.discard(kind)
         if kind == "preview":
-            reads.preview = (ref, _reason(outcome) if isinstance(outcome, Exception) else outcome)
+            reads.preview = (ref, str(outcome) if isinstance(outcome, Exception) else outcome)
         elif isinstance(outcome, Exception):
             if state.prompt is None:
-                state.message = _reason(outcome)
+                state.message = str(outcome)
         else:
             reads.entries = outcome
 
@@ -137,19 +131,24 @@ def _request(queue, run, results, reads, state, now):
     """Ask `run` for the reads the state calls for.
 
     `Queue.entries` is read on entering the Queue tab and every 30 seconds while it shows;
-    `Queue.preview` whenever the ref typed after `:run ` is not the one last asked for.
+    `Queue.preview` whenever the ref typed after `:run ` is not the one last asked for. A kind of
+    read is not asked again while the last one has not returned; the newest typed ref follows
+    its result.
     """
     shown = state.tab == "queue"
     due = reads.read_at is None or now - reads.read_at >= _QUEUE_REFRESH
-    if shown and (due or not reads.shown):
+    if shown and (due or not reads.shown) and "entries" not in reads.pending:
         reads.read_at = now
+        reads.pending.add("entries")
         run(lambda: results.put(("entries", None, _outcome(queue.entries))))
     reads.shown = shown
     ref = view.typed_ref(state.prompt)
-    if ref != reads.asked:
+    if ref is None:
+        reads.asked = None
+    elif ref != reads.asked and "preview" not in reads.pending:
         reads.asked = ref
-        if ref is not None:
-            run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(ref)))))
+        reads.pending.add("preview")
+        run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(ref)))))
 
 
 def _perform(queue, reads, state):

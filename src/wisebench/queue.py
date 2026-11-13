@@ -219,7 +219,7 @@ class Queue:
     def head(self):
         """Read the queue entry whose own base is `origin/main`'s current tip.
 
-        Reads `main`'s tip and `refs/heads/gh-readonly-queue/main/*` from `origin` with
+        Reads `main`'s tip and `refs/heads/gh-readonly-queue/main/*` from `origin` with one
         `git ls-remote`, fetching nothing, and keeps the refs named `pr-<PR_NUMBER>-<BASE_SHA>`
         whose `<BASE_SHA>` equals that tip; a stale entry (based on an earlier tip) reads as no
         job, the same as an empty queue.
@@ -233,27 +233,24 @@ class Queue:
             BenchFailure: More than one ref qualifies, `origin` has no `refs/heads/main`, or
                 `git ls-remote` failed or timed out.
         """
-        main_lines = self._git(
-            ["ls-remote", "origin", "refs/heads/main"], network=True
-        ).stdout.splitlines()
-        main = next(
-            (line.split("\t")[0] for line in main_lines if line.endswith("\trefs/heads/main")),
-            None,
-        )
+        remote = self._git(
+            [
+                "ls-remote",
+                "origin",
+                "refs/heads/main",
+                "refs/heads/gh-readonly-queue/main/*",
+            ],
+            network=True,
+        ).stdout
+        refs = [line.split("\t") for line in remote.splitlines() if line]
+        main = next((sha for sha, ref in refs if ref == "refs/heads/main"), None)
         if main is None:
             raise BenchFailure("origin has no refs/heads/main")
-        remote = self._git(
-            ["ls-remote", "origin", "refs/heads/gh-readonly-queue/main/*"], network=True
-        ).stdout
 
         matches = []
-        for line in remote.splitlines():
-            if not line:
-                continue
-            sha, ref = line.split("\t")
-            name = ref.rsplit("/", 1)[-1]
-            match = _REF_RE.fullmatch(name)
-            if match and match.group(2) == main:
+        for sha, ref in refs:
+            match = _REF_RE.fullmatch(ref.rsplit("/", 1)[-1])
+            if ref != "refs/heads/main" and match and match.group(2) == main:
                 matches.append({"ref": ref, "sha": sha, "pr": int(match.group(1))})
 
         if not matches:

@@ -492,6 +492,8 @@ def _preview_box(surface, lay, lines):
         return
     width = min(max(map(len, lines)), lay.cols - 4)
     top = lay.pane_bottom - len(lines) - 1
+    for y in range(max(top, lay.pane_top), lay.pane_bottom + 1):
+        surface.put(y, 0, " " * lay.cols, TEXT)
     edges = (("┌", "┐", top), ("└", "┘", lay.pane_bottom))
     for left, right, y in edges:
         if y >= lay.pane_top:
@@ -500,7 +502,7 @@ def _preview_box(surface, lay, lines):
         y = top + 1 + offset
         if y >= lay.pane_top:
             surface.put(y, 0, "│", BLUE)
-            surface.put(y, 2, line[:width], BLUE if offset == 0 else TEXT)
+            surface.put(y, 2, line[:width].ljust(width), BLUE if offset == 0 else TEXT)
             surface.put(y, width + 3, "│", BLUE)
 
 

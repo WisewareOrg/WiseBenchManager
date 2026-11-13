@@ -291,7 +291,7 @@ def resolve(state, snap, rows, cols):
         history_room=history_room,
         focus=state.focus,
         queue_rows=queue_rows,
-        queue_cursor=_queue_cursor(state.queue_at, queue_rows),
+        queue_cursor=_queue_cursor(state.queue_at, queue_rows, _queue_room(lay)),
         preview_lines=_preview_lines(state.prompt, snap.preview, queue_rows),
         message=state.message,
     )
@@ -370,15 +370,24 @@ def _identity(row):
     return ("hand", row.id) if row.id is not None else ("merge",)
 
 
-def _queue_cursor(at, rows):
-    """Index of the Queue selection: its row, else the index it had clamped; None without rows."""
+def _queue_room(lay):
+    """How many Queue rows the pane draws."""
+    return max(1, lay.pane_bottom - lay.pane_top + 1)
+
+
+def _queue_cursor(at, rows, room):
+    """Index of the Queue selection among the `room` rows drawn; None without rows.
+
+    The selection is its row, else the index it had; either is held to the last row drawn.
+    """
     if not rows:
         return None
+    last = min(len(rows), room) - 1
     if at is None:
         return 0
     identity, index = at
     found = next((i for i, row in enumerate(rows) if _identity(row) == identity), None)
-    return found if found is not None else min(index, len(rows) - 1)
+    return min(found if found is not None else index, last)
 
 
 def typed_ref(prompt):
@@ -711,8 +720,9 @@ def _move(state, kind, frame):
     """
     if state.tab == "queue":
         if frame.queue_rows:
+            room = _queue_room(frame.layout)
             index = _index_after(
-                kind, frame.queue_cursor, len(frame.queue_rows), frame.history_room // 2
+                kind, frame.queue_cursor, min(len(frame.queue_rows), room), room // 2
             )
             state.queue_at = (_identity(frame.queue_rows[index]), index)
     elif state.tab == "history":
