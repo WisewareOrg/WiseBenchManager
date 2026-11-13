@@ -242,10 +242,10 @@ def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(
     assert _FakeCheck.posts == [("cafef00d", "failure", "target_suite failed", "records")]
 
 
-def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
+def test_run_on_a_bench_failure_writes_disabled_stops_the_timer_and_reraises(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """run on a BenchFailure writes DISABLED, disables the timer, and reraises."""
+    """run on a BenchFailure writes DISABLED, stops the timer, and reraises."""
     _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = bench_test.BenchFailure("precondition exited 9")
@@ -257,10 +257,10 @@ def test_run_on_a_bench_failure_writes_disabled_disables_the_timer_and_reraises(
     _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "precondition exited 9")
 
 
-def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer(
+def test_run_on_more_than_one_queue_entry_writes_disabled_and_stops_the_timer(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """run on more than one queue entry writes DISABLED and disables the timer."""
+    """run on more than one queue entry writes DISABLED and stops the timer."""
     _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.outcome = bench_test.BenchFailure("more than one gh-readonly-queue ref")
     run = _make_run(tmp_path, run_unit="scratch-unit")
@@ -272,10 +272,10 @@ def test_run_on_more_than_one_queue_entry_writes_disabled_and_disables_the_timer
     bench_test_class.assert_not_called()
 
 
-def test_run_on_a_failing_fetch_writes_disabled_and_disables_the_timer(
+def test_run_on_a_failing_fetch_writes_disabled_and_stops_the_timer(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """run on a failing fetch writes DISABLED and disables the timer."""
+    """run on a failing fetch writes DISABLED and stops the timer."""
     _stub_subprocess(monkeypatch, systemctl, error_on=["git", "fetch"])
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path, run_unit="scratch-unit")
@@ -287,10 +287,10 @@ def test_run_on_a_failing_fetch_writes_disabled_and_disables_the_timer(
     bench_test_class.assert_not_called()
 
 
-def test_run_on_check_construction_failing_writes_disabled_and_disables_the_timer(
+def test_run_on_check_construction_failing_writes_disabled_and_stops_the_timer(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """run on Check construction failing writes DISABLED and disables the timer."""
+    """run on Check construction failing writes DISABLED and stops the timer."""
     _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _FakeCheck.init_outcome = OSError("private key path does not exist")
@@ -303,10 +303,10 @@ def test_run_on_check_construction_failing_writes_disabled_and_disables_the_time
     bench_test_class.assert_not_called()
 
 
-def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disables_the_timer(
+def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_stops_the_timer(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """run on Check.post failing after a candidate failure writes DISABLED, disables the timer."""
+    """run on Check.post failing after a candidate failure writes DISABLED, stops the timer."""
     _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = _run_posting(
@@ -321,10 +321,10 @@ def test_run_on_post_failing_after_a_candidate_failure_writes_disabled_and_disab
     _assert_bench_failure_path(tmp_path, systemctl, "scratch-unit", "github is down")
 
 
-def test_run_on_post_failing_after_a_pass_writes_disabled_and_disables_the_timer(
+def test_run_on_post_failing_after_a_pass_writes_disabled_and_stops_the_timer(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """run on Check.post failing after a pass writes DISABLED and disables the timer."""
+    """run on Check.post failing after a pass writes DISABLED and stops the timer."""
     _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = _run_posting(None)
@@ -483,7 +483,7 @@ def test_run_of_a_hand_entry_builds_no_check_and_posts_nothing(
 def test_run_of_a_hand_entry_with_a_candidate_failure_returns_without_disabling(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """A hand run's CandidateFailure: no DISABLED, no timer disable, normal return, no post."""
+    """A hand run's CandidateFailure: no DISABLED, no timer stop, normal return, no post."""
     _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = dict(_HAND_ENTRY)
     _run_of(bench_test_class).side_effect = bench_test.CandidateFailure("target_suite failed")
@@ -508,7 +508,7 @@ def test_run_of_a_hand_entry_with_a_candidate_failure_returns_without_disabling(
 def test_run_of_a_hand_entry_with_any_other_failure_is_a_bench_fault(
     made, bench_test_class, systemctl, monkeypatch, tmp_path, fault
 ):
-    """Anything but CandidateFailure from a hand run writes DISABLED, disables the timer, raises."""
+    """Anything but CandidateFailure from a hand run writes DISABLED, stops the timer, raises."""
     _stub_subprocess(monkeypatch, systemctl)
     _FakeQueue.result = dict(_HAND_ENTRY)
     _run_of(bench_test_class).side_effect = fault

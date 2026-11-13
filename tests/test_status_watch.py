@@ -577,8 +577,6 @@ def test_background_work_runs_in_order_on_one_thread_that_is_not_the_callers():
     assert len(set(threads)) == 1 and threading.get_ident() not in threads
 
 
-# -- :disable and :enable through the loop -----------------------------------------------
-
 UNIT_TABLE = '\n[run]\nunit = "bench-run"\n'
 ASK = "Enable the bench?"
 

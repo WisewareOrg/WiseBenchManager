@@ -642,9 +642,9 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     tmp_path, monkeypatch, systemctl
 ):
     """`_loop` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes and mtimes
-    unchanged, no flock/lockf call, no process started and the only `systemctl` call the timer
-    query, and the only `Queue` methods called are `entries`, `preview`, `add` and `remove`
-    (stubbed)."""
+    unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the timer query
+    (asserted on the `systemctl` fixture), and the only `Queue` methods called are `entries`,
+    `preview`, `add` and `remove` (stubbed)."""
     import curses
     import fcntl
 

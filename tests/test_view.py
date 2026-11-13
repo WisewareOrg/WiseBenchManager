@@ -1201,7 +1201,7 @@ def test_y_after_enable_sets_the_enable_request_whatever_tab_shows(tab):
 
 
 @pytest.mark.parametrize("tab", ["run", "queue", "history", "help"])
-@pytest.mark.parametrize("key", ["n", "N", "x", "q", "2", "?", ":", "/", "d", ESC, ENTER])
+@pytest.mark.parametrize("key", ["n", "N", "x", "Y", "q", "2", "?", ":", "/", "d", ESC, ENTER])
 def test_any_other_key_after_enable_cancels_it_and_does_nothing_else(tab, key):
     state = view.State(tab=tab, back="run")
     quits = press(state, [run()], ":enable" + ENTER + key)
@@ -1215,6 +1215,14 @@ def test_the_key_after_a_cancelled_enable_is_an_ordinary_key_again():
     press(state, [run()], ":enable" + ENTER + "n" + "2")
     assert state.tab == "queue"
     assert requests(state) == (False, False, False)
+
+
+@pytest.mark.parametrize("typed", [":disabled", ":disable now", ":enablex", ":enable now"])
+def test_near_miss_bench_commands_are_rejected_and_set_no_request(typed):
+    state = view.State()
+    press(state, [run()], typed + ENTER)
+    assert requests(state) == (False, False, False)
+    assert (state.prompt, state.message, state.run_ref, state.remove_id) == (None, None, None, None)
 
 
 def test_y_with_no_enable_pending_requests_nothing():
