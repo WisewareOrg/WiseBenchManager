@@ -12,6 +12,7 @@ from pathlib import Path
 from wisebench.config import Config
 
 DASH = "—"
+DISABLED = "DISABLED"
 
 
 @dataclass(frozen=True)
@@ -74,11 +75,16 @@ def timer_state(run_unit):
         str: "on" (exit 0), "off" (exit 3), or "—" for any other exit or a failed call.
     """
     try:
-        argv = ["systemctl", "--user", "is-active", f"{run_unit}.timer"]
-        done = subprocess.run(argv, capture_output=True, timeout=1)
+        done = _systemctl_run("is-active", run_unit)
     except (OSError, subprocess.SubprocessError):
         return DASH
     return {0: "on", 3: "off"}.get(done.returncode, DASH)
+
+
+def _systemctl_run(verb, run_unit, **options):
+    """Run `systemctl --user <verb> <run_unit>.timer`, capturing output, under the 1 s timeout."""
+    argv = ["systemctl", "--user", verb, f"{run_unit}.timer"]
+    return subprocess.run(argv, capture_output=True, timeout=1, **options)
 
 
 def _systemctl(verb, run_unit):
@@ -92,9 +98,8 @@ def _systemctl(verb, run_unit):
         str | None: None on exit 0, else `systemctl failed: <detail>` -- stderr, else the exit
             code, else the exception's text. Never raises.
     """
-    argv = ["systemctl", "--user", verb, f"{run_unit}.timer"]
     try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=1)
+        done = _systemctl_run(verb, run_unit, text=True)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"systemctl failed: {exc}"
     if done.returncode == 0:
@@ -126,7 +131,7 @@ def enable(directory, run_unit):
             started when `DISABLED` cannot be removed.
     """
     try:
-        (Path(directory) / "DISABLED").unlink(missing_ok=True)
+        (Path(directory) / DISABLED).unlink(missing_ok=True)
     except OSError as exc:
         return f"cannot remove DISABLED: {exc}"
     return _systemctl("start", run_unit)
@@ -161,6 +166,6 @@ def read_bench(directory, newest, run_unit, proc_root):
     """
     return Bench(
         live=newest is not None and is_live(directory, newest, proc_root),
-        disabled=(Path(directory) / "DISABLED").exists(),
+        disabled=(Path(directory) / DISABLED).exists(),
         timer=DASH if run_unit is None else timer_state(run_unit),
     )

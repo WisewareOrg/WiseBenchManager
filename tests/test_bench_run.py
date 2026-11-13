@@ -2,6 +2,7 @@
 
 import inspect
 import subprocess
+from pathlib import Path
 from unittest.mock import ANY
 
 import pytest
@@ -92,7 +93,7 @@ def made(monkeypatch):
 
 
 def _stub_subprocess(monkeypatch, *, error_on=None):
-    """Fake `bench_run.subprocess.run` for `git fetch`; `systemctl` goes to the autouse `systemctl` fake.
+    """Fake `bench_run.subprocess.run` for `git fetch`; `systemctl` goes on to the `systemctl` fake.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.

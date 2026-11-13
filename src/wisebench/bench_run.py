@@ -5,7 +5,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 
-from wisebench.bench_state import stop_timer
+from wisebench.bench_state import DISABLED, stop_timer
 from wisebench.bench_test import BenchTest, CandidateFailure
 from wisebench.check import Check
 from wisebench.queue import Queue
@@ -54,7 +54,7 @@ class BenchRun:
                 `DISABLED` marker is written and `config.run_unit`'s timer stopped first, then
                 this is re-raised as-is so the CLI exits 2.
         """
-        disabled_path = self._result_dir / "DISABLED"
+        disabled_path = self._result_dir / DISABLED
         if disabled_path.exists():
             print("bench run: disabled, see DISABLED")
             return
