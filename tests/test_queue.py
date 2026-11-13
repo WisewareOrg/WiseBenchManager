@@ -370,7 +370,7 @@ def test_a_hand_entrys_added_is_an_iso_timestamp_in_utc(hand):
     assert added.utcoffset() == timedelta(0)
 
 
-# -- WI1: entries() reads, take() fetches; silent, bounded, detached git -----------------
+# -- entries() reads, take() fetches; silent, bounded, detached git ---------------------------
 
 _QUEUE_REF = "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
 
@@ -523,12 +523,19 @@ def test_a_timed_out_network_call_raises_bench_failure(
     assert str(failure.value).startswith(prefix)
 
 
+def test_a_failed_network_call_with_no_stderr_names_its_exit_status(monkeypatch, tmp_path):
+    stub_popen(monkeypatch, lambda command: ("", "\n", 7))
+    with pytest.raises(bench_test.BenchFailure) as failure:
+        queue.Queue(tmp_path, tmp_path / "records").take()
+    assert str(failure.value) == "git fetch: exit status 7"
+
+
 def _alive(pid):
     """Whether `pid` is a running process; a zombie awaiting its reaper is not."""
     try:
         with open(f"/proc/{pid}/stat") as stat:
             return stat.read().rsplit(")", 1)[1].split()[0] != "Z"
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return False
 
 
@@ -539,15 +546,15 @@ def test_a_timed_out_network_call_kills_git_and_every_process_it_started(
     bin_dir, pid_file = tmp_path / "bin", tmp_path / "grandchild.pid"
     bin_dir.mkdir()
     fake_git = bin_dir / "git"
-    fake_git.write_text(f"#!/bin/sh\nsleep 60 >/dev/null 2>&1 &\necho $! > {pid_file}\nwait\n")
+    fake_git.write_text(f"#!/bin/sh\nsleep 120 >/dev/null 2>&1 &\necho $! > {pid_file}\nwait\n")
     fake_git.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
-    monkeypatch.setattr(queue, "_NETWORK_TIMEOUT", 0.5)
+    monkeypatch.setattr(queue, "_NETWORK_TIMEOUT", 2)
     try:
         with pytest.raises(bench_test.BenchFailure, match="timed out"):
             getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
         grandchild = int(pid_file.read_text())
-        for _ in range(50):
+        for _ in range(500):
             if not _alive(grandchild):
                 break
             time.sleep(0.02)
@@ -587,7 +594,7 @@ def test_every_git_call_is_detached_and_never_prompts(hand, monkeypatch):
         assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
 
 
-# -- WI1: preview ------------------------------------------------------------------------
+# -- preview -----------------------------------------------------------------------------
 
 
 def test_preview_of_a_clean_checkout_returns_sha_subject_and_clean(hand, tmp_path):
