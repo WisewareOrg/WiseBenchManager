@@ -7,7 +7,7 @@
 ## Revisions
 
 - **rev 2** — 2026-11-12 — a tick takes a run queued by hand before the merge queue's head, and
-  the lock is the tick's alone (ADR 0005 rev 2; #60 Queue behaviour); the decision is unchanged.
+  the lock is the tick's alone (ADR 0005 rev 1; #60 Queue behaviour); the decision is unchanged.
 - **rev 1** — 2026-10-29 — first written (WisewareOrg/WiseBenchManager PR #31 ADR 0001 as trade studies).
 
 ## Context

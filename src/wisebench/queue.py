@@ -57,10 +57,9 @@ class Queue:
 
         Args:
             args (list[str]): The command line after `git`.
-            network (bool): Whether the command reaches `origin`. A network call is bounded by a
-                30 second timeout, which kills git and every process it started, and its
-                failure or timeout is raised as `BenchFailure("git <command>: <first stderr
-                line>")`.
+            network (bool): Whether the command reaches `origin`. A network call is bounded by
+                `_NETWORK_TIMEOUT`; a timeout kills git and every process it started. Its failure
+                or timeout is raised as `BenchFailure("git <command>: <first stderr line>")`.
 
         Returns:
             str: The command's standard output.
@@ -199,7 +198,7 @@ class Queue:
     def take(self):
         """Claim the first waiting entry: the oldest hand entry, else the merge queue's head.
 
-        Fetches `origin` first, so `origin/*` is fresh for the run that follows.
+        Fetches `origin` first.
 
         A hand entry is deleted when claimed, so it is never returned again whatever its run's
         outcome; one removed in the meantime is skipped.
