@@ -1165,10 +1165,7 @@ def test_the_running_row_shows_before_the_queue_has_been_read():
     assert [(r.marker, r.stage) for r in frame.queue_rows] == [("▶", "build")]
 
 
-ENABLE_PROMPT = (
-    "Enable the bench? Clears DISABLED and starts the timer; the next run checks the board first."
-    " [y/N]"
-)
+ENABLE_PROMPT = "Enable the bench? Clears DISABLED and starts the timer. [y/N]"
 
 
 def requests(state):

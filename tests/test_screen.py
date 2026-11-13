@@ -692,8 +692,8 @@ def test_the_help_lists_the_new_keys_and_no_longer_h_l():
     grid.find(r"1-3 +jump to view")
     grid.find(r"dd +remove hand-queued run")
     grid.find(r":run ref +queue a ref")
-    grid.find(r":disable +stop the bench")
-    grid.find(r":enable +start it again")
+    grid.find(r":disable +stop bench")
+    grid.find(r":enable +start again")
     text = "".join(grid.text(y) for y in range(SIZE[0]))
     assert "prev / next view" not in text
 

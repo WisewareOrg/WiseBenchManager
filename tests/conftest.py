@@ -41,6 +41,9 @@ def bench_test_class(monkeypatch):
     return mock
 
 
+ALLOWED_VERBS = ("is-active", "stop", "start")
+
+
 class Systemctl:
     """The recorded `systemctl` calls and the answers they get.
 
@@ -66,9 +69,15 @@ class Systemctl:
         self._answers[verb] = (returncode, stderr, raises)
 
     def run(self, command, **kwargs):
-        """Record the call and answer it; the stand-in for `subprocess.run`."""
+        """Record the call and answer it; the stand-in for `subprocess.run`.
+
+        Raises:
+            AssertionError: The verb is not one of `is-active`, `stop` and `start`.
+        """
         self.calls.append(list(command))
         self.invocations.append((list(command), kwargs))
+        if command[2] not in ALLOWED_VERBS:
+            raise AssertionError(f"unexpected systemctl verb {command[2]!r}: {list(command)}")
         default = (3, "", None) if command[2] == "is-active" else (0, "", None)
         returncode, stderr, raises = self._answers.get(command[2], default)
         if raises is not None:
