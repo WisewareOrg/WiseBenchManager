@@ -2,6 +2,7 @@
 and the run's bench.log markers."""
 
 import curses
+import os
 import re
 import subprocess
 
@@ -64,22 +65,111 @@ def marker_lines(tmp_path):
     ]
 
 
+TIMES_OUT = object()
+
+
+class FakePopen:
+    """A `subprocess.Popen` stand-in for `Queue._git`: scripted output, a pid no process has.
+
+    `communicate(timeout=...)` returns the scripted `(stdout, stderr)`, or, for `TIMES_OUT`,
+    raises `TimeoutExpired` once and then returns empty output, as a reaped child does.
+    """
+
+    _pids = iter(range(4_300_000, 5_000_000))
+
+    def __init__(self, command, outcome, timeouts=None):
+        """Script `outcome`, a `(stdout, stderr, returncode)` tuple or `TIMES_OUT`."""
+        self.args = self.command = command
+        self.outcome, self.timeouts = outcome, timeouts
+        self.pid = next(self._pids)
+        self.returncode = None
+        self.expired = False
+
+    def communicate(self, input=None, timeout=None):
+        """The scripted output; the timeout asked for is recorded."""
+        if self.timeouts is not None:
+            self.timeouts.append(timeout)
+        if self.outcome is TIMES_OUT:
+            if not self.expired:
+                self.expired = True
+                raise subprocess.TimeoutExpired(self.command, timeout)
+            self.returncode = -9
+            return "", ""
+        stdout, stderr, self.returncode = self.outcome
+        return stdout, stderr
+
+    def wait(self, timeout=None):
+        """The return code."""
+        return self.returncode
+
+    def poll(self):
+        """The return code, None until the output was read."""
+        return self.returncode
+
+    def kill(self):
+        """Nothing to kill."""
+
+    def __enter__(self):
+        """Context-manager use, as `subprocess.run` makes of Popen."""
+        return self
+
+    def __exit__(self, *exc):
+        """Nothing to release."""
+
+
+def stub_popen(monkeypatch, answer, calls=None, kwargs_seen=None, timeouts=None):
+    """Replace `subprocess.Popen` with `FakePopen`s scripted by `answer`.
+
+    `os.killpg` is replaced by a recorder too, so no test can signal a real process group.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores both at teardown.
+        answer (callable): Called with the command; returns `(stdout, stderr, returncode)` or
+            `TIMES_OUT`, or fails the test for a command it does not expect.
+        calls (list | None): Each command is appended.
+        kwargs_seen (list | None): Each Popen call's keyword arguments are appended.
+        timeouts (list | None): The `timeout` of each `communicate` call is appended.
+
+    Returns:
+        list: The `(pgid, signal)` of each `os.killpg` call.
+    """
+    killed = []
+
+    def popen(command, **kwargs):
+        if calls is not None:
+            calls.append(command)
+        if kwargs_seen is not None:
+            kwargs_seen.append(kwargs)
+        return FakePopen(command, answer(command), timeouts)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    return killed
+
+
 def stub_fetch(monkeypatch):
     """Make `git fetch` succeed without a remote, for a repo with no `origin`.
 
-    Every other command runs as before, through whatever `subprocess.run` is in place.
+    Every other command runs as before, through whatever `subprocess.run` and `subprocess.Popen`
+    are in place.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Restores `subprocess.run` at teardown.
+        monkeypatch (pytest.MonkeyPatch): Restores both at teardown.
     """
-    real_run = subprocess.run
+    real_run, real_popen = subprocess.run, subprocess.Popen
 
     def run(command, **kwargs):
         if command[:2] == ["git", "fetch"]:
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         return real_run(command, **kwargs)
 
+    def popen(command, **kwargs):
+        if command[:2] == ["git", "fetch"]:
+            return FakePopen(command, ("", "", 0))
+        return real_popen(command, **kwargs)
+
     monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "Popen", popen)
 
 
 ROWS, COLS = 24, 80

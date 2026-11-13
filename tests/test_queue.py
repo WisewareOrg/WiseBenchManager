@@ -11,7 +11,8 @@ from contextlib import closing
 from datetime import datetime, timedelta
 
 import pytest
-from helpers import repo_with_one_commit, stub_fetch
+from helpers import TIMES_OUT as stub_timeout
+from helpers import repo_with_one_commit, stub_fetch, stub_popen
 
 from wisebench import bench_test, queue
 
@@ -25,9 +26,16 @@ LS_REMOTE = [
 
 
 def _stub_git(
-    monkeypatch, main_sha, ls_remote_lines, calls=None, kwargs_seen=None, main_lines=None
+    monkeypatch,
+    main_sha,
+    ls_remote_lines,
+    calls=None,
+    kwargs_seen=None,
+    main_lines=None,
+    timeouts=None,
+    hung=None,
 ):
-    """Fake `queue.subprocess.run` for `git fetch` and the one `git ls-remote` read.
+    """Fake `subprocess.Popen` for `git fetch` and the one `git ls-remote` read.
 
     The one `git ls-remote origin refs/heads/main refs/heads/gh-readonly-queue/main/*` reports
     `main_sha` on `refs/heads/main` and then `ls_remote_lines`. Any other command fails the test.
@@ -37,29 +45,27 @@ def _stub_git(
         ls_remote_lines (list[str]): Raw merge-queue `git ls-remote` output lines,
             `<sha>\\t<ref>`.
         calls (list | None): When given, every command is appended to it, in order.
-        kwargs_seen (list | None): When given, every call's keyword arguments are appended.
+        kwargs_seen (list | None): When given, every Popen call's keyword arguments are appended.
         main_lines (list[str] | None): When given, the raw output lines of the `refs/heads/main`
             read, instead of one line naming `main_sha`.
+        timeouts (list | None): When given, the `timeout` of every `communicate` call is appended.
+        hung (list[str] | None): A command prefix whose `communicate` times out.
+
+    Returns:
+        list: The `(pgid, signal)` of each `os.killpg` call.
     """
 
-    def fake_run(command, **kwargs):
-        if calls is not None:
-            calls.append(command)
-        if kwargs_seen is not None:
-            kwargs_seen.append(kwargs)
+    def answer(command):
+        if hung is not None and command[: len(hung)] == hung:
+            return stub_timeout
         if command[:2] == ["git", "fetch"]:
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return "", "", 0
         if command == LS_REMOTE:
             main = main_lines if main_lines is not None else [f"{main_sha}\trefs/heads/main"]
-            return subprocess.CompletedProcess(
-                command,
-                0,
-                stdout="".join(f"{line}\n" for line in [*main, *ls_remote_lines]),
-                stderr="",
-            )
+            return "".join(f"{line}\n" for line in [*main, *ls_remote_lines]), "", 0
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(queue.subprocess, "run", fake_run)
+    return stub_popen(monkeypatch, answer, calls, kwargs_seen, timeouts)
 
 
 def test_head_returns_none_on_an_empty_queue(monkeypatch, tmp_path):
@@ -370,19 +376,19 @@ _QUEUE_REF = "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
 
 
 def _real_run_spy(monkeypatch):
-    """Wrap `queue.subprocess.run` so it records `(command, kwargs)` and still runs for real.
+    """Wrap `subprocess.Popen` so it records `(command, kwargs)` and still runs for real.
 
     Returns:
         list[tuple[list[str], dict]]: Every call, in order.
     """
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
     seen = []
 
     def spy(command, **kwargs):
         seen.append((command, kwargs))
-        return real_run(command, **kwargs)
+        return real_popen(command, **kwargs)
 
-    monkeypatch.setattr(queue.subprocess, "run", spy)
+    monkeypatch.setattr(subprocess, "Popen", spy)
     return seen
 
 
@@ -511,15 +517,7 @@ def test_a_failed_ls_remote_in_head_raises_bench_failure_with_the_first_stderr_l
 def test_a_timed_out_network_call_raises_bench_failure(
     monkeypatch, tmp_path, operation, hung, prefix
 ):
-    _stub_git(monkeypatch, "cafef00d", [])
-    stub = queue.subprocess.run
-
-    def run(command, **kwargs):
-        if command[: len(hung)] == hung:
-            raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
-        return stub(command, **kwargs)
-
-    monkeypatch.setattr(queue.subprocess, "run", run)
+    _stub_git(monkeypatch, "cafef00d", [], hung=hung)
     with pytest.raises(bench_test.BenchFailure) as failure:
         getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
     assert str(failure.value).startswith(prefix)
@@ -564,16 +562,16 @@ def test_a_timed_out_network_call_kills_git_and_every_process_it_started(
 def test_every_network_call_is_bounded_detached_never_prompting_and_captures_stderr(
     monkeypatch, tmp_path, operation, count
 ):
-    calls, kwargs_seen = [], []
-    _stub_git(monkeypatch, "cafef00d", [], calls=calls, kwargs_seen=kwargs_seen)
+    calls, kwargs_seen, timeouts = [], [], []
+    _stub_git(monkeypatch, "cafef00d", [], calls=calls, kwargs_seen=kwargs_seen, timeouts=timeouts)
     getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
     assert len(calls) == count
     assert LS_REMOTE in calls
+    assert timeouts == [30] * count
     for kwargs in kwargs_seen:
-        assert kwargs["timeout"] == 30
         assert kwargs["start_new_session"] is True
         assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
-        assert kwargs.get("capture_output") or kwargs.get("stderr") == subprocess.PIPE
+        assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
 
 
 def test_every_git_call_is_detached_and_never_prompts(hand, monkeypatch):
@@ -586,7 +584,7 @@ def test_every_git_call_is_detached_and_never_prompts(hand, monkeypatch):
     for _, kwargs in [*seen, *((None, kwargs) for kwargs in network)]:
         assert kwargs["start_new_session"] is True
         assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
-        assert kwargs.get("capture_output") or kwargs.get("stderr") is not None
+        assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
 
 
 # -- WI1: preview ------------------------------------------------------------------------
