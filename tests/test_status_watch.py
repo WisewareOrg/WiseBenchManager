@@ -493,7 +493,7 @@ def test_at_most_one_preview_is_in_flight_and_the_newest_typed_ref_follows_its_r
     calls = stub_queue(monkeypatch)
     held, release = held_work()
     terminal(monkeypatch, tmp_path, 0)
-    keys = ["2", TIMEOUT, *":run m", release, *"ain", release, release, "\x1b", "q"]
+    keys = ["2", TIMEOUT, *":run m", *"ain", release, release, "\x1b", "q"]
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
