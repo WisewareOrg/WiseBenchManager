@@ -1079,3 +1079,8 @@ def test_no_preview_without_the_run_prompt_or_a_result():
     assert closed.preview_lines is None
     typed = view.State(tab="queue", prompt=":run feature-c")
     assert resolve([run()], state=typed, queue=[]).preview_lines is None
+
+
+def test_the_running_row_shows_before_the_queue_has_been_read():
+    frame = resolve([live("build")], LIVE, queue_state())
+    assert [(r.marker, r.stage) for r in frame.queue_rows] == [("▶", "build")]
