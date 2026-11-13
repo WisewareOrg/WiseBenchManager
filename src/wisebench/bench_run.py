@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 
+from wisebench.bench_state import stop_timer
 from wisebench.bench_test import BenchTest, CandidateFailure
 from wisebench.check import Check
 from wisebench.queue import Queue
@@ -99,13 +100,9 @@ class BenchRun:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""
             disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{reason}\n")
-            result = subprocess.run(
-                ["systemctl", "--user", "disable", "--now", f"{self.config.run_unit}.timer"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                print(f"bench run: systemctl failed: {result.stderr.strip()}", file=sys.stderr)
+            failure = stop_timer(self.config.run_unit)
+            if failure:
+                print(f"bench run: {failure}", file=sys.stderr)
             raise
 
     def _run_hand(self, entry, lg_env):
