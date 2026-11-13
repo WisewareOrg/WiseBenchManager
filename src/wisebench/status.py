@@ -80,7 +80,7 @@ class _Reads:
     read_at: datetime | None = None
     asked: str | None = None
     shown: bool = False
-    pending: set = field(default_factory=set)
+    pending: set[str] = field(default_factory=set)
 
 
 def _serve(requests):

@@ -1,8 +1,10 @@
 """Queue: runs queued by hand in `records/queue.db`, then the merge queue's head entry."""
 
+import contextlib
 import json
 import os
 import re
+import signal
 import sqlite3
 import subprocess
 from contextlib import closing
@@ -56,37 +58,39 @@ class Queue:
         Args:
             args (list[str]): The command line after `git`.
             network (bool): Whether the command reaches `origin`. A network call is bounded by a
-                30 second timeout, and its failure or timeout is raised as
-                `BenchFailure("git <command>: <first stderr line>")`.
+                30 second timeout, which kills git and every process it started, and its
+                failure or timeout is raised as `BenchFailure("git <command>: <first stderr
+                line>")`.
 
         Returns:
-            subprocess.CompletedProcess: Text output captured; stdout in `.stdout`.
+            str: The command's standard output.
 
         Raises:
             BenchFailure: A network call failed or timed out.
             subprocess.CalledProcessError: Any other call failed.
         """
-        try:
-            return subprocess.run(
-                ["git", *args],
-                cwd=self.checkout,
-                capture_output=True,
-                text=True,
-                check=True,
-                start_new_session=True,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-                **({"timeout": _NETWORK_TIMEOUT} if network else {}),
-            )
-        except subprocess.TimeoutExpired as exc:
-            if network:
+        with subprocess.Popen(
+            ["git", *args],
+            cwd=self.checkout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        ) as process:
+            try:
+                out, err = process.communicate(timeout=_NETWORK_TIMEOUT if network else None)
+            except subprocess.TimeoutExpired as exc:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
                 raise BenchFailure(f"git {args[0]}: timed out after {_NETWORK_TIMEOUT}s") from exc
-            raise
-        except subprocess.CalledProcessError as exc:
+        if process.returncode:
             if network:
-                lines = (exc.stderr or "").strip().splitlines()
-                reason = lines[0] if lines else str(exc)
-                raise BenchFailure(f"git {args[0]}: {reason}") from exc
-            raise
+                lines = err.strip().splitlines()
+                raise BenchFailure(f"git {args[0]}: {lines[0] if lines else 'failed'}")
+            raise subprocess.CalledProcessError(process.returncode, ["git", *args], out, err)
+        return out
 
     def _resolve(self, ref):
         """Resolve `ref` to the commit sha it names.
@@ -100,7 +104,7 @@ class Queue:
         Raises:
             subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
         """
-        return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"]).stdout.strip()
+        return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"]).strip()
 
     def preview(self, ref):
         """Describe what queueing `ref` would run, without queueing it.
@@ -117,10 +121,8 @@ class Queue:
             subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
         """
         sha = self._resolve(ref)
-        subject = self._git(["log", "-1", "--format=%s", sha]).stdout.strip()
-        status = self._git(
-            ["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"]
-        ).stdout
+        subject = self._git(["log", "-1", "--format=%s", sha]).strip()
+        status = self._git(["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"])
         return {"sha": sha, "subject": subject, "clean": not status.strip()}
 
     def add(self, ref, set_name, skip_build, pytest_args):
@@ -241,7 +243,7 @@ class Queue:
                 "refs/heads/gh-readonly-queue/main/*",
             ],
             network=True,
-        ).stdout
+        )
         refs = [line.split("\t") for line in remote.splitlines() if line]
         main = next((sha for sha, ref in refs if ref == "refs/heads/main"), None)
         if main is None:
@@ -250,7 +252,7 @@ class Queue:
         matches = []
         for sha, ref in refs:
             match = _REF_RE.fullmatch(ref.rsplit("/", 1)[-1])
-            if ref != "refs/heads/main" and match and match.group(2) == main:
+            if match and match.group(2) == main:
                 matches.append({"ref": ref, "sha": sha, "pr": int(match.group(1))})
 
         if not matches:
