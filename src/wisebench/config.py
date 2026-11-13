@@ -19,7 +19,7 @@ class Config:
             the checkout; None under the same condition.
         github_check (str | None): The check run's name, as the layer's ruleset lists it; None
             under the same condition.
-        run_unit (str | None): The systemd unit base name (`[run] unit`) `bench run` disables
+        run_unit (str | None): The systemd unit base name (`[run] unit`) `bench run` stops
             on the bench's own failure; None without a `[run]` table, which `bench run` requires.
     """
 

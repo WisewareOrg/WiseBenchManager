@@ -2,10 +2,13 @@
 
 **Status:** accepted
 **Decided:** 2026-10-11 (the runner survey that founded this repository; built in WisewareOrg/WiseBenchManager#6 `bench run`)
-**Rev:** 2
+**Rev:** 3
 
 ## Revisions
 
+- **rev 3** — 2026-11-13 — the timer is turned off with `systemctl --user stop`, never `disable`, and
+  `bench status --watch`'s `:disable` only stops the timer (WisewareOrg/WiseBenchManager#24 `:enable`
+  and `:disable`); the decision is unchanged.
 - **rev 2** — 2026-11-12 — a tick takes a run queued by hand before the merge queue's head, and
   the lock is the tick's alone (ADR 0005 rev 1; #60 Queue behaviour); the decision is unchanged.
 - **rev 1** — 2026-10-29 — first written (WisewareOrg/WiseBenchManager PR #31 ADR 0001 as trade studies).
@@ -45,14 +48,24 @@ host. What the choice is held to:
   it is a long-lived registered runner on the build host, which organisation policy forbids, and the
   timer and the lock already give the trigger and the exclusion with tools the host runs anyway.
 
+- **`stop`, not `disable`.** The timer is installed as a link to the checkout's unit file, so
+  `disable` deletes that link and `start` by name then fails with "Unit does not exist". Rejected:
+  re-linking by path before every start, and installing the unit by copy. `stop` on `<unit>.timer`
+  leaves a run in progress (the `.service`) alone.
+- **`:disable` only stops the timer; it does not write `DISABLED`.** `DISABLED` means the bench
+  faulted, not that it was stopped. Rejected: also writing `DISABLED` with a reason such as
+  "disabled by hand" (owner ruling, 2026-11-13).
+
 ## Consequences
 
 - **A queue entry, merge-queue or queued by hand, waits for the next tick** before a run picks it
   up, and for the current job too if the lock is held.
 - **Queue-head selection is our code**, a `git ls-remote` read kept behind one class, where an
   Actions runner would have done it for free.
-- **The bench stops itself.** The timer is the unit the bench's own failure disables, so a broken
+- **The bench stops itself.** The timer is the unit the bench's own failure stops, so a broken
   bench does not keep failing on every tick; restarting it is a hand step.
+- **A hand stop does not persist.** A user-manager restart or a reboot re-arms the timer. After a
+  fault the re-armed timer starts nothing, because every tick refuses on `DISABLED`.
 
 **Premise that would reopen this:** the organisation's CI policy changing what may run on the build
 host, which makes the Actions runner the pre-analysed alternative.

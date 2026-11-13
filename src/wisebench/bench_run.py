@@ -26,7 +26,7 @@ class BenchRun:
             checkout (pathlib.Path): The layer's clone this run reads the queue against,
                 fetches the job's ref into, and tests.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
-                names the systemd unit this run disables on the bench's own failure.
+                names the systemd unit this run stops on the bench's own failure.
             result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value.
 
         Raises:
@@ -50,7 +50,7 @@ class BenchRun:
 
         Raises:
             Exception: A failure that is this runner's own, not the candidate's -- the
-                `DISABLED` marker is written and `config.run_unit`'s timer disabled first, then
+                `DISABLED` marker is written and `config.run_unit`'s timer stopped first, then
                 this is re-raised as-is so the CLI exits 2.
         """
         disabled_path = self._result_dir / "DISABLED"
