@@ -729,3 +729,21 @@ def test_the_preview_box_has_a_blue_border_around_its_lines():
     assert last + 1 < frame.layout.bar
     for y in range(title, last + 1):
         assert blue(y, 0, start) and blue(y, end)
+
+
+@pytest.mark.parametrize("cols", [80, 100])
+def test_a_long_preview_line_is_cut_to_fit_and_the_box_keeps_its_right_border(cols):
+    subject = "Wait longer for ssh after reboot " * 6
+    long_result = {**CLEAN, "subject": subject}
+    state = {"prompt": ":run feature-c", "preview": ("feature-c", long_result)}
+    grid, frame = queue_drawn(queue=[HAND_ENTRY], size=(24, cols), **state)
+    line, _, _ = grid.find(r"resolves to 1234567 ")
+    text = grid.text(line)
+    full = f'resolves to 1234567 "{subject}", clean tree'
+    border = text.rindex("│")
+    assert border == cols - 1
+    inner = text[2:border].rstrip()
+    assert inner and "…" not in inner and full.startswith(inner) and len(inner) < len(full)
+    top, bottom = line - 2, grid.find(r"joins as 2, after feature-a")[0] + 1
+    assert grid.text(top).rstrip().endswith("┐") and len(grid.text(top).rstrip()) == cols
+    assert grid.text(bottom).rstrip().endswith("┘") and len(grid.text(bottom).rstrip()) == cols
