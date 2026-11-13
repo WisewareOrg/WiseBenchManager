@@ -19,7 +19,7 @@ bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
                                # use one; --skip-build tests the board as it already is, with no
                                # build and no install
 bench unqueue <id>             # remove a run queued by hand that `bench run` has not taken yet
-bench status --watch           # read-only: the run in progress and every run on disk
+bench status --watch           # the run in progress, what waits to run, and every run on disk
 ```
 
 `bench test` runs nothing. It resolves the ref to a commit in the bench checkout, queues the run in
@@ -234,13 +234,17 @@ records for the whole of a run; it backs off with exit 0 if the lock is already 
 entry -- the `gh-readonly-queue` ref whose own base is `origin/main`'s current tip, read with
 `git ls-remote` -- whose verdict it posts as a GitHub check run (`Check.post`). A waiting run queued
 by hand starts only when that read of the merge queue succeeds: a `git fetch` or `ls-remote` fault,
-or more than one qualifying ref, writes `DISABLED` as on any tick, before the hand entry runs. `bench status --watch` is the read-only view of all
+or more than one qualifying ref, writes `DISABLED` as on any tick, before the hand entry runs. `bench status --watch` is the view of all
 of it, run from the directory `bench run` runs in. It is a curses screen refreshed once a second:
 Run shows the newest run's stages and the selected stage's log, headed by bitbake's task progress
-while a build runs, and History lists every run on disk. It reads `records/*/bench.log`, each
+while a build runs, Queue lists what waits (the running run, the runs queued by hand, then the merge
+queue's head) and History lists every run on disk. `Tab` and `Shift-Tab` cycle the views and `1` to `3`
+jump to one; in Queue, `:run <ref>` previews the ref as you type and `Enter` queues it, and `dd` removes
+the selected run queued by hand. It reads `records/*/bench.log`, each
 suite's `report.jsonl`, whether `records/DISABLED` exists, the holder of the `lock` file from
-`/proc/locks`, the run timer's state from `systemctl --user`, and `bench.toml`. It writes nothing,
-takes no lock and runs no git. No maintained viewer reads the runner's markers or joins them to
+`/proc/locks`, the run timer's state from `systemctl --user`, and `bench.toml`. It writes no
+file and takes no lock of its own and runs no git of its own: the Queue tab reads, adds and removes
+through `Queue`, the same entry point as `bench test` and `bench unqueue`. No maintained viewer reads the runner's markers or joins them to
 pytest-reportlog's outcomes, so the view is the runner's own, on stdlib `curses`. Bitbake shows its
 task progress only on the terminal that ran the build, so the view reads bitbake's `NOTE:` lines
 from the log; and it asks the kernel's `/proc/locks` who holds the lock rather than `lslocks`,
