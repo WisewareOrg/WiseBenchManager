@@ -81,14 +81,19 @@ def timer_state(run_unit):
     return {0: "on", 3: "off"}.get(done.returncode, DASH)
 
 
-def _systemctl_run(verb, run_unit, **options):
-    """Run `systemctl --user <verb> <run_unit>.timer`, capturing output, under the 1 s timeout."""
+def _systemctl_run(verb, run_unit):
+    """The `CompletedProcess` of `systemctl --user <verb> <run_unit>.timer`, text captured.
+
+    Raises:
+        OSError: `systemctl` could not be started.
+        subprocess.SubprocessError: The call timed out after 1 s.
+    """
     argv = ["systemctl", "--user", verb, f"{run_unit}.timer"]
-    return subprocess.run(argv, capture_output=True, timeout=1, **options)
+    return subprocess.run(argv, capture_output=True, text=True, timeout=1)
 
 
-def _systemctl(verb, run_unit):
-    """Run `systemctl --user <verb> <run_unit>.timer`.
+def _change_timer(verb, run_unit):
+    """Stop or start the run timer: None on success, else a message-ready failure text.
 
     Args:
         verb (str): "stop" or "start".
@@ -99,7 +104,7 @@ def _systemctl(verb, run_unit):
             code, else the exception's text. Never raises.
     """
     try:
-        done = _systemctl_run(verb, run_unit, text=True)
+        done = _systemctl_run(verb, run_unit)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"systemctl failed: {exc}"
     if done.returncode == 0:
@@ -116,7 +121,7 @@ def stop_timer(run_unit):
     Returns:
         str | None: None on success, else a message-ready failure text.
     """
-    return _systemctl("stop", run_unit)
+    return _change_timer("stop", run_unit)
 
 
 def enable(directory, run_unit):
@@ -134,7 +139,7 @@ def enable(directory, run_unit):
         (Path(directory) / DISABLED).unlink(missing_ok=True)
     except OSError as exc:
         return f"cannot remove DISABLED: {exc}"
-    return _systemctl("start", run_unit)
+    return _change_timer("start", run_unit)
 
 
 def read_run_unit(cwd):
