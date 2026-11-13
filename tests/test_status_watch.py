@@ -14,7 +14,7 @@ import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import COLS, ROWS, FakeScreen, terminal
+from helpers import COLS, ROWS, FakeScreen, start_argv, stop_argv, terminal
 
 from wisebench import queue, screen, status
 
@@ -575,3 +575,137 @@ def test_background_work_runs_in_order_on_one_thread_that_is_not_the_callers():
     assert done.wait(5), "the worker never ran the work"
     assert order == ["first", "second", "last"]
     assert len(set(threads)) == 1 and threading.get_ident() not in threads
+
+
+# -- :disable and :enable through the loop -----------------------------------------------
+
+UNIT_TABLE = '\n[run]\nunit = "bench-run"\n'
+ASK = "Enable the bench?"
+
+
+def bench_command(monkeypatch, tmp_path, keys, *, unit=True, disabled=True):
+    """Run the loop over `keys` in a directory with a bench.toml, DISABLED, or neither.
+
+    Returns the FakeScreen and the records directory.
+    """
+    directory = tmp_path / "records"
+    directory.mkdir(exist_ok=True)
+    if unit:
+        (tmp_path / "bench.toml").write_text(UNIT_TABLE)
+    if disabled:
+        (directory / "DISABLED").write_text("2026-11-13T00:00:00+00:00\nboom\n")
+    return watch_with(monkeypatch, tmp_path, keys), directory
+
+
+def changes(systemctl):
+    """The systemctl calls that are not the timer query."""
+    return [call for call in systemctl.calls if call[2] != "is-active"]
+
+
+def test_disable_stops_the_timer_says_so_and_leaves_disabled_alone(
+    monkeypatch, tmp_path, systemctl
+):
+    fake, directory = bench_command(monkeypatch, tmp_path, [*":disable", "\n", TIMEOUT, "q"])
+    assert changes(systemctl) == [stop_argv("bench-run")]
+    assert "bench disabled" in last_frame(fake)
+    assert (directory / "DISABLED").exists()
+
+
+def test_disable_with_no_disabled_file_writes_none(monkeypatch, tmp_path, systemctl):
+    _, directory = bench_command(
+        monkeypatch, tmp_path, [*":disable", "\n", TIMEOUT, "q"], disabled=False
+    )
+    assert changes(systemctl) == [stop_argv("bench-run")]
+    assert not (directory / "DISABLED").exists()
+
+
+def test_enable_asks_first_and_changes_nothing_until_y(monkeypatch, tmp_path, systemctl):
+    fake, directory = bench_command(monkeypatch, tmp_path, [*":enable", "\n", TIMEOUT, "q"])
+    assert changes(systemctl) == []
+    assert (directory / "DISABLED").exists()
+    assert any(ASK in "\n".join(frame) for frame in fake.frames)
+
+
+def test_enable_then_y_removes_disabled_starts_the_timer_and_says_so(
+    monkeypatch, tmp_path, systemctl
+):
+    keys = [*":enable", "\n", TIMEOUT, "y", TIMEOUT, "q"]
+    fake, directory = bench_command(monkeypatch, tmp_path, keys)
+    assert changes(systemctl) == [start_argv("bench-run")]
+    assert not (directory / "DISABLED").exists()
+    assert "bench enabled" in last_frame(fake)
+    assert ASK not in last_frame(fake)
+
+
+def test_enable_then_y_with_no_disabled_file_still_starts_the_timer(
+    monkeypatch, tmp_path, systemctl
+):
+    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
+    fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
+    assert changes(systemctl) == [start_argv("bench-run")]
+    assert "bench enabled" in last_frame(fake)
+
+
+@pytest.mark.parametrize("cancel", ["n", "x", "\x1b"])
+def test_enable_then_another_key_changes_nothing_and_clears_the_question(
+    monkeypatch, tmp_path, systemctl, cancel
+):
+    keys = [*":enable", "\n", cancel, TIMEOUT, "q"]
+    fake, directory = bench_command(monkeypatch, tmp_path, keys)
+    assert changes(systemctl) == []
+    assert (directory / "DISABLED").exists()
+    assert any(ASK in "\n".join(frame) for frame in fake.frames)
+    assert ASK not in last_frame(fake)
+
+
+def test_disable_with_no_run_unit_says_so_and_calls_nothing(monkeypatch, tmp_path, systemctl):
+    keys = [*":disable", "\n", TIMEOUT, "q"]
+    fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
+    assert systemctl.calls == []
+    assert "no [run] unit in bench.toml" in last_frame(fake)
+    assert (directory / "DISABLED").exists()
+
+
+def test_enable_with_no_run_unit_says_so_and_leaves_disabled_in_place(
+    monkeypatch, tmp_path, systemctl
+):
+    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
+    fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
+    assert systemctl.calls == []
+    assert "no [run] unit in bench.toml" in last_frame(fake)
+    assert (directory / "DISABLED").exists()
+
+
+@pytest.mark.parametrize(
+    ("verb", "command", "answer", "text"),
+    [
+        (
+            "stop",
+            ":disable",
+            dict(returncode=1, stderr="not loaded\n"),
+            "systemctl failed: not loaded",
+        ),
+        ("stop", ":disable", dict(returncode=4), "systemctl failed: exit 4"),
+        ("start", ":enable", dict(returncode=1, stderr="no unit\n"), "systemctl failed: no unit"),
+    ],
+)
+def test_a_returned_failure_text_is_shown_verbatim(
+    monkeypatch, tmp_path, systemctl, verb, command, answer, text
+):
+    systemctl.answer(verb, **answer)
+    keys = [*command, "\n", *(["y"] if verb == "start" else []), TIMEOUT, "q"]
+    fake, _ = bench_command(monkeypatch, tmp_path, keys)
+    assert text in last_frame(fake)
+    assert "bench disabled" not in last_frame(fake)
+    assert "bench enabled" not in last_frame(fake)
+
+
+def test_enable_that_cannot_remove_disabled_shows_why_and_does_not_start(
+    monkeypatch, tmp_path, systemctl
+):
+    directory = tmp_path / "records"
+    (directory / "DISABLED").mkdir(parents=True)
+    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
+    fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
+    assert changes(systemctl) == []
+    assert "cannot remove DISABLED:" in last_frame(fake)
