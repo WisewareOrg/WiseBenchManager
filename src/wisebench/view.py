@@ -208,6 +208,7 @@ class Frame:
         preview_lines (list[str] | None): The preview box's lines while `:run <ref>` is typed and
             its result is in; None otherwise.
         message (str | None): The text shown in the command line's row.
+        pending (str | None): The first key of a pair still waiting for its second.
     """
 
     tab: str
@@ -236,6 +237,7 @@ class Frame:
     queue_cursor: int | None
     preview_lines: list[str] | None
     message: str | None
+    pending: str | None
 
 
 def resolve(state, snap, rows, cols):
@@ -294,6 +296,7 @@ def resolve(state, snap, rows, cols):
         queue_cursor=_queue_cursor(state.queue_at, queue_rows, _queue_room(lay)),
         preview_lines=_preview_lines(state.prompt, snap.preview, queue_rows),
         message=state.message,
+        pending=state.pending,
     )
 
 

@@ -171,8 +171,9 @@ def _perform(queue, reads, state):
         except Exception as exc:
             state.message = str(exc)
         else:
-            if not removed:
-                state.message = f"no queued run {entry_id}"
+            state.message = (
+                f"removed queued run {entry_id}" if removed else f"no queued run {entry_id}"
+            )
         reads.read_at = None
 
 

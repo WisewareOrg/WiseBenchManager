@@ -235,7 +235,7 @@ def _command_row(surface, frame):
 
 
 def _status_bar(surface, frame):
-    """The badge (running over disabled over idle), the timer and the `? keys` box."""
+    """The badge (running, disabled or idle), the timer, the pending key and the `? keys` box."""
     bench, lay = frame.bench, frame.layout
     if bench.live:
         badge, fg, bg = " RUNNING ", GROUND, AMBER
@@ -251,6 +251,8 @@ def _status_bar(surface, frame):
         len(badge) + 2,
         [("timer ", DIM, False), (bench.timer, timer_colour, False)],
     )
+    if frame.pending:
+        surface.put(lay.bar, lay.cols - 7 - len(frame.pending), frame.pending, TEXT)
     surface.put(lay.bar, lay.cols - 6, "?", GROUND, TEXT)
     surface.put(lay.bar, lay.cols - 5, " keys", TEXT)
 
