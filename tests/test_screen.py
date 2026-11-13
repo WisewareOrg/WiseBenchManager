@@ -150,7 +150,7 @@ def test_each_meaning_is_drawn_in_its_canvas_colour(scene, pattern, fg, bg, bold
 
 def test_the_tab_line_is_the_tabs_a_past_runs_record_and_the_local_clock():
     newest, _ = drawn([run(), run(OLDER)])
-    assert re.search(r"1 Run +3 History", newest.text(0))
+    assert "1 Run  2 Queue  3 History" in newest.text(0)
     assert newest.text(0).rstrip().endswith(lc(10, 7, 30))
 
     past, _ = drawn([run(), run(OLDER)], record=OLDER)
@@ -541,3 +541,251 @@ def test_a_running_now_row_at_80_columns_spills_the_excess_into_the_task_column_
     row = grid.text(y)[screen._PANE :].rstrip()
     assert re.fullmatch(r"core-image-b {2}do_package_qa_setsce {2}\d+m\d\ds", row), row
     assert len(row) <= SIZE[1] - screen._PANE
+
+
+# -- the Queue tab ----------------------------------------------------------------------
+
+HAND_ENTRY = {
+    "kind": "test",
+    "id": 3,
+    "added": "2026-11-10T03:15:00+00:00",
+    "ref": "feature-a",
+    "sha": "1" * 40,
+    "set": None,
+    "skip_build": False,
+    "args": [],
+}
+HAND_ENTRY_2 = {**HAND_ENTRY, "id": 4, "added": "2026-11-10T03:40:00+00:00", "ref": "feature-b"}
+MERGE_ENTRY = {
+    "kind": "run",
+    "ref": "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
+    "sha": "9f8e7d6" + "0" * 33,
+    "pr": 14,
+}
+CLEAN = {"sha": "1234567" + "0" * 33, "subject": "Fix the thing", "clean": True}
+
+
+def queue_drawn(runs=None, bench=IDLE, queue=(), keys=(), preview=None, size=SIZE, **state):
+    """The Queue tab over `runs` and `queue`, after pressing `keys` on it: (grid, frame)."""
+    runs = [run()] if runs is None else runs
+    chosen = view.State(tab="queue", **state)
+    read = None if queue is None else list(queue)
+    snap = view.Snapshot(runs, bench, NOW, DIRECTORY, queue=read, preview=preview)
+    for key in keys:
+        view.handle(chosen, key, view.resolve(chosen, snap, *size))
+    frame = view.resolve(chosen, snap, *size)
+    grid = Grid(*size)
+    screen.draw(grid, frame)
+    return grid, frame
+
+
+def test_the_active_queue_tab_is_inverted_and_the_other_tabs_are_not():
+    grid, _ = queue_drawn()
+    assert {cell[2] for cell in grid.span(r"2 Queue")} == {screen.TEXT}
+    assert {cell[2] for cell in grid.span(r"1 Run")} == {None}
+    assert {cell[2] for cell in grid.span(r"3 History")} == {None}
+
+
+def test_the_queue_header_names_the_columns_in_dim_and_the_rows_follow_in_order():
+    grid, _ = queue_drawn(queue=[HAND_ENTRY, HAND_ENTRY_2, MERGE_ENTRY])
+    head, _, _ = grid.find(r"source +what +sha +added")
+    assert {cell[1] for cell in grid.span(r"source +what +sha +added") if cell[0] != " "} == {
+        screen.DIM
+    }
+    first, _, _ = grid.find(r"^1 +by hand +feature-a +1111111 +06:15")
+    second, _, _ = grid.find(r"^2 +by hand +feature-b +1111111 +06:40")
+    third, _, _ = grid.find(r"^3 +merge queue +PR #14 +9f8e7d6 *$")
+    assert head < first and (second, third) == (first + 1, first + 2)
+
+
+def test_by_hand_is_blue_and_the_cursor_row_is_on_the_selection():
+    grid, _ = queue_drawn(queue=[HAND_ENTRY, MERGE_ENTRY])
+    assert {cell[1] for cell in grid.span(r"by hand")} == {screen.BLUE}
+    assert {cell[2] for cell in grid.span(r"by hand +feature-a +1111111 +06:15")} == {
+        screen.SELECTION
+    }
+    assert {cell[2] for cell in grid.span(r"merge queue +PR #14 +9f8e7d6")} == {None}
+
+
+def test_moving_the_cursor_moves_the_selection_with_it():
+    grid, _ = queue_drawn(queue=[HAND_ENTRY, MERGE_ENTRY], keys="j")
+    assert {cell[2] for cell in grid.span(r"merge queue +PR #14 +9f8e7d6")} == {screen.SELECTION}
+    assert {cell[2] for cell in grid.span(r"by hand +feature-a +1111111 +06:15")} == {None}
+
+
+def test_the_running_row_is_a_marker_a_tint_and_the_amber_running_stage():
+    grid, _ = queue_drawn([live("build")], LIVE, queue=[HAND_ENTRY], keys="j")
+    assert grid.span(r"▶")[0][1] == screen.AMBER
+    for pattern in (r"▶", r"merge queue +PR #31 +a1b2c3d", r"running, build"):
+        assert {cell[2] for cell in grid.span(pattern)} == {screen.RUNNING_TINT}
+    assert {cell[1] for cell in grid.span(r"running, build")} == {screen.AMBER}
+    grid.find(r"^2 +by hand +feature-a")
+
+
+def test_a_running_hand_run_reads_by_hand_in_blue_on_the_running_row():
+    hand_run = live("build", kind="test", pr=None, ref="feature-z")
+    grid, _ = queue_drawn([hand_run], LIVE, queue=[HAND_ENTRY], keys="j")
+    assert {cell[1] for cell in grid.span(r"by hand +feature-z")[:7]} == {screen.BLUE}
+    grid.find(r"running, build")
+
+
+def test_a_queue_with_nothing_in_it_draws_no_rows_and_no_footer():
+    for queue in (None, []):
+        grid, _ = queue_drawn(queue=queue)
+        text = "".join(grid.text(y) for y in range(SIZE[0]))
+        assert "by hand" not in text and "merge queue" not in text
+        assert "updated" not in text and " ago" not in text
+
+
+def test_the_preview_box_sits_above_the_status_bar_below_the_rows_with_a_blue_title():
+    state = {"prompt": ":run feature-c", "preview": ("feature-c", CLEAN)}
+    grid, frame = queue_drawn(queue=[HAND_ENTRY, HAND_ENTRY_2], **state)
+    title, _, _ = grid.find(r"will queue")
+    second, _, _ = grid.find(r'resolves to 1234567 "Fix the thing", clean tree')
+    third, _, _ = grid.find(r"joins as 3, after feature-b")
+    last_row, _, _ = grid.find(r"^2 +by hand +feature-b")
+    assert (second, third) == (title + 1, title + 2)
+    assert last_row < title and third < frame.layout.bar
+    assert {cell[1] for cell in grid.span(r"will queue")} == {screen.BLUE}
+
+
+def test_a_dirty_checkout_and_an_unresolvable_ref_are_drawn_as_the_frame_words_them():
+    dirty = {**CLEAN, "clean": False}
+    grid, _ = queue_drawn(prompt=":run x", preview=("x", dirty))
+    grid.find(r'resolves to 1234567 "Fix the thing", uncommitted changes in the checkout')
+    grid.find(r"joins as 1 *(│|$)")
+    grid, _ = queue_drawn(prompt=":run nope", preview=("nope", "fatal: bad revision"))
+    grid.find(r"nope does not resolve")
+    assert "will queue" not in "".join(grid.text(y) for y in range(SIZE[0]))
+
+
+def test_no_preview_box_without_a_result_for_the_typed_ref():
+    grid, _ = queue_drawn(prompt=":run feature-c", preview=("other", CLEAN))
+    assert "will queue" not in "".join(grid.text(y) for y in range(SIZE[0]))
+
+
+def test_the_run_prompt_shows_the_hints_enter_queue_it_and_esc_cancel_and_no_tab_complete():
+    grid, frame = queue_drawn(prompt=":run feature-c")
+    row = grid.text(frame.layout.prompt)
+    assert row.startswith(":run feature-c")
+    assert re.search(r"Enter queue it  Esc cancel", row)
+    assert "Tab complete" not in "".join(grid.text(y) for y in range(SIZE[0]))
+
+
+def test_a_message_is_drawn_in_the_prompt_row_with_the_status_bar_above_it():
+    grid, frame = queue_drawn(message="no queued run 3")
+    assert frame.prompt is None and frame.layout.prompt == SIZE[0] - 1
+    assert "no queued run 3" in grid.text(frame.layout.prompt)
+    assert "IDLE" in grid.text(frame.layout.bar)
+    assert frame.layout.bar == SIZE[0] - 2
+
+
+def test_a_message_is_drawn_on_every_tab():
+    for tab in ("run", "history"):
+        grid, frame = drawn([run()], tab=tab, message="queued 5 1234567")
+        assert "queued 5 1234567" in grid.text(frame.layout.prompt)
+
+
+def test_the_help_lists_the_new_keys_and_no_longer_h_l():
+    grid, _ = drawn([run()], tab="help")
+    grid.find(r"Tab S-Tab +next / prev view")
+    grid.find(r"1-3 +jump to view")
+    grid.find(r"dd +remove hand-queued run")
+    grid.find(r":run ref +queue a ref")
+    text = "".join(grid.text(y) for y in range(SIZE[0]))
+    assert "prev / next view" not in text
+
+
+@pytest.mark.parametrize("size", [SIZE, (24, 120), (40, 80), (50, 200)])
+def test_the_queue_tab_draws_on_every_size_it_is_drawn_at_with_rows_a_preview_and_a_message(size):
+    grid, _ = queue_drawn([live("build")], LIVE, [HAND_ENTRY, MERGE_ENTRY], size=size)
+    grid.find(r"merge queue +PR #14")
+    grid, _ = queue_drawn(queue=None, size=size)
+    grid.find(r"2 Queue")
+    grid, _ = queue_drawn(
+        queue=[HAND_ENTRY], prompt=":run feature-c", preview=("feature-c", CLEAN), size=size
+    )
+    grid.find(r"joins as 2, after feature-a")
+    grid, frame = queue_drawn(queue=[HAND_ENTRY], message="queued 5 1234567", size=size)
+    assert "queued 5 1234567" in grid.text(frame.layout.prompt)
+
+
+def test_the_preview_box_clears_the_queue_rows_it_covers_and_everything_right_of_its_border():
+    crowded = [{**HAND_ENTRY, "id": i, "ref": f"feature-{i:02d}-a-long-branch"} for i in range(18)]
+    state = {"prompt": ":run feature-c", "preview": ("feature-c", CLEAN)}
+    grid, frame = queue_drawn(queue=crowded, **state)
+    top = grid.find(r"will queue")[0] - 1
+    bottom = grid.find(r"joins as 19, after feature-17")[0] + 1
+    assert top > frame.layout.pane_top
+    box = [grid.text(y).rstrip() for y in range(top, bottom + 1)]
+    assert all(row[0] in "┌│└" and row[-1] in "┐│┘" for row in box)
+    assert [row[1:-1].strip() for row in box[1:-1]] == frame.preview_lines
+    assert {len(row) for row in box} == {len(box[0])}
+
+
+def test_a_long_ref_in_the_run_prompt_is_not_overwritten_by_the_hint():
+    prompt = ":run " + "x" * 60
+    grid, frame = queue_drawn(prompt=prompt)
+    row = grid.text(frame.layout.prompt)
+    assert row.startswith(prompt)
+    assert "Enter queue it" not in row
+
+
+@pytest.mark.parametrize(
+    ("tab", "pending"), [("queue", "d"), ("run", "g"), ("history", "z")], ids=["d", "g", "z"]
+)
+def test_a_pending_key_is_drawn_in_the_status_bar_just_left_of_the_keys_box(tab, pending):
+    grid, frame = drawn([run()], tab=tab, pending=pending)
+    bar = grid.text(frame.layout.bar)
+    keys = bar.index("? keys")
+    assert re.search(rf" {pending} +\? keys$", bar.rstrip())
+    assert bar[:keys].rstrip().endswith(pending) and keys == SIZE[1] - 6
+    assert bar.index("timer") < bar.rindex(pending)
+
+
+def test_no_pending_text_is_drawn_when_no_key_waits():
+    grid, frame = drawn([run()], tab="queue")
+    assert re.search(r"timer \w+ +\? keys$", grid.text(frame.layout.bar).rstrip())
+
+
+def test_the_selected_row_draws_on_the_selection_even_when_it_is_the_running_row():
+    grid, _ = queue_drawn([live("build")], LIVE, queue=[HAND_ENTRY])
+    for pattern in (r"▶", r"merge queue +PR #31 +a1b2c3d", r"running, build"):
+        assert {cell[2] for cell in grid.span(pattern)} == {screen.SELECTION}
+    assert grid.span(r"▶")[0][1] == screen.AMBER
+    assert {cell[1] for cell in grid.span(r"running, build")} == {screen.AMBER}
+    assert {cell[2] for cell in grid.span(r"by hand +feature-a")} == {None}
+
+
+def test_the_preview_box_has_a_blue_border_around_its_lines():
+    state = {"prompt": ":run feature-c", "preview": ("feature-c", CLEAN)}
+    grid, frame = queue_drawn(queue=[HAND_ENTRY], **state)
+    title, start, end = grid.find(r"will queue")
+    last, _, _ = grid.find(r"joins as 2, after feature-a")
+
+    def blue(y, x0=0, x1=SIZE[1]):
+        return [c for c in grid.cells[y][x0:x1] if c[0] != " " and c[1] == screen.BLUE]
+
+    assert len(blue(title - 1)) >= end - start
+    assert len(blue(last + 1)) >= end - start
+    assert last + 1 < frame.layout.bar
+    for y in range(title, last + 1):
+        assert blue(y, 0, start) and blue(y, end)
+
+
+@pytest.mark.parametrize("cols", [80, 100])
+def test_a_long_preview_line_is_cut_to_fit_and_the_box_keeps_its_right_border(cols):
+    subject = "Wait longer for ssh after reboot " * 6
+    long_result = {**CLEAN, "subject": subject}
+    state = {"prompt": ":run feature-c", "preview": ("feature-c", long_result)}
+    grid, frame = queue_drawn(queue=[HAND_ENTRY], size=(24, cols), **state)
+    line, _, _ = grid.find(r"resolves to 1234567 ")
+    text = grid.text(line)
+    full = f'resolves to 1234567 "{subject}", clean tree'
+    border = text.rindex("│")
+    assert border == cols - 1
+    inner = text[2:border].rstrip()
+    assert inner and "…" not in inner and full.startswith(inner) and len(inner) < len(full)
+    top, bottom = line - 2, grid.find(r"joins as 2, after feature-a")[0] + 1
+    assert grid.text(top).rstrip().endswith("┐") and len(grid.text(top).rstrip()) == cols
+    assert grid.text(bottom).rstrip().endswith("┘") and len(grid.text(bottom).rstrip()) == cols

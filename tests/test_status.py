@@ -11,14 +11,16 @@ from pathlib import Path
 
 import pytest
 from helpers import (
+    FakeScreen,
     repo_with_one_commit,
+    terminal,
     write_bench_toml,
     write_lg_env,
     write_suite,
 )
-from status_helpers import Grid, mark, real_run, rep
+from status_helpers import mark, real_run, rep
 
-from wisebench import bench_state, bench_test, runlog
+from wisebench import bench_state, bench_test, runlog, status
 from wisebench.lock import Lock
 from wisebench.records import Records
 
@@ -636,14 +638,16 @@ def snapshot(root):
 
 
 @pytest.mark.skipif(ROOT, reason="root ignores read-only modes")
-def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
+def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_reads_and_writes(
     tmp_path, monkeypatch
 ):
-    """Records.runs, is_live, timer_state and a drawn frame over a read-only tree: bytes and mtimes
-    unchanged, no flock/lockf call, and the only process started is the `systemctl` timer query."""
+    """`_loop` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes and mtimes
+    unchanged, no flock/lockf call, the only process started is the `systemctl` timer query, and
+    the only `Queue` methods called are `entries`, `preview`, `add` and `remove` (stubbed)."""
+    import curses
     import fcntl
 
-    from wisebench import screen, view
+    from wisebench import queue
 
     records = tmp_path / "records"
     write_record(
@@ -654,12 +658,24 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
             "host_suite": [rep("t.py::h", "call", "passed")],
         },
     )
+    write_bench_toml(tmp_path)
+    with open(tmp_path / "bench.toml", "a") as f:
+        f.write('\n[run]\nunit = "bench-run"\n')
     (records / "DISABLED").write_text("reason\n")
     (records / "lock").touch()
-    proc = proc_tree(tmp_path, [("WRITE", 4242, "00:2c", (records / "lock").stat().st_ino)])
+    terminal(monkeypatch, tmp_path, 0)
     before = snapshot(tmp_path)
-    forbidden = []
-    popen_argv = []
+    forbidden, popen_argv, calls = [], [], []
+    hand = {
+        "kind": "test",
+        "id": 3,
+        "added": "2026-11-10T03:15:00+00:00",
+        "ref": "feature-a",
+        "sha": "1" * 40,
+        "set": None,
+        "skip_build": False,
+        "args": [],
+    }
 
     def refuse_lock(*args, **kwargs):
         """Fail the test: no lock may be taken."""
@@ -671,19 +687,30 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
         popen_argv.append(list(argv))
         raise FileNotFoundError(argv[0])
 
+    def stub(name, result):
+        """Replace `Queue.<name>` with a recorder returning `result`."""
+        monkeypatch.setattr(
+            queue.Queue,
+            name,
+            lambda self, *args: calls.append(name) or result,
+            raising=False,
+        )
+
+    stub("entries", [hand])
+    stub("preview", {"sha": "1" * 40, "subject": "s", "clean": True})
+    stub("add", (5, "1" * 40, 2))
+    stub("remove", True)
     monkeypatch.setattr(fcntl, "flock", refuse_lock)
     monkeypatch.setattr(fcntl, "lockf", refuse_lock)
     monkeypatch.setattr(subprocess, "Popen", record_popen)
+    timeout = curses.error("no input")
+    keys = ["2", timeout, timeout, *":run feature-c", "\n", timeout, "d", "d", timeout, "q"]
+    window = FakeScreen(keys=keys)
     paths = [p for p in [tmp_path, *tmp_path.rglob("*")]]
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        runs = Records(records).runs()
-        bench_state.is_live(records, runs[0], proc)
-        bench_state.timer_state("bench-run")
-        bench = bench_state.read_bench(records, runs[0], "bench-run", proc)
-        frame = view.resolve(view.State(), view.Snapshot(runs, bench, STARTED, "records"), 24, 80)
-        screen.draw(Grid(24, 80), frame)
+        assert status._loop(window, records, run=lambda work: work()) == 0
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -692,6 +719,8 @@ def test_a_refresh_writes_nothing_takes_no_lock_and_runs_only_the_timer_query(
     assert snapshot(tmp_path) == before
     assert popen_argv == [["systemctl", "--user", "is-active", "bench-run.timer"]] * len(popen_argv)
     assert popen_argv
+    assert {"entries", "add", "remove"} <= set(calls) <= {"entries", "preview", "add", "remove"}
+    assert "feature-a" in "".join(window.frames[-1])
 
 
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")

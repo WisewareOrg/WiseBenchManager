@@ -15,7 +15,7 @@
 The merge queue's head is gated by a run on the one physical board, from the build host beside it.
 Something has to notice that the queue has an entry, start a run for it, keep a second run off the
 board while one is going, and get the verdict back to GitHub. A run queued by hand for an
-investigation (ADR 0005 rev 1) goes through the same trigger and the same exclusion.
+investigation (ADR 0005 rev 2) goes through the same trigger and the same exclusion.
 
 GitHub has a mechanism built for exactly this, and it is the obvious answer: a self-hosted Actions
 runner listening for `merge_group`. It would select the entry, serialise jobs and report status
@@ -30,7 +30,7 @@ host. What the choice is held to:
 
 **A systemd user timer starts `bench run`; an `fcntl.flock` keeps the board to one run.**
 
-- Each tick takes the first entry of the queue of ADR 0005 rev 1: the oldest run queued by hand, else
+- Each tick takes the first entry of the queue of ADR 0005 rev 2: the oldest run queued by hand, else
   the merge queue's head, read from the `gh-readonly-queue` refs, taking the entry whose base is
   `main`'s current tip. With none, it exits.
 - `bench run` holds one lock file beside the records for the whole of a run. A tick that finds it

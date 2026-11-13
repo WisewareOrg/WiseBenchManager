@@ -2,10 +2,12 @@
 
 **Status:** accepted
 **Decided:** 2026-11-12 (WisewareOrg/WiseBenchManager #60 Queue behaviour)
-**Rev:** 1
+**Rev:** 2
 
 ## Revisions
 
+- **rev 2** — 2026-11-13 — decision 5 restated: `take()` fetches `origin` and `entries()` does not,
+  so the watch view's read writes nothing into `.git` and may be made by a view (#23 Queue view).
 - **rev 1** — 2026-11-12 — first written (#60 Queue behaviour).
 
 ## Context
@@ -39,9 +41,10 @@ run queued by hand, else the merge queue's head.**
    defaults evict and pickle for no fewer lines (diskcache). The job runners (pueue, task-spooler,
    nq) are second schedulers.
 4. **`Queue` is the one entry point.** `add`, `entries` and `remove` serve the terminal and the
-   watch view; `take` serves `bench run`. The order is defined once, in `entries()`.
-5. **The merge queue is read live, as its refs show it, the head only.** `head()` still runs
-   `git fetch origin`, so `entries()` fetches. No snapshot of the merge queue is kept, so none can
+   watch view, `preview` the watch view alone; `take` serves `bench run`. The order is defined once, in `entries()`.
+5. **The merge queue is read live, as its refs show it, the head only.** `take()` runs
+   `git fetch origin` and `entries()` does not; `head()` reads `main`'s tip and the queue with
+   `git ls-remote`. No snapshot of the merge queue is kept, so none can
    go stale during a run.
 6. **The commit is resolved when the run is queued, in the bench checkout, without a fetch.** The run
    builds that commit and refuses a dirty tree when it starts, and its record reads
@@ -67,6 +70,11 @@ run queued by hand, else the merge queue's head.**
   does, with its own id scheme, ordering and atomic claim.
 - **Reading the merge queue in full through GitHub's GraphQL API.** Rejected: the refs show only the
   entry GitHub is building, and the head is all the bench runs.
+- **Keeping the fetch in `entries()`**, with `--no-optional-locks`. Rejected: a fetch from the watch
+  can race the tick's own fetch on ref locks and fail the run, which writes `DISABLED`.
+- **Skipping the watch's reads while a run is live.** Rejected: the Queue tab would stay stale for the
+  whole run.
+- **Accepting the collision risk.** Rejected: a watch could then disable the bench.
 
 ## Consequences
 
@@ -80,7 +88,9 @@ run queued by hand, else the merge queue's head.**
 - **An unreadable `queue.db` is a bench fault** (`sqlite3.DatabaseError`); recovery removes the file,
   and the runs queued by hand in it are lost.
 - **An entry queued outside the bench checkout, or with another `BENCH_RESULT_DIR`, is never taken.**
-- **`entries()` fetches,** so a view must not call it at a refresh rate.
+- **`take()` fetches and `entries()` does not,** so a view's read writes nothing into `.git` and cannot
+  collide with a run's git. `entries()` still reaches `origin` with `git ls-remote`, each call bounded by a
+  timeout, so a view reads it off its draw path.
 
 **Premise that would reopen this:** hand runs needing to start within seconds; GitHub building more
 than one merge-queue entry at a time; organisation policy permitting a resident bench process.

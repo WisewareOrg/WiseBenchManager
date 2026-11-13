@@ -43,7 +43,7 @@ on whose it was.
 | [0002](0002-replay-with-mitmproxy.md) | 1 | 2026-10-15 | Replay recorded traffic with mitmproxy's own server replay, a miss failing the test |
 | [0003](0003-trigger-from-a-systemd-timer.md) | 2 | 2026-10-11 | Start `bench run` from a systemd user timer under `flock`, not a CI runner |
 | [0004](0004-the-layer-installs-the-candidate.md) | 1 | 2026-10-13 | Install the candidate from the layer's own fixture; the runner owns no device procedure |
-| [0005](0005-queue-runs-by-hand-in-sqlite.md) | 1 | 2026-11-12 | Queue runs by hand in an SQLite table beside the records; each tick takes one before the merge queue's head |
+| [0005](0005-queue-runs-by-hand-in-sqlite.md) | 2 | 2026-11-12 | Queue runs by hand in an SQLite table beside the records; each tick takes one before the merge queue's head |
 
 ## Revisions
 

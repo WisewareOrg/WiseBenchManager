@@ -9,6 +9,7 @@ from helpers import (
     git,
     marker_lines,
     repo_with_one_commit,
+    stub_fetch,
     write_bench_toml,
     write_lg_env,
     write_suite,
@@ -540,6 +541,7 @@ def test_run_of_an_entry_queued_by_the_real_queue_reaches_bench_test_with_what_w
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
+    stub_fetch(monkeypatch)
     monkeypatch.setattr(Queue, "head", lambda self: None)
     Queue(tmp_path, tmp_path / "records").add("HEAD", "s1", True, ["-k", "x"])
 

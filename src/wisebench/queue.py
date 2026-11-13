@@ -1,7 +1,10 @@
 """Queue: runs queued by hand in `records/queue.db`, then the merge queue's head entry."""
 
+import contextlib
 import json
+import os
 import re
+import signal
 import sqlite3
 import subprocess
 from contextlib import closing
@@ -9,6 +12,7 @@ from contextlib import closing
 from wisebench.bench_test import BenchFailure
 
 _REF_RE = re.compile(r"pr-(\d+)-([0-9a-f]+)")
+_NETWORK_TIMEOUT = 30
 
 
 class Queue:
@@ -48,6 +52,80 @@ class Queue:
         )
         return db
 
+    def _git(self, args, network=False):
+        """Run one git command in the checkout, silent and detached from the terminal.
+
+        Args:
+            args (list[str]): The command line after `git`.
+            network (bool): Whether the command reaches `origin`. A network call is bounded by
+                `_NETWORK_TIMEOUT`; a timeout kills git and every process it started. Its failure
+                or timeout is raised as `BenchFailure("git <command>: <first stderr line>")`.
+
+        Returns:
+            str: The command's standard output.
+
+        Raises:
+            BenchFailure: A network call failed or timed out.
+            subprocess.CalledProcessError: Any other call failed.
+        """
+        with subprocess.Popen(
+            ["git", *args],
+            cwd=self.checkout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        ) as process:
+            try:
+                out, err = process.communicate(timeout=_NETWORK_TIMEOUT if network else None)
+            except subprocess.TimeoutExpired as exc:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.communicate()
+                raise BenchFailure(f"git {args[0]}: timed out after {_NETWORK_TIMEOUT}s") from exc
+        if process.returncode:
+            if network:
+                lines = err.strip().splitlines()
+                raise BenchFailure(
+                    f"git {args[0]}: {lines[0] if lines else f'exit status {process.returncode}'}"
+                )
+            raise subprocess.CalledProcessError(process.returncode, ["git", *args], out, err)
+        return out
+
+    def _resolve(self, ref):
+        """Resolve `ref` to the commit sha it names.
+
+        Args:
+            ref (str): The git ref, as typed.
+
+        Returns:
+            str: The commit sha.
+
+        Raises:
+            subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
+        """
+        return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"]).strip()
+
+    def preview(self, ref):
+        """Describe what queueing `ref` would run, without queueing it.
+
+        Args:
+            ref (str): The git ref, as typed.
+
+        Returns:
+            dict: `{sha, subject, clean}`: the commit `ref` resolves to, its subject line, and
+            whether the checkout has no uncommitted change to a tracked file (untracked files
+            are ignored).
+
+        Raises:
+            subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
+        """
+        sha = self._resolve(ref)
+        subject = self._git(["log", "-1", "--format=%s", sha]).strip()
+        status = self._git(["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"])
+        return {"sha": sha, "subject": subject, "clean": not status.strip()}
+
     def add(self, ref, set_name, skip_build, pytest_args):
         """Queue a run of `ref` by hand, pinned to the commit `ref` names now.
 
@@ -64,14 +142,7 @@ class Queue:
         Raises:
             subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
         """
-        sha = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
-            cwd=self.checkout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=True,
-        ).stdout.strip()
+        sha = self._resolve(ref)
         entry = {
             "ref": ref,
             "sha": sha,
@@ -91,15 +162,15 @@ class Queue:
     def entries(self):
         """List what waits, in run order: hand entries oldest first, then the merge queue's head.
 
-        Runs `head()`, so it fetches from `origin`.
+        Runs `head()`, which reads `origin` but fetches nothing.
 
         Returns:
             list[dict]: A hand entry is `{kind: "test", id, added, ref, sha, set, skip_build,
             args}`; the merge head is `{kind: "run", ref, sha, pr}`.
 
         Raises:
-            BenchFailure: More than one merge-queue ref qualifies.
-            subprocess.CalledProcessError: `git fetch`, `git ls-remote` or `git rev-parse` failed.
+            BenchFailure: More than one merge-queue ref qualifies, or `git ls-remote` failed or
+                timed out.
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
         with closing(self._db()) as db:
@@ -129,6 +200,8 @@ class Queue:
     def take(self):
         """Claim the first waiting entry: the oldest hand entry, else the merge queue's head.
 
+        Fetches `origin` first.
+
         A hand entry is deleted when claimed, so it is never returned again whatever its run's
         outcome; one removed in the meantime is skipped.
 
@@ -136,10 +209,11 @@ class Queue:
             dict | None: The claimed entry as `entries()` lists it, or None when nothing waits.
 
         Raises:
-            BenchFailure: More than one merge-queue ref qualifies.
-            subprocess.CalledProcessError: `git fetch`, `git ls-remote` or `git rev-parse` failed.
+            BenchFailure: More than one merge-queue ref qualifies, or `git fetch` or `git
+                ls-remote` failed or timed out.
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
+        self._git(["fetch", "origin"], network=True)
         for entry in self.entries():
             if entry["kind"] == "run" or self.remove(entry["id"]):
                 return entry
@@ -148,9 +222,10 @@ class Queue:
     def head(self):
         """Read the queue entry whose own base is `origin/main`'s current tip.
 
-        Reads `refs/heads/gh-readonly-queue/main/*` and keeps the refs named
-        `pr-<PR_NUMBER>-<BASE_SHA>` whose `<BASE_SHA>` equals `origin/main`'s current tip; a
-        stale entry (based on an earlier tip) reads as no job, the same as an empty queue.
+        Reads `main`'s tip and `refs/heads/gh-readonly-queue/main/*` from `origin` with one
+        `git ls-remote`, fetching nothing, and keeps the refs named `pr-<PR_NUMBER>-<BASE_SHA>`
+        whose `<BASE_SHA>` equals that tip; a stale entry (based on an earlier tip) reads as no
+        job, the same as an empty queue.
 
         Returns:
             dict | None: `{ref, sha, pr}`: the ref name, the ref's own sha (the commit to build,
@@ -158,33 +233,26 @@ class Queue:
             or None when no ref qualifies.
 
         Raises:
-            BenchFailure: More than one ref qualifies.
-            subprocess.CalledProcessError: `git fetch`, `git ls-remote` or `git rev-parse`
-                failed.
+            BenchFailure: More than one ref qualifies, `origin` has no `refs/heads/main`, or
+                `git ls-remote` failed or timed out.
         """
-        subprocess.run(["git", "fetch", "origin"], cwd=self.checkout, check=True)
-        main = subprocess.run(
-            ["git", "rev-parse", "origin/main"],
-            cwd=self.checkout,
-            stdout=subprocess.PIPE,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        remote = subprocess.run(
-            ["git", "ls-remote", "origin", "refs/heads/gh-readonly-queue/main/*"],
-            cwd=self.checkout,
-            stdout=subprocess.PIPE,
-            text=True,
-            check=True,
-        ).stdout
+        remote = self._git(
+            [
+                "ls-remote",
+                "origin",
+                "refs/heads/main",
+                "refs/heads/gh-readonly-queue/main/*",
+            ],
+            network=True,
+        )
+        refs = [line.split("\t") for line in remote.splitlines() if line]
+        main = next((sha for sha, ref in refs if ref == "refs/heads/main"), None)
+        if main is None:
+            raise BenchFailure("origin has no refs/heads/main")
 
         matches = []
-        for line in remote.splitlines():
-            if not line:
-                continue
-            sha, ref = line.split("\t")
-            name = ref.rsplit("/", 1)[-1]
-            match = _REF_RE.fullmatch(name)
+        for sha, ref in refs:
+            match = _REF_RE.fullmatch(ref.rsplit("/", 1)[-1])
             if match and match.group(2) == main:
                 matches.append({"ref": ref, "sha": sha, "pr": int(match.group(1))})
 

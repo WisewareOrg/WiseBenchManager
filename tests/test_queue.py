@@ -1,38 +1,71 @@
 """`Queue`: the merge queue's head from `git ls-remote`; hand entries in `records/queue.db`."""
 
+import contextlib
 import json
+import os
+import signal
 import sqlite3
 import subprocess
+import time
 from contextlib import closing
 from datetime import datetime, timedelta
 
 import pytest
-from helpers import repo_with_one_commit
+from helpers import TIMES_OUT as stub_timeout
+from helpers import repo_with_one_commit, stub_fetch, stub_popen
 
 from wisebench import bench_test, queue
 
+LS_REMOTE = [
+    "git",
+    "ls-remote",
+    "origin",
+    "refs/heads/main",
+    "refs/heads/gh-readonly-queue/main/*",
+]
 
-def _stub_git(monkeypatch, main_sha, ls_remote_lines, calls=None):
-    """Fake `queue.subprocess.run` for `git fetch`, `git rev-parse origin/main` and `git ls-remote`.
+
+def _stub_git(
+    monkeypatch,
+    main_sha,
+    ls_remote_lines,
+    calls=None,
+    kwargs_seen=None,
+    main_lines=None,
+    timeouts=None,
+    hung=None,
+):
+    """Fake `subprocess.Popen` for `git fetch` and the one `git ls-remote` read.
+
+    The one `git ls-remote origin refs/heads/main refs/heads/gh-readonly-queue/main/*` reports
+    `main_sha` on `refs/heads/main` and then `ls_remote_lines`. Any other command fails the test.
 
     Args:
-        main_sha (str): What `git rev-parse origin/main` reports.
-        ls_remote_lines (list[str]): Raw `git ls-remote` output lines, `<sha>\\t<ref>`.
+        main_sha (str): The sha `refs/heads/main` has on the remote.
+        ls_remote_lines (list[str]): Raw merge-queue `git ls-remote` output lines,
+            `<sha>\\t<ref>`.
         calls (list | None): When given, every command is appended to it, in order.
+        kwargs_seen (list | None): When given, every Popen call's keyword arguments are appended.
+        main_lines (list[str] | None): When given, the raw output lines of the `refs/heads/main`
+            read, instead of one line naming `main_sha`.
+        timeouts (list | None): When given, the `timeout` of every `communicate` call is appended.
+        hung (list[str] | None): A command prefix whose `communicate` times out.
+
+    Returns:
+        list: The `(pgid, signal)` of each `os.killpg` call.
     """
 
-    def fake_run(command, **kwargs):
-        if calls is not None:
-            calls.append(command)
+    def answer(command):
+        if hung is not None and command[: len(hung)] == hung:
+            return stub_timeout
         if command[:2] == ["git", "fetch"]:
-            return subprocess.CompletedProcess(command, 0)
-        if command[:2] == ["git", "rev-parse"]:
-            return subprocess.CompletedProcess(command, 0, stdout=main_sha + "\n")
-        if command[:2] == ["git", "ls-remote"]:
-            return subprocess.CompletedProcess(command, 0, stdout="\n".join(ls_remote_lines) + "\n")
+            return "", "", 0
+        if command == LS_REMOTE:
+            main = main_lines if main_lines is not None else [f"{main_sha}\trefs/heads/main"]
+            return "".join(f"{line}\n" for line in [*main, *ls_remote_lines]), "", 0
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(queue.subprocess, "run", fake_run)
+    return stub_popen(monkeypatch, answer, calls, kwargs_seen, timeouts)
 
 
 def test_head_returns_none_on_an_empty_queue(monkeypatch, tmp_path):
@@ -65,11 +98,13 @@ def test_head_returns_the_ref_sha_and_pr_number_of_the_one_match_as_a_dict(monke
     }
 
 
-def test_head_fetches_origin_before_reading_the_tip_or_the_queue(monkeypatch, tmp_path):
+def test_head_runs_no_fetch_and_reads_main_with_ls_remote(monkeypatch, tmp_path):
     calls = []
     _stub_git(monkeypatch, "cafef00d", [], calls=calls)
     queue.Queue(tmp_path, tmp_path / "records").head()
-    assert calls[0] == ["git", "fetch", "origin"]
+    assert ["git", "fetch", "origin"] not in calls
+    assert calls == [LS_REMOTE]
+    assert not any(command[:2] == ["git", "rev-parse"] for command in calls)
 
 
 def test_head_raises_bench_failure_on_more_than_one_match(monkeypatch, tmp_path):
@@ -147,7 +182,7 @@ _MERGE_HEAD = {
 
 @pytest.fixture
 def hand(monkeypatch, tmp_path):
-    """A repo with one commit, `Queue.head` stubbed to no merge entry, and a `Queue` over it.
+    """A repo with one commit, `git fetch` and `Queue.head` stubbed, and a `Queue` over it.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Restores `Queue.head` at teardown.
@@ -157,6 +192,7 @@ def hand(monkeypatch, tmp_path):
         wisebench.queue.Queue: The queue; set `queue.Queue.head` again to put a merge entry in.
     """
     repo_with_one_commit(tmp_path)
+    stub_fetch(monkeypatch)
     monkeypatch.setattr(queue.Queue, "head", lambda self: None)
     return queue.Queue(tmp_path, tmp_path / "records")
 
@@ -332,3 +368,286 @@ def test_a_hand_entrys_added_is_an_iso_timestamp_in_utc(hand):
     hand.add("HEAD", None, False, [])
     added = datetime.fromisoformat(hand.entries()[0]["added"])
     assert added.utcoffset() == timedelta(0)
+
+
+# -- entries() reads, take() fetches; silent, bounded, detached git ---------------------------
+
+_QUEUE_REF = "refs/heads/gh-readonly-queue/main/pr-14-cafef00d"
+
+
+def _real_run_spy(monkeypatch):
+    """Wrap `subprocess.Popen` so it records `(command, kwargs)` and still runs for real.
+
+    Returns:
+        list[tuple[list[str], dict]]: Every call, in order.
+    """
+    real_popen = subprocess.Popen
+    seen = []
+
+    def spy(command, **kwargs):
+        seen.append((command, kwargs))
+        return real_popen(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", spy)
+    return seen
+
+
+def test_entries_runs_no_fetch(monkeypatch, tmp_path):
+    calls = []
+    _stub_git(monkeypatch, "cafef00d", [f"deadbeef\t{_QUEUE_REF}"], calls=calls)
+    entries = queue.Queue(tmp_path, tmp_path / "records").entries()
+    assert [entry["kind"] for entry in entries] == ["run"]
+    assert not any(command[:2] == ["git", "fetch"] for command in calls)
+
+
+def test_entries_finds_the_entry_and_leaves_a_stale_origin_main_alone(tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", "-q", str(remote))
+    seed = tmp_path / "seed"
+    _git(tmp_path, "init", "-q", "-b", "main", str(seed))
+    _git(seed, "config", "user.email", "bench@example.invalid")
+    _git(seed, "config", "user.name", "bench")
+    (seed / "f.txt").write_text("one")
+    _git(seed, "add", "f.txt")
+    _git(seed, "commit", "-q", "-m", "first")
+    _git(seed, "remote", "add", "origin", str(remote))
+    _git(seed, "push", "-q", "origin", "main")
+    local = tmp_path / "local"
+    _git(tmp_path, "clone", "-q", str(remote), str(local))
+    stale = _git(local, "rev-parse", "origin/main")
+
+    (seed / "f.txt").write_text("two")
+    _git(seed, "add", "f.txt")
+    _git(seed, "commit", "-q", "-m", "second")
+    new_main = _git(seed, "rev-parse", "HEAD")
+    _git(seed, "push", "-q", "origin", "main")
+    _git(seed, "push", "-q", "origin", f"HEAD:refs/heads/gh-readonly-queue/main/pr-7-{new_main}")
+
+    entries = queue.Queue(local, local / "records").entries()
+
+    assert [(entry["kind"], entry["pr"], entry["sha"]) for entry in entries] == [
+        ("run", 7, new_main)
+    ]
+    assert _git(local, "rev-parse", "origin/main") == stale
+
+
+def test_take_fetches_origin_before_reading_main_or_the_queue(monkeypatch, tmp_path):
+    calls = []
+    _stub_git(monkeypatch, "cafef00d", [], calls=calls)
+    assert queue.Queue(tmp_path, tmp_path / "records").take() is None
+    assert calls == [["git", "fetch", "origin"], LS_REMOTE]
+
+
+def test_take_fetches_even_when_a_hand_entry_is_the_one_it_returns(hand, monkeypatch):
+    entry_id, _, _ = hand.add("HEAD", None, False, [])
+    calls = []
+    _stub_git(monkeypatch, "cafef00d", [], calls=calls)
+    assert hand.take()["id"] == entry_id
+    assert ["git", "fetch", "origin"] in calls
+
+
+def test_head_raises_when_main_is_empty_on_the_remote(monkeypatch, tmp_path):
+    _stub_git(monkeypatch, "", [f"deadbeef\t{_QUEUE_REF}"], main_lines=[])
+    with pytest.raises(bench_test.BenchFailure):
+        queue.Queue(tmp_path, tmp_path / "records").head()
+
+
+def test_head_does_not_take_a_ref_merely_ending_in_refs_heads_main_for_main(monkeypatch, tmp_path):
+    _stub_git(
+        monkeypatch,
+        "unused",
+        [f"deadbeef\t{_QUEUE_REF}"],
+        main_lines=["cafef00d\trefs/heads/other/refs/heads/main"],
+    )
+    with pytest.raises(bench_test.BenchFailure):
+        queue.Queue(tmp_path, tmp_path / "records").head()
+
+
+def test_head_takes_main_by_exact_ref_name_when_a_lookalike_is_listed_first(monkeypatch, tmp_path):
+    _stub_git(
+        monkeypatch,
+        "unused",
+        [f"deadbeef\t{_QUEUE_REF}"],
+        main_lines=["badbad00\trefs/heads/other/refs/heads/main", "cafef00d\trefs/heads/main"],
+    )
+    assert queue.Queue(tmp_path, tmp_path / "records").head() == {
+        "ref": _QUEUE_REF,
+        "sha": "deadbeef",
+        "pr": 14,
+    }
+
+
+def _repo_with_unreachable_origin(path):
+    repo_with_one_commit(path)
+    _git(path, "remote", "add", "origin", str(path / "no-such-remote.git"))
+    return queue.Queue(path, path / "records")
+
+
+def test_a_failed_fetch_in_take_raises_bench_failure_with_the_first_stderr_line(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("LC_ALL", "C")
+    with pytest.raises(bench_test.BenchFailure) as failure:
+        _repo_with_unreachable_origin(tmp_path).take()
+    message = str(failure.value)
+    assert message.startswith("git fetch: ")
+    assert "does not appear to be a git repository" in message
+    assert "\n" not in message
+
+
+def test_a_failed_ls_remote_in_head_raises_bench_failure_with_the_first_stderr_line(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("LC_ALL", "C")
+    with pytest.raises(bench_test.BenchFailure) as failure:
+        _repo_with_unreachable_origin(tmp_path).head()
+    message = str(failure.value)
+    assert message.startswith("git ls-remote: ")
+    assert "does not appear to be a git repository" in message
+    assert "\n" not in message
+
+
+@pytest.mark.parametrize(
+    ("operation", "hung", "prefix"),
+    [
+        ("take", ["git", "fetch"], "git fetch: "),
+        ("head", LS_REMOTE, "git ls-remote: "),
+    ],
+)
+def test_a_timed_out_network_call_raises_bench_failure(
+    monkeypatch, tmp_path, operation, hung, prefix
+):
+    _stub_git(monkeypatch, "cafef00d", [], hung=hung)
+    with pytest.raises(bench_test.BenchFailure) as failure:
+        getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
+    assert str(failure.value).startswith(prefix)
+
+
+def test_a_failed_network_call_with_no_stderr_names_its_exit_status(monkeypatch, tmp_path):
+    stub_popen(monkeypatch, lambda command: ("", "\n", 7))
+    with pytest.raises(bench_test.BenchFailure) as failure:
+        queue.Queue(tmp_path, tmp_path / "records").take()
+    assert str(failure.value) == "git fetch: exit status 7"
+
+
+def _alive(pid):
+    """Whether `pid` is a running process; a zombie awaiting its reaper is not."""
+    try:
+        with open(f"/proc/{pid}/stat") as stat:
+            return stat.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
+@pytest.mark.parametrize("operation", ["take", "head"])
+def test_a_timed_out_network_call_kills_git_and_every_process_it_started(
+    monkeypatch, tmp_path, operation
+):
+    bin_dir, pid_file = tmp_path / "bin", tmp_path / "grandchild.pid"
+    bin_dir.mkdir()
+    fake_git = bin_dir / "git"
+    fake_git.write_text(f"#!/bin/sh\nsleep 120 >/dev/null 2>&1 &\necho $! > {pid_file}\nwait\n")
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setattr(queue, "_NETWORK_TIMEOUT", 2)
+    try:
+        with pytest.raises(bench_test.BenchFailure, match="timed out"):
+            getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
+        grandchild = int(pid_file.read_text())
+        for _ in range(500):
+            if not _alive(grandchild):
+                break
+            time.sleep(0.02)
+        assert not _alive(grandchild)
+    finally:
+        if pid_file.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
+@pytest.mark.parametrize(("operation", "count"), [("take", 2), ("head", 1)])
+def test_every_network_call_is_bounded_detached_never_prompting_and_captures_stderr(
+    monkeypatch, tmp_path, operation, count
+):
+    calls, kwargs_seen, timeouts = [], [], []
+    _stub_git(monkeypatch, "cafef00d", [], calls=calls, kwargs_seen=kwargs_seen, timeouts=timeouts)
+    getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
+    assert len(calls) == count
+    assert LS_REMOTE in calls
+    assert timeouts == [30] * count
+    for kwargs in kwargs_seen:
+        assert kwargs["start_new_session"] is True
+        assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+        assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
+
+
+def test_every_git_call_is_detached_and_never_prompts(hand, monkeypatch):
+    seen = _real_run_spy(monkeypatch)
+    hand.add("HEAD", None, False, [])
+    hand.preview("HEAD")
+    _stub_git(monkeypatch, "cafef00d", [], kwargs_seen=(network := []))
+    hand.take()
+    assert len(seen) >= 4
+    for _, kwargs in [*seen, *((None, kwargs) for kwargs in network)]:
+        assert kwargs["start_new_session"] is True
+        assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+        assert kwargs["stdout"] == kwargs["stderr"] == subprocess.PIPE
+
+
+# -- preview -----------------------------------------------------------------------------
+
+
+def test_preview_of_a_clean_checkout_returns_sha_subject_and_clean(hand, tmp_path):
+    assert hand.preview("HEAD") == {
+        "sha": _git(tmp_path, "rev-parse", "HEAD"),
+        "subject": "first",
+        "clean": True,
+    }
+
+
+def test_preview_reports_the_subject_of_the_commit_the_ref_names_not_of_head(hand, tmp_path):
+    first = _git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "tracked.txt").write_text("two\n")
+    _git(tmp_path, "commit", "-q", "-am", "second")
+    preview = hand.preview(first)
+    assert (preview["sha"], preview["subject"]) == (first, "first")
+
+
+def test_preview_resolves_an_annotated_tag_to_the_commit(hand, tmp_path):
+    commit = _git(tmp_path, "rev-parse", "HEAD")
+    _git(tmp_path, "tag", "-a", "-m", "release", "v1")
+    assert hand.preview("v1")["sha"] == commit
+
+
+def test_preview_is_not_clean_when_a_tracked_file_is_modified(hand, tmp_path):
+    (tmp_path / "tracked.txt").write_text("changed\n")
+    assert hand.preview("HEAD")["clean"] is False
+
+
+def test_preview_is_not_clean_when_a_change_is_staged(hand, tmp_path):
+    (tmp_path / "tracked.txt").write_text("changed\n")
+    _git(tmp_path, "add", "tracked.txt")
+    assert hand.preview("HEAD")["clean"] is False
+
+
+def test_preview_ignores_an_untracked_file(hand, tmp_path):
+    (tmp_path / "untracked.txt").write_text("x\n")
+    assert hand.preview("HEAD")["clean"] is True
+
+
+def test_preview_of_an_unresolvable_ref_raises_called_process_error(hand):
+    with pytest.raises(subprocess.CalledProcessError):
+        hand.preview("no-such-ref")
+
+
+def test_preview_inserts_no_row_and_never_opens_the_database(hand, tmp_path):
+    hand.preview("HEAD")
+    assert not (tmp_path / "records").exists()
+
+
+def test_preview_checks_status_without_taking_git_locks(hand, monkeypatch):
+    seen = _real_run_spy(monkeypatch)
+    hand.preview("HEAD")
+    status = next(command for command, _ in seen if "status" in command)
+    assert status[:3] == ["git", "--no-optional-locks", "status"]
+    assert "--porcelain" in status

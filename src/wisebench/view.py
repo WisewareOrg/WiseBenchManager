@@ -1,6 +1,7 @@
 """View: what the user chose, the frame derived from it, and the keys that act on that frame.
 
-`State` holds only the user's intent. `resolve` derives the `Frame` to show from it and one
+`State` holds the user's intent, and the commands (`run_ref`, `remove_id`) and message the shell
+exchanges with `handle`. `resolve` derives the `Frame` to show from it and one
 `Snapshot` of the disk; it is the only code that knows where anything sits. `screen.draw` draws
 that frame and `handle` acts on the same frame, so a row a key moves to is a row drawn. A field of
 `State` left None means "derive it every frame"; a value means the user chose it.
@@ -21,6 +22,10 @@ _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _ENTER = ("\n", "\r")
 _BACKSPACE = ("\x7f", "\b")
 _ESC = "\x1b"
+_TAB, _BTAB = "\t", "\x1b[Z"
+_TABS = ("run", "queue", "history")
+_RUN_PROMPT = re.compile(r":run\s+(.*)")
+_RUNNING = "▶"
 _MOVES = {"j": "down", "k": "up", "G": "bottom", "\x04": "half_down", "\x15": "half_up"}
 
 
@@ -33,12 +38,17 @@ class Snapshot:
         bench (Bench): The bench's live, disabled and timer state.
         now (datetime): The current time.
         directory (str): The records directory as the History footer names it.
+        queue (list[dict] | None): The last good `Queue.entries()` read; None before one.
+        preview (tuple[str, dict | str] | None): The last `Queue.preview` result: the ref it was
+            asked for, and its result or the error text.
     """
 
     runs: list[Run]
     bench: Bench
     now: datetime
     directory: str
+    queue: list[dict] | None = None
+    preview: tuple[str, dict | str] | None = None
 
 
 @dataclass
@@ -46,7 +56,7 @@ class State:
     """What the user chose; the only thing kept between refreshes.
 
     Args:
-        tab (str): "run", "history" or "help".
+        tab (str): "run", "queue", "history" or "help".
         back (str): The tab `?` and Esc return to from Help.
         record (str | None): The run shown in Run; None is the newest.
         stage (str | None): The stage shown; None is the automatic stage.
@@ -56,7 +66,13 @@ class State:
         history_record (str | None): The History selection; None is the run shown in Run.
         prompt (str | None): The command line's text while it is open.
         pattern (str | None): The last search pattern.
-        pending (str | None): "g" or "z" while the first key of a pair waits for the second.
+        pending (str | None): "g", "z" or "d" while the first key of a pair waits for the second.
+        queue_at (tuple | None): The Queue selection: the identity of the selected row and its
+            index; None selects the first row. A row that has gone leaves its index to clamp.
+        run_ref (str | None): The ref `:run` asked to queue; the shell queues it and clears this.
+        remove_id (int | None): The hand entry `dd` asked to remove; the shell removes it and
+            clears this.
+        message (str | None): The text shown in the command line's row while it is closed.
         scroll (int): The log scroll the last frame drew; written only from a frame.
         history_scroll (int): The History scroll the last frame drew; written only from a frame.
     """
@@ -72,6 +88,10 @@ class State:
     prompt: str | None = None
     pattern: str | None = None
     pending: str | None = None
+    queue_at: tuple | None = None
+    run_ref: str | None = None
+    remove_id: int | None = None
+    message: str | None = None
     scroll: int = 0
     history_scroll: int = 0
 
@@ -84,7 +104,7 @@ class Layout:
         rows (int): Screen height.
         cols (int): Screen width.
         bar (int): The status bar's row.
-        prompt (int | None): The command line's row while it is open.
+        prompt (int | None): The command line's row while it is open or shows a message.
         pane_top (int): The first row of the panes.
         pane_bottom (int): The last row of the panes: the hint row and the History footer.
         too_small (bool): The screen is below the smallest drawable size.
@@ -130,6 +150,32 @@ class Row:
 
 
 @dataclass(frozen=True)
+class QueueRow:
+    """One row of the Queue tab.
+
+    Args:
+        marker (str): "▶" for the running run, else its place in the queue, the running run
+            counting as 1.
+        source (str): "by hand" or "merge queue".
+        what (str): "PR #<n>" when the run has a PR, else its ref.
+        sha7 (str): The commit's first 7 characters; blank until known.
+        added (str): A hand entry's local `HH:MM`; blank for the others.
+        stage (str): The running run's open stage; blank for the others.
+        kind (str): "test" or "run".
+        id (int | None): A hand entry's id; None for the running run and the merge head.
+    """
+
+    marker: str
+    source: str
+    what: str
+    sha7: str
+    added: str
+    stage: str
+    kind: str
+    id: int | None
+
+
+@dataclass(frozen=True)
 class Frame:
     """What one refresh shows, resolved from a `State` and a `Snapshot`.
 
@@ -156,6 +202,13 @@ class Frame:
         history_scroll (int): Index of the first History row drawn.
         history_room (int): How many History rows are drawn.
         focus (str): "stages" or "log", the pane with focus.
+        queue_rows (list[QueueRow]): The Queue tab's rows: the running run, the hand entries,
+            then the merge head.
+        queue_cursor (int | None): Index of the Queue selection; None without rows.
+        preview_lines (list[str] | None): The preview box's lines while `:run <ref>` is typed and
+            its result is in; None otherwise.
+        message (str | None): The text shown in the command line's row.
+        pending (str | None): The first key of a pair still waiting for its second.
     """
 
     tab: str
@@ -180,6 +233,11 @@ class Frame:
     history_scroll: int
     history_room: int
     focus: str
+    queue_rows: list[QueueRow]
+    queue_cursor: int | None
+    preview_lines: list[str] | None
+    message: str | None
+    pending: str | None
 
 
 def resolve(state, snap, rows, cols):
@@ -194,7 +252,7 @@ def resolve(state, snap, rows, cols):
     Returns:
         Frame: Everything `screen.draw` and `handle` need.
     """
-    lay = _layout(rows, cols, state.prompt is not None)
+    lay = _layout(rows, cols, state.prompt is not None or state.message is not None)
     runs = snap.runs
     run = next((r for r in runs if r.record == state.record), runs[0] if runs else None)
     newest = run is not None and run is runs[0]
@@ -210,6 +268,7 @@ def resolve(state, snap, rows, cols):
         chosen = state.history_record if state.history_record in records else run.record
         history_cursor = records.index(chosen)
     history_room = max(1, lay.pane_bottom - lay.pane_top)
+    queue_rows = _queue_rows(snap)
     return Frame(
         tab=state.tab,
         prompt=state.prompt,
@@ -233,13 +292,18 @@ def resolve(state, snap, rows, cols):
         history_scroll=_scroll(state.history_scroll, history_cursor, len(runs), history_room),
         history_room=history_room,
         focus=state.focus,
+        queue_rows=queue_rows,
+        queue_cursor=_queue_cursor(state.queue_at, queue_rows, _queue_room(lay)),
+        preview_lines=_preview_lines(state.prompt, snap.preview, queue_rows),
+        message=state.message,
+        pending=state.pending,
     )
 
 
-def _layout(rows, cols, prompt_open):
-    """The layout of a `rows` by `cols` screen; an open command line takes the last row."""
-    bar = rows - 2 if prompt_open else rows - 1
-    prompt = rows - 1 if prompt_open else None
+def _layout(rows, cols, prompt_row):
+    """The layout of a `rows` by `cols` screen; an open prompt or a message takes the last row."""
+    bar = rows - 2 if prompt_row else rows - 1
+    prompt = rows - 1 if prompt_row else None
     too_small = rows < MIN_ROWS or cols < MIN_COLS
     rule_top, header, rule_bottom = 1, 2, bar - 1
     return Layout(
@@ -254,6 +318,114 @@ def _layout(rows, cols, prompt_open):
         header=header,
         rule_bottom=rule_bottom,
     )
+
+
+def _queue_rows(snap):
+    """The Queue tab's rows: the running run, the hand entries, then the merge head.
+
+    The running run is the newest run while the bench is running it. The merge head is left out
+    while its sha is the sha the running run checked out.
+    """
+    rows, running_sha = [], None
+    if snap.bench.live and snap.runs:
+        run = snap.runs[0]
+        opened = next((s for s in run.stages if s.state == "open"), None)
+        checkout = next((s for s in run.stages if s.name == "checkout"), None)
+        running_sha = checkout.sha if checkout else None
+        rows.append(
+            QueueRow(
+                _RUNNING,
+                "by hand" if run.kind == "test" else "merge queue",
+                f"PR #{run.pr}" if run.pr else run.ref or "",
+                (running_sha or "")[:7],
+                "",
+                opened.name if opened else "",
+                run.kind or "",
+                None,
+            )
+        )
+    for entry in snap.queue or []:
+        if entry["kind"] == "run" and entry["sha"] == running_sha:
+            continue
+        hand = entry["kind"] == "test"
+        added = (
+            datetime.fromisoformat(entry["added"]).astimezone().strftime("%H:%M") if hand else ""
+        )
+        rows.append(
+            QueueRow(
+                str(len(rows) + 1),
+                "by hand" if hand else "merge queue",
+                entry["ref"] if hand else f"PR #{entry['pr']}",
+                entry["sha"][:7],
+                added,
+                "",
+                entry["kind"],
+                entry["id"] if hand else None,
+            )
+        )
+    return rows
+
+
+def _identity(row):
+    """What keeps the Queue selection on a row as rows come and go."""
+    if row.marker == _RUNNING:
+        return ("running",)
+    return ("hand", row.id) if row.id is not None else ("merge",)
+
+
+def _queue_room(lay):
+    """How many Queue rows the pane draws."""
+    return max(1, lay.pane_bottom - lay.pane_top + 1)
+
+
+def _queue_cursor(at, rows, room):
+    """Index of the Queue selection among the `room` rows drawn; None without rows.
+
+    The selection is its row, else the index it had; either is held to the last row drawn.
+    """
+    if not rows:
+        return None
+    last = min(len(rows), room) - 1
+    if at is None:
+        return 0
+    identity, index = at
+    found = next((i for i, row in enumerate(rows) if _identity(row) == identity), None)
+    return min(found if found is not None else index, last)
+
+
+def typed_ref(prompt):
+    """The ref typed after `:run `, stripped.
+
+    Args:
+        prompt (str | None): The command line's text, or None while it is closed.
+
+    Returns:
+        str | None: The ref; None when the command line holds no such ref.
+    """
+    found = prompt is not None and _RUN_PROMPT.fullmatch(prompt)
+    return (found.group(1).strip() or None) if found else None
+
+
+def _preview_lines(prompt, preview, rows):
+    """The preview box for the ref typed after `:run `, once its result is in; else None.
+
+    The place counts the running run and the hand entries up to the new one; the merge head
+    comes after it.
+    """
+    ref = typed_ref(prompt)
+    if ref is None or preview is None or preview[0] != ref:
+        return None
+    result = preview[1]
+    if isinstance(result, str):
+        return [f"{ref} does not resolve"]
+    state = "clean tree" if result["clean"] else "uncommitted changes in the checkout"
+    ahead = [row for row in rows if row.marker == _RUNNING or row.kind == "test"]
+    place = f"joins as {len(ahead) + 1}" + (f", after {ahead[-1].what}" if ahead else "")
+    return [
+        "will queue",
+        f'resolves to {result["sha"][:7]} "{result["subject"]}", {state}',
+        place,
+    ]
 
 
 def _stage(chosen, run, newest, bench):
@@ -408,20 +580,25 @@ def handle(state, key, frame):
         if key in ("a", "R", "M"):
             _fold(state, key, frame)
         return False
+    if pending == "d":
+        if key == "d":
+            _remove(state, frame)
+        return False
     if key == "q":
         return True
-    if key == ":":
-        state.prompt = ":"
+    if key in (":", ";"):
+        _open_prompt(state)
     elif key == "/":
         if state.tab == "run" and frame.rows:
             state.prompt = "/"
     elif key == "?":
         state.back, state.tab = state.tab, "help"
-    elif key == "h":
-        state.tab = "run"
-    elif key in ("l", "3"):
-        if state.tab != "history":
-            state.tab, state.history_record = "history", None
+    elif key in (_TAB, _BTAB):
+        _show(state, _TABS[(_TABS.index(state.tab) + (1 if key == _TAB else -1)) % len(_TABS)])
+    elif key == "2":
+        _show(state, "queue")
+    elif key == "3":
+        _show(state, "history")
     elif key == "1":
         _open(state, None)
     elif key in ("[", "]"):
@@ -429,10 +606,13 @@ def handle(state, key, frame):
             _step(state, frame, 1 if key == "[" else -1)
     elif key in ("g", "z"):
         state.pending = key
+    elif key == "d":
+        if state.tab == "queue":
+            state.pending = key
     elif key in _ENTER:
         _enter(state, frame)
     elif key == _ESC:
-        state.focus = "stages"
+        state.focus, state.message = "stages", None
     elif key in ("n", "N"):
         _search(state, frame, 1 if key == "n" else -1)
     elif key in _MOVES:
@@ -448,6 +628,8 @@ def _prompt_key(state, key, frame):
         text, state.prompt = state.prompt, None
         if text == ":q":
             return True
+        if (ref := typed_ref(text)) is not None:
+            state.run_ref = ref
         if text.startswith("/") and len(text) > 1:
             state.pattern = text[1:]
             _search(state, frame, 1)
@@ -455,6 +637,8 @@ def _prompt_key(state, key, frame):
         state.prompt = state.prompt[:-1] or None
     elif isinstance(key, str) and key.isprintable():
         state.prompt += key
+        if state.prompt == ":run ":
+            _show(state, "queue")
     return False
 
 
@@ -464,9 +648,34 @@ def _help_key(state, key):
         state.tab = state.back
     elif key == "q":
         return True
-    elif key == ":":
-        state.prompt = ":"
+    elif key in (":", ";"):
+        _open_prompt(state)
     return False
+
+
+def _open_prompt(state):
+    """Open the command line; it clears the message."""
+    state.prompt, state.message = ":", None
+
+
+def _show(state, tab):
+    """Show Run, Queue or History; entering History or Queue selects its first row."""
+    if tab == "history" and state.tab != "history":
+        state.history_record = None
+    if tab == "queue" and state.tab != "queue":
+        state.queue_at = None
+    state.tab = tab
+
+
+def _remove(state, frame):
+    """`dd`: ask to remove the selected hand entry; any other row says it cannot be."""
+    if frame.queue_cursor is None:
+        return
+    row = frame.queue_rows[frame.queue_cursor]
+    if row.id is None:
+        state.message = "only hand-queued runs can be removed"
+    else:
+        state.remove_id = row.id
 
 
 def _open(state, record):
@@ -507,12 +716,19 @@ def _index_after(kind, at, count, half):
 
 
 def _move(state, kind, frame):
-    """Move the History selection, the log cursor or the stage, by the tab and focus.
+    """Move the Queue or History selection, the log cursor or the stage, by the tab and focus.
 
     In the log, `G` follows its tail. The log focus acts on the stage list while the log has no
     rows. A stage change resets the scroll memo, as opening a run does.
     """
-    if state.tab == "history":
+    if state.tab == "queue":
+        if frame.queue_rows:
+            room = _queue_room(frame.layout)
+            index = _index_after(
+                kind, frame.queue_cursor, min(len(frame.queue_rows), room), room // 2
+            )
+            state.queue_at = (_identity(frame.queue_rows[index]), index)
+    elif state.tab == "history":
         if frame.history:
             index = _index_after(
                 kind, frame.history_cursor, len(frame.history), frame.history_room // 2

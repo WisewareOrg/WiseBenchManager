@@ -25,7 +25,9 @@ _STAGES_WIDTH, _DIVIDER, _PANE = 34, 35, 37
 _START_COL, _TOOK_COL = 17, 27
 _BAR_CELLS = 33
 _NAME_MIN = 14
-_KEY_WIDTH, _HELP_GAP = 7, 3
+_HELP_GAP = 3
+_MARKER_WIDTH, _SOURCE_WIDTH, _WHAT_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 22, 9, 7
+_PROMPT_HINT = "Enter queue it  Esc cancel"
 _BODY_INDENT = " " * 6
 _HINT = "Enter into the log   za fold   Esc back to stages"
 _RESULT_WORDS = {
@@ -38,8 +40,8 @@ _HELP = (
     (
         "move",
         [
-            ("h l", "prev / next view"),
-            ("1 3", "jump to view"),
+            ("Tab S-Tab", "next / prev view"),
+            ("1-3", "jump to view"),
             ("j k", "down / up"),
             ("gg G", "top / bottom"),
             ("^d ^u", "half page"),
@@ -51,6 +53,7 @@ _HELP = (
         [
             ("[ ]", "older / newer run"),
             ("1", "back to the live run"),
+            ("dd", "remove hand-queued run"),
             ("za", "fold / unfold a stage"),
             ("zR zM", "unfold / fold all"),
             ("/", "search"),
@@ -58,7 +61,10 @@ _HELP = (
             ("G", "follow the live log"),
         ],
     ),
-    ("commands", [(":q", "quit"), ("?", "this screen"), ("q", "quit")]),
+    (
+        "commands",
+        [(":q", "quit"), (":run ref", "queue a ref"), ("?", "this screen"), ("q", "quit")],
+    ),
 )
 
 
@@ -78,10 +84,11 @@ def draw(surface, frame):
         surface.put(y, 0, "─" * lay.cols, RULE)
     _status_bar(surface, frame)
     if lay.prompt is not None:
-        surface.put(lay.prompt, 0, frame.prompt, TEXT)
-        surface.put(lay.prompt, len(frame.prompt), " ", GROUND, TEXT)
+        _command_row(surface, frame)
     if frame.tab == "history":
         _history(surface, frame)
+    elif frame.tab == "queue":
+        _queue(surface, frame)
     elif frame.tab == "help":
         _help(surface, lay)
     else:
@@ -195,13 +202,13 @@ def _put_parts(surface, y, x, parts, bg=None, stop=None):
 
 
 def _tab_line(surface, frame):
-    """Row 0: `bench`, the two tabs with the shown one filled, and the clock."""
+    """Row 0: `bench`, the three tabs with the shown one filled, and the clock."""
     surface.put(0, 0, "bench", TEXT, bold=True)
     run_label = " 1 Run "
     if frame.run is not None and not frame.newest:
         run_label = f" 1 Run  {frame.run.record} "
     x = 7
-    for label, tab in ((run_label, "run"), (" 3 History ", "history")):
+    for label, tab in ((run_label, "run"), (" 2 Queue ", "queue"), (" 3 History ", "history")):
         if frame.tab == tab:
             surface.put(0, x, label, GROUND, TEXT)
         else:
@@ -211,8 +218,24 @@ def _tab_line(surface, frame):
     surface.put(0, frame.layout.cols - len(clock), clock, DIM)
 
 
+def _command_row(surface, frame):
+    """The last row: the message while the command line is closed, else the command line.
+
+    A `:run` command line also shows what Enter and Esc do, at the right edge when it fits.
+    """
+    y, prompt = frame.layout.prompt, frame.prompt
+    if prompt is None:
+        surface.put(y, 0, frame.message, TEXT)
+        return
+    surface.put(y, 0, prompt, TEXT)
+    surface.put(y, len(prompt), " ", GROUND, TEXT)
+    left = frame.layout.cols - len(_PROMPT_HINT)
+    if prompt.startswith(":run ") and left > len(prompt) + 1:
+        surface.put(y, left, _PROMPT_HINT, DIM)
+
+
 def _status_bar(surface, frame):
-    """The badge (running over disabled over idle), the timer and the `? keys` box."""
+    """The badge (running, disabled or idle), the timer, the pending key and the `? keys` box."""
     bench, lay = frame.bench, frame.layout
     if bench.live:
         badge, fg, bg = " RUNNING ", GROUND, AMBER
@@ -228,6 +251,8 @@ def _status_bar(surface, frame):
         len(badge) + 2,
         [("timer ", DIM, False), (bench.timer, timer_colour, False)],
     )
+    if frame.pending:
+        surface.put(lay.bar, lay.cols - 7 - len(frame.pending), frame.pending, TEXT)
     surface.put(lay.bar, lay.cols - 6, "?", GROUND, TEXT)
     surface.put(lay.bar, lay.cols - 5, " keys", TEXT)
 
@@ -441,6 +466,69 @@ def _section_head(surface, y, row, running, now, bg):
     _put_parts(surface, y, _PANE, parts, bg)
 
 
+def _queue(surface, frame):
+    """The Queue tab: the column header, a row per run, then the preview box over the status bar."""
+    lay = frame.layout
+    columns = (
+        ("", _MARKER_WIDTH),
+        ("source", _SOURCE_WIDTH),
+        ("what", _WHAT_WIDTH),
+        ("sha", _SHA_WIDTH),
+        ("added", _ADDED_WIDTH),
+    )
+    surface.put(lay.header, 0, "".join(name.ljust(width) for name, width in columns), DIM)
+    for offset, row in enumerate(frame.queue_rows):
+        y = lay.pane_top + offset
+        if y > lay.pane_bottom:
+            break
+        _queue_row(surface, y, row, offset == frame.queue_cursor, frame.layout.cols)
+    _preview_box(surface, lay, frame.preview_lines or [])
+
+
+def _preview_box(surface, lay, lines):
+    """The preview lines in a blue border whose bottom edge is the pane's last row.
+
+    A line wider than the screen is cut to fit between the borders.
+    """
+    if not lines:
+        return
+    width = min(max(map(len, lines)), lay.cols - 4)
+    top = lay.pane_bottom - len(lines) - 1
+    for y in range(max(top, lay.pane_top), lay.pane_bottom + 1):
+        surface.put(y, 0, " " * lay.cols, TEXT)
+    edges = (("┌", "┐", top), ("└", "┘", lay.pane_bottom))
+    for left, right, y in edges:
+        if y >= lay.pane_top:
+            surface.put(y, 0, left + "─" * (width + 2) + right, BLUE)
+    for offset, line in enumerate(lines):
+        y = top + 1 + offset
+        if y >= lay.pane_top:
+            surface.put(y, 0, "│", BLUE)
+            surface.put(y, 2, line[:width].ljust(width), BLUE if offset == 0 else TEXT)
+            surface.put(y, width + 3, "│", BLUE)
+
+
+def _queue_row(surface, y, row, selected, cols):
+    """One Queue row: marker, source, what, sha and added time, then the running stage.
+
+    The selected row is on the selection, else the running row on the running tint.
+    """
+    running = row.marker == "▶"
+    bg = SELECTION if selected else RUNNING_TINT if running else None
+    if bg is not None:
+        surface.put(y, 0, " " * cols, TEXT, bg)
+    parts = [
+        (row.marker.ljust(_MARKER_WIDTH), AMBER if running else TEXT, False),
+        (row.source.ljust(_SOURCE_WIDTH), BLUE if row.source == "by hand" else TEXT, False),
+        (row.what[: _WHAT_WIDTH - 2].ljust(_WHAT_WIDTH), TEXT, False),
+        (row.sha7.ljust(_SHA_WIDTH), TEXT, False),
+        (row.added.ljust(_ADDED_WIDTH), TEXT, False),
+    ]
+    if running and row.stage:
+        parts.append((f"running, {row.stage}", AMBER, False))
+    _put_parts(surface, y, 0, parts, bg)
+
+
 def _history(surface, frame):
     """The History tab: the column header, the rows the frame scrolled to, the footer."""
     lay = frame.layout
@@ -482,12 +570,13 @@ def _help(surface, lay):
     surface.put(lay.header, 0, "keys", BRIGHT, bold=True)
     start = 0
     for heading, entries in _HELP:
+        key_width = max(len(key) for key, _ in entries) + 1
         surface.put(lay.pane_top, start, heading, BLUE)
         for offset, (key, words) in enumerate(entries):
             _put_parts(
                 surface,
                 lay.pane_top + 1 + offset,
                 start,
-                [(key.ljust(_KEY_WIDTH), AMBER, False), (words, TEXT, False)],
+                [(key.ljust(key_width), AMBER, False), (words, TEXT, False)],
             )
-        start += _KEY_WIDTH + max(len(words) for _, words in entries) + _HELP_GAP
+        start += key_width + max(len(words) for _, words in entries) + _HELP_GAP

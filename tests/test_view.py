@@ -11,6 +11,7 @@ from status_helpers import (
     NOW,
     OLDER,
     OLDEST,
+    SHA,
     SIZE,
     STAMP,
     TESTS,
@@ -32,22 +33,50 @@ from wisebench import screen, view
 ENTER, ESC, HALF_DOWN, HALF_UP = "\n", "\x1b", "\x04", "\x15"
 THREE = [live("build"), failing_at(OLDER, "bundle"), run(OLDEST)]
 PLAIN_BUILD = live("build", build=plain("build", 40))
+TAB, BTAB = "\t", "\x1b[Z"
+HAND1 = {
+    "kind": "test",
+    "id": 3,
+    "added": "2026-11-10T03:15:00+00:00",
+    "ref": "feature-a",
+    "sha": "1" * 40,
+    "set": None,
+    "skip_build": False,
+    "args": [],
+}
+HAND2 = {
+    **HAND1,
+    "id": 4,
+    "added": "2026-11-10T03:40:00+00:00",
+    "ref": "feature-b",
+    "sha": "2" * 40,
+}
+MERGE = {
+    "kind": "run",
+    "ref": "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
+    "sha": "9f8e7d6" + "0" * 33,
+    "pr": 14,
+}
+NOT_REMOVABLE = "only hand-queued runs can be removed"
 
 
-def resolve(runs, bench=IDLE, state=None, size=SIZE):
-    """Resolve the frame for `runs` in `state` (a fresh State by default)."""
+def resolve(runs, bench=IDLE, state=None, size=SIZE, **read):
+    """Resolve the frame for `runs` in `state` (a fresh State by default).
+
+    `read` is the Snapshot's `queue` and `preview`, passed only when given.
+    """
     state = view.State() if state is None else state
-    return view.resolve(state, view.Snapshot(runs, bench, NOW, DIRECTORY), *size)
+    return view.resolve(state, view.Snapshot(runs, bench, NOW, DIRECTORY, **read), *size)
 
 
-def press(state, runs, keys, bench=IDLE, size=SIZE):
+def press(state, runs, keys, bench=IDLE, size=SIZE, **read):
     """Resolve, write the scroll back and handle each key in turn, as the loop does.
 
     Returns the last key's quit flag.
     """
     quits = False
     for key in keys:
-        frame = resolve(runs, bench, state, size)
+        frame = resolve(runs, bench, state, size, **read)
         state.scroll, state.history_scroll = frame.scroll, frame.history_scroll
         quits = view.handle(state, key, frame)
     return quits
@@ -278,9 +307,13 @@ def test_q_and_colon_q_enter_quit_and_nothing_else_does(keys, quits):
 @pytest.mark.parametrize(
     ("start", "keys", "expected"),
     [
-        ({}, "l", {"tab": "history"}),
-        ({"tab": "history"}, "h", {"tab": "run"}),
+        ({}, "l", {"tab": "run"}),
+        ({"tab": "history"}, "h", {"tab": "history"}),
         ({}, "3", {"tab": "history"}),
+        ({}, "2", {"tab": "queue"}),
+        ({"tab": "queue"}, "1", {"tab": "run"}),
+        ({"tab": "queue"}, "3", {"tab": "history"}),
+        ({}, ";x", {"prompt": ":x"}),
         ({"tab": "history"}, "?", {"tab": "help", "back": "history"}),
         ({"tab": "history"}, "??", {"tab": "history"}),
         ({}, "?" + ESC, {"tab": "run"}),
@@ -290,9 +323,13 @@ def test_q_and_colon_q_enter_quit_and_nothing_else_does(keys, quits):
         ({"stage": "host_suite", "focus": "log"}, ESC, {"focus": "stages"}),
     ],
     ids=[
-        "l: history",
-        "h: run",
+        "l: no-op",
+        "h: no-op",
         "3: history",
+        "2: queue",
+        "1 from queue: run",
+        "3 from queue: history",
+        "; opens a prompt as : does",
         "?: help",
         "? again: back",
         "Esc: back",
@@ -653,10 +690,12 @@ def test_history_keys_on_no_records_do_nothing(keys):
     assert (state.tab, state.history_record) == ("history", None)
 
 
-def test_l_on_history_keeps_the_selection():
-    state = view.State(tab="history", history_record=OLDER)
-    press(state, THREE, "l", LIVE)
-    assert (state.tab, state.history_record) == ("history", OLDER)
+@pytest.mark.parametrize("key", ["h", "l"])
+@pytest.mark.parametrize("tab", ["run", "history", "queue"])
+def test_h_and_l_no_longer_switch_views(tab, key):
+    state = view.State(tab=tab, history_record=OLDER)
+    press(state, THREE, key, LIVE, queue=[HAND1])
+    assert (state.tab, state.history_record) == (tab, OLDER)
 
 
 def test_the_panes_start_on_row_3_and_end_two_rows_above_the_status_bar():
@@ -700,3 +739,427 @@ def test_the_kas_prefix_is_dropped_only_at_the_start_of_a_plain_stages_own_line(
     frame = resolve([live("build", host_suite=shown)], LIVE, view.State(stage="host_suite"))
     assert midline in texts(frame)
     assert inner in texts(frame)
+
+
+# -- the Queue view ----------------------------------------------------------------------
+
+
+def queue_state(**chosen):
+    """A State on the Queue tab."""
+    return view.State(tab="queue", **chosen)
+
+
+@pytest.mark.parametrize(
+    ("start", "key", "expected"),
+    [
+        ("run", TAB, "queue"),
+        ("queue", TAB, "history"),
+        ("history", TAB, "run"),
+        ("run", BTAB, "history"),
+        ("history", BTAB, "queue"),
+        ("queue", BTAB, "run"),
+    ],
+)
+def test_tab_and_shift_tab_cycle_run_queue_history_and_wrap(start, key, expected):
+    state = view.State(tab=start)
+    press(state, THREE, [key], LIVE, queue=[HAND1])
+    assert state.tab == expected
+
+
+def test_tab_and_shift_tab_are_swallowed_by_help_and_the_command_line():
+    state = view.State(tab="help", back="run")
+    press(state, THREE, [TAB, BTAB], LIVE)
+    assert state.tab == "help"
+    prompted = view.State(prompt=":ab")
+    press(prompted, THREE, [TAB, BTAB], LIVE)
+    assert (prompted.tab, prompted.prompt) == ("run", ":ab")
+
+
+@pytest.mark.parametrize("keys", [["2"], [TAB], ["3", BTAB]], ids=["2", "Tab", "3 then Shift-Tab"])
+def test_entering_the_queue_selects_its_first_row_however_it_is_entered(keys):
+    state = view.State()
+    press(state, THREE, keys, LIVE, queue=[HAND1, HAND2, MERGE])
+    frame = resolve(THREE, LIVE, state, queue=[HAND1, HAND2, MERGE])
+    assert (frame.tab, frame.queue_cursor) == ("queue", 0)
+
+
+def test_leaving_and_re_entering_the_queue_selects_the_first_row_again():
+    state = view.State()
+    read = {"queue": [HAND1, HAND2, MERGE]}
+    press(state, [run()], "2jj", **read)
+    assert resolve([run()], state=state, **read).queue_cursor == 2
+    press(state, [run()], "1", **read)
+    press(state, [run()], "2", **read)
+    assert resolve([run()], state=state, **read).queue_cursor == 0
+
+
+@pytest.mark.parametrize(
+    ("keys", "at"),
+    [("j", 1), ("jj", 2), ("jjj", 2), ("jjk", 1), ("k", 0), ("G", 2), ("Ggg", 0), ("Gk", 1)],
+)
+def test_j_k_gg_and_capital_g_move_the_queue_cursor_and_clamp(keys, at):
+    state = view.State()
+    read = {"queue": [HAND1, HAND2, MERGE]}
+    press(state, [run()], "2" + keys, **read)
+    assert resolve([run()], state=state, **read).queue_cursor == at
+
+
+def _crowded(count=29):
+    """`count` hand entries, more than a 24-row Queue pane draws, with refs r00, r01, ..."""
+    return [{**HAND1, "id": i + 1, "ref": f"r{i:02d}"} for i in range(count)]
+
+
+@pytest.mark.parametrize(
+    "keys",
+    ["G", "j" * 40, HALF_DOWN * 6, "j" * 25 + "G"],
+    ids=["G", "j past the end", "^d past the end", "j then G"],
+)
+def test_the_queue_cursor_stops_on_the_last_drawn_row_so_dd_never_acts_on_an_undrawn_one(keys):
+    entries = _crowded()
+    state = view.State()
+    press(state, [run()], "2" + keys, queue=entries)
+    frame = resolve([run()], state=state, queue=entries)
+    grid = Grid(*SIZE)
+    screen.draw(grid, frame)
+    drawn = "\n".join(grid.text(y) for y in range(grid.rows))
+    at = frame.queue_cursor
+    assert f"r{at:02d}" in drawn
+    assert f"r{at + 1:02d}" not in drawn
+    press(state, [run()], "dd", queue=entries)
+    assert state.remove_id == frame.queue_rows[at].id
+
+
+@pytest.mark.parametrize(
+    ("tab", "keys", "pending"),
+    [
+        ("queue", "d", "d"),
+        ("run", "g", "g"),
+        ("queue", "g", "g"),
+        ("history", "g", "g"),
+        ("run", "z", "z"),
+        ("run", "d", None),
+        ("history", "d", None),
+    ],
+    ids=[
+        "d on Queue",
+        "g on Run",
+        "g on Queue",
+        "g on History",
+        "z on Run",
+        "d off Queue",
+        "d on History",
+    ],
+)
+def test_the_frame_carries_the_first_key_of_a_pair_while_it_waits_for_the_second(
+    tab, keys, pending
+):
+    state = view.State(tab=tab)
+    press(state, THREE, keys, LIVE, queue=[HAND1, HAND2])
+    assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending == pending
+
+
+@pytest.mark.parametrize(
+    ("tab", "first", "second"),
+    [
+        ("queue", "d", "d"),
+        ("run", "g", "g"),
+        ("run", "z", "a"),
+        ("queue", "d", "j"),
+        ("queue", "d", ESC),
+    ],
+    ids=["dd", "gg", "za", "d then j", "d then Esc"],
+)
+def test_the_second_key_or_esc_clears_the_pending_key_from_the_frame(tab, first, second):
+    state = view.State(tab=tab)
+    press(state, THREE, first, LIVE, queue=[HAND1, HAND2])
+    assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending == first
+    press(state, THREE, second, LIVE, queue=[HAND1, HAND2])
+    assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending is None
+
+
+def test_a_pending_key_shifts_no_row_of_the_layout():
+    plain_frame = resolve(THREE, LIVE, queue_state(), queue=[HAND1])
+    waiting = resolve(THREE, LIVE, queue_state(pending="d"), queue=[HAND1])
+    assert waiting.layout == plain_frame.layout
+
+
+def test_the_queue_has_a_running_row_then_hand_entries_then_the_merge_head():
+    frame = resolve(THREE, LIVE, queue_state(), queue=[HAND1, HAND2, MERGE])
+    assert [(r.marker, r.source, r.what) for r in frame.queue_rows] == [
+        ("▶", "merge queue", "PR #31"),
+        ("2", "by hand", "feature-a"),
+        ("3", "by hand", "feature-b"),
+        ("4", "merge queue", "PR #14"),
+    ]
+
+
+def test_with_no_running_run_the_markers_start_at_1():
+    frame = resolve(THREE, IDLE, queue_state(), queue=[HAND1, HAND2, MERGE])
+    assert [r.marker for r in frame.queue_rows] == ["1", "2", "3"]
+
+
+def test_the_merge_head_is_hidden_when_its_sha_equals_the_running_sha():
+    same = {**MERGE, "sha": SHA}
+    frame = resolve([live("build")], LIVE, queue_state(), queue=[HAND1, same])
+    assert [r.marker for r in frame.queue_rows] == ["▶", "2"]
+    idle = resolve([live("build")], IDLE, queue_state(), queue=[HAND1, same])
+    assert [r.marker for r in idle.queue_rows] == ["1", "2"]
+
+
+def test_a_queue_not_read_yet_has_no_rows_and_no_cursor():
+    frame = resolve([run()], IDLE, queue_state())
+    assert (frame.queue_rows, frame.queue_cursor) == ([], None)
+    empty = resolve([run()], IDLE, queue_state(), queue=[])
+    assert (empty.queue_rows, empty.queue_cursor) == ([], None)
+
+
+def test_a_hand_row_carries_its_ref_sha7_local_added_time_kind_and_id(local_zone):
+    (row,) = resolve([run()], IDLE, queue_state(), queue=[HAND1]).queue_rows
+    assert (row.source, row.what, row.sha7, row.added) == (
+        "by hand",
+        "feature-a",
+        "1111111",
+        "06:15",
+    )
+    assert (row.stage, row.kind, row.id) == ("", "test", 3)
+
+
+def test_the_merge_head_row_has_its_pr_sha7_no_added_time_and_no_id():
+    (row,) = resolve([run()], IDLE, queue_state(), queue=[MERGE]).queue_rows
+    assert (row.source, row.what, row.sha7, row.added) == ("merge queue", "PR #14", "9f8e7d6", "")
+    assert (row.stage, row.kind, row.id) == ("", "run", None)
+
+
+def test_the_running_row_comes_from_the_newest_run_with_its_open_stage():
+    (row,) = resolve([live("build")], LIVE, queue_state(), queue=[]).queue_rows
+    assert (row.marker, row.source, row.what, row.sha7) == ("▶", "merge queue", "PR #31", SHA[:7])
+    assert (row.added, row.stage, row.kind, row.id) == ("", "build", "run", None)
+
+
+def test_a_running_hand_run_reads_by_hand_with_its_ref_and_a_blank_sha_until_known():
+    hand_run = live("checkout", kind="test", pr=None, ref="feature-a", sha=None)
+    (row,) = resolve([hand_run], LIVE, queue_state(), queue=[]).queue_rows
+    assert (row.source, row.what, row.sha7, row.kind) == ("by hand", "feature-a", "", "test")
+    assert (row.stage, row.id) == ("checkout", None)
+
+
+def test_no_running_row_when_the_bench_is_not_running_the_newest_run():
+    assert resolve([run()], IDLE, queue_state(), queue=[]).queue_rows == []
+
+
+@pytest.mark.parametrize(
+    ("keys", "removed"),
+    [("2dd", 3), ("2jdd", 4)],
+    ids=["first hand row", "second hand row"],
+)
+def test_dd_on_a_hand_row_asks_for_its_removal(keys, removed):
+    state = view.State()
+    press(state, [run()], keys, queue=[HAND1, HAND2, MERGE])
+    assert (state.remove_id, state.message) == (removed, None)
+
+
+def test_dd_with_a_live_run_removes_the_hand_row_under_the_cursor_not_the_running_one():
+    state = view.State()
+    press(state, THREE, "2jdd", LIVE, queue=[HAND1, HAND2, MERGE])
+    assert state.remove_id == 3
+
+
+@pytest.mark.parametrize(
+    ("keys", "bench"),
+    [("2Gdd", IDLE), ("2dd", LIVE)],
+    ids=["merge-queue row", "running row"],
+)
+def test_dd_on_a_merge_queue_or_running_row_removes_nothing_and_says_why(keys, bench):
+    state = view.State()
+    press(state, THREE, keys, bench, queue=[HAND1, HAND2, MERGE])
+    assert (state.remove_id, state.message) == (None, NOT_REMOVABLE)
+
+
+@pytest.mark.parametrize("read", [{}, {"queue": []}], ids=["unread", "empty"])
+def test_dd_on_an_empty_queue_does_nothing(read):
+    state = view.State()
+    press(state, [run()], "2dd", **read)
+    assert (state.remove_id, state.message, state.tab) == (None, None, "queue")
+
+
+@pytest.mark.parametrize("tab", ["run", "history"])
+def test_dd_off_the_queue_tab_does_nothing(tab):
+    state = view.State(tab=tab)
+    press(state, THREE, "dd", LIVE, queue=[HAND1, HAND2])
+    assert (state.remove_id, state.message, state.tab) == (None, None, tab)
+
+
+def test_d_then_another_key_is_discarded_and_removes_nothing():
+    state = view.State()
+    press(state, [run()], "2djd", queue=[HAND1, HAND2])
+    assert (state.remove_id, state.pending) == (None, "d")
+    press(state, [run()], "x")
+    assert (state.remove_id, state.pending) == (None, None)
+
+
+def test_after_dd_the_cursor_is_the_next_row_once_the_read_lands():
+    state = view.State()
+    before = {"queue": [HAND1, HAND2, MERGE]}
+    press(state, [run()], "2dd", **before)
+    after = resolve([run()], state=state, queue=[HAND2, MERGE])
+    assert after.queue_cursor == 0 and after.queue_rows[0].id == 4
+
+
+def test_after_dd_of_the_last_hand_row_the_cursor_is_the_merge_head():
+    state = view.State()
+    press(state, [run()], "2jdd", queue=[HAND1, HAND2, MERGE])
+    after = resolve([run()], state=state, queue=[HAND1, MERGE])
+    assert (after.queue_cursor, after.queue_rows[1].source) == (1, "merge queue")
+
+
+def test_after_dd_of_the_last_row_the_cursor_clamps_to_the_new_last_row():
+    state = view.State()
+    press(state, [run()], "2jdd", queue=[HAND1, HAND2])
+    assert resolve([run()], state=state, queue=[HAND1]).queue_cursor == 0
+
+
+def test_the_cursor_keeps_its_hand_row_when_rows_before_it_go_away():
+    state = view.State()
+    press(state, [run()], "2j", queue=[HAND1, HAND2, MERGE])
+    after = resolve([run()], state=state, queue=[HAND2, MERGE])
+    assert (after.queue_cursor, after.queue_rows[after.queue_cursor].id) == (0, 4)
+
+
+def test_the_cursor_keeps_the_merge_head_when_a_hand_row_is_added_before_it():
+    state = view.State()
+    third = {**HAND1, "id": 5, "ref": "feature-c"}
+    press(state, [run()], "2G", queue=[HAND1, HAND2, MERGE])
+    after = resolve([run()], state=state, queue=[HAND1, HAND2, third, MERGE])
+    assert (after.queue_cursor, after.queue_rows[after.queue_cursor].source) == (3, "merge queue")
+
+
+def test_the_cursor_keeps_the_running_row_when_hand_rows_arrive():
+    state = view.State()
+    press(state, THREE, "2", LIVE, queue=[])
+    after = resolve(THREE, LIVE, state, queue=[HAND1])
+    assert (after.queue_cursor, after.queue_rows[0].marker) == (0, "▶")
+
+
+@pytest.mark.parametrize("keys", [":run feature-c", ";run feature-c"])
+def test_run_with_a_ref_and_enter_sets_run_ref_and_closes_the_prompt(keys):
+    state = view.State()
+    press(state, [run()], keys + ENTER)
+    assert (state.run_ref, state.prompt) == ("feature-c", None)
+
+
+def test_run_strips_whitespace_around_the_ref():
+    state = view.State()
+    press(state, [run()], ":run \t  feature-c  " + ENTER)
+    assert state.run_ref == "feature-c"
+
+
+@pytest.mark.parametrize("typed", [":run", ":run ", ":run    ", ":runfeature-c", ":x", ":rn a"])
+def test_run_without_a_ref_or_another_word_queues_nothing_and_stays_silent(typed):
+    state = view.State()
+    press(state, [run()], typed + ENTER)
+    assert (state.run_ref, state.prompt, state.message, state.remove_id) == (None, None, None, None)
+
+
+def test_the_tab_switches_to_the_queue_when_the_prompt_becomes_run_space():
+    state = view.State()
+    press(state, [run()], ":run")
+    assert state.tab == "run"
+    press(state, [run()], " ")
+    assert (state.tab, state.prompt) == ("queue", ":run ")
+
+
+def test_run_space_from_history_switches_to_the_queue_too():
+    state = view.State(tab="history")
+    press(state, [run()], ":run ")
+    assert state.tab == "queue"
+
+
+def test_esc_leaves_the_queue_showing_with_the_prompt_closed_and_nothing_queued():
+    state = view.State()
+    press(state, [run()], ":run feature" + ESC)
+    assert (state.tab, state.prompt, state.run_ref) == ("queue", None, None)
+
+
+def test_a_message_survives_movement_and_is_cleared_by_opening_the_prompt():
+    state = view.State(message="queued 5 abc1234")
+    press(state, [run()], "2j", queue=[HAND1, HAND2])
+    assert state.message == "queued 5 abc1234"
+    press(state, [run()], ":")
+    assert (state.message, state.prompt) == (None, ":")
+
+
+def test_a_message_is_cleared_by_esc():
+    state = view.State(message="queued 5 abc1234")
+    press(state, [run()], ESC)
+    assert state.message is None
+
+
+def test_the_frame_shows_the_message_and_it_takes_the_prompt_row_so_the_bar_shifts_up():
+    plain_frame = resolve([run()])
+    shown = resolve([run()], state=view.State(message="no queued run 3"))
+    assert shown.message == "no queued run 3"
+    assert plain_frame.message is None
+    assert (shown.layout.bar, shown.layout.pane_bottom) == (
+        plain_frame.layout.bar - 1,
+        plain_frame.layout.pane_bottom - 1,
+    )
+
+
+def _previewed(typed, result, ref=None, queue=(), bench=IDLE):
+    state = view.State(tab="queue", prompt=typed)
+    snap = {"queue": list(queue), "preview": (ref if ref is not None else "feature-c", result)}
+    return resolve(THREE, bench, state, **snap).preview_lines
+
+
+CLEAN = {"sha": "1234567" + "0" * 33, "subject": "Fix the thing", "clean": True}
+
+
+def test_a_resolved_ref_previews_what_will_queue_where_it_joins_and_after_what():
+    lines = _previewed(":run feature-c", CLEAN, queue=[HAND1, HAND2, MERGE])
+    assert lines == [
+        "will queue",
+        'resolves to 1234567 "Fix the thing", clean tree',
+        "joins as 3, after feature-b",
+    ]
+
+
+def test_a_dirty_checkout_says_so_in_place_of_clean_tree():
+    lines = _previewed(":run feature-c", {**CLEAN, "clean": False}, queue=[HAND1])
+    assert lines[1] == 'resolves to 1234567 "Fix the thing", uncommitted changes in the checkout'
+
+
+def test_the_first_place_has_no_after():
+    assert _previewed(":run feature-c", CLEAN, queue=[MERGE])[2] == "joins as 1"
+
+
+def test_a_running_run_counts_as_place_1_and_is_what_the_first_hand_entry_joins_after():
+    assert _previewed(":run feature-c", CLEAN, bench=LIVE)[2] == "joins as 2, after PR #31"
+    both = _previewed(":run feature-c", CLEAN, queue=[HAND1], bench=LIVE)
+    assert both[2] == "joins as 3, after feature-a"
+
+
+def test_an_unresolvable_ref_previews_only_that_it_does_not_resolve():
+    lines = _previewed(":run nope", "fatal: bad revision", ref="nope")
+    assert lines == ["nope does not resolve"]
+
+
+def test_a_preview_of_another_ref_than_the_one_typed_is_not_shown():
+    assert _previewed(":run feature-d", CLEAN, ref="feature-c") is None
+
+
+def test_the_ref_typed_is_stripped_before_it_is_compared_with_the_preview():
+    assert _previewed(":run   feature-c  ", CLEAN) is not None
+
+
+def test_no_preview_without_the_run_prompt_or_a_result():
+    assert _previewed(":ru", CLEAN) is None
+    assert _previewed(":run ", CLEAN, ref="feature-c") is None
+    closed = resolve([run()], state=queue_state(), queue=[], preview=("feature-c", CLEAN))
+    assert closed.preview_lines is None
+    typed = view.State(tab="queue", prompt=":run feature-c")
+    assert resolve([run()], state=typed, queue=[]).preview_lines is None
+
+
+def test_the_running_row_shows_before_the_queue_has_been_read():
+    frame = resolve([live("build")], LIVE, queue_state())
+    assert [(r.marker, r.stage) for r in frame.queue_rows] == [("▶", "build")]
