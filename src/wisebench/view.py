@@ -22,10 +22,7 @@ _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _ENTER = ("\n", "\r")
 _BACKSPACE = ("\x7f", "\b")
 _ESC = "\x1b"
-_ENABLE_PROMPT = (
-    "Enable the bench? Clears DISABLED and starts the timer; the next run checks the board first."
-    " [y/N]"
-)
+_ENABLE_PROMPT = "Enable the bench? Clears DISABLED and starts the timer. [y/N]"
 _TAB, _BTAB = "\t", "\x1b[Z"
 _TABS = ("run", "queue", "history")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
