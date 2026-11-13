@@ -653,7 +653,7 @@ def test_a_dirty_checkout_and_an_unresolvable_ref_are_drawn_as_the_frame_words_t
     dirty = {**CLEAN, "clean": False}
     grid, _ = queue_drawn(prompt=":run x", preview=("x", dirty))
     grid.find(r'resolves to 1234567 "Fix the thing", uncommitted changes in the checkout')
-    grid.find(r"joins as 1$")
+    grid.find(r"joins as 1 *$")
     grid, _ = queue_drawn(prompt=":run nope", preview=("nope", "fatal: bad revision"))
     grid.find(r"nope does not resolve")
     assert "will queue" not in "".join(grid.text(y) for y in range(SIZE[0]))
