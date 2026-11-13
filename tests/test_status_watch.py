@@ -646,6 +646,35 @@ def test_enable_then_y_with_no_disabled_file_still_starts_the_timer(
     assert "bench enabled" in last_frame(fake)
 
 
+def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_showing(
+    monkeypatch, tmp_path, systemctl
+):
+    stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(RuntimeError("remote is down")))
+    held, release = held_work()
+    write_bench_toml(tmp_path)
+    with open(tmp_path / "bench.toml", "a") as f:
+        f.write(UNIT_TABLE)
+    terminal(monkeypatch, tmp_path, 0)
+    seen = []
+    keys = [
+        "2",
+        TIMEOUT,
+        *":enable",
+        "\n",
+        release,
+        lambda: seen.append(last_frame(fake)),
+        "n",
+        "q",
+    ]
+    fake = FakeScreen(keys=keys)
+    directory = tmp_path / "records"
+    directory.mkdir()
+    assert status._loop(fake, directory, run=held.append) == 0
+    assert ASK in seen[0]
+    assert "remote is down" not in seen[0]
+    assert changes(systemctl) == []
+
+
 @pytest.mark.parametrize("cancel", ["n", "x", "\x1b"])
 def test_enable_then_another_key_changes_nothing_and_clears_the_question(
     monkeypatch, tmp_path, systemctl, cancel

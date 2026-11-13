@@ -2,6 +2,7 @@
 
 import subprocess
 import time
+from pathlib import Path
 from unittest.mock import create_autospec
 
 import pytest
@@ -97,7 +98,7 @@ def systemctl(monkeypatch):
     real_run = subprocess.run
 
     def run(command, *args, **kwargs):
-        if command[:1] == ["systemctl"]:
+        if Path(command[0]).name == "systemctl":
             return fake.run(command, **kwargs)
         return real_run(command, *args, **kwargs)
 

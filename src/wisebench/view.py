@@ -1,10 +1,10 @@
 """View: what the user chose, the frame derived from it, and the keys that act on that frame.
 
-`State` holds the user's intent, and the commands (`run_ref`, `remove_id`, `disable_request`, `enable_request`) and message the shell
-exchanges with `handle`. `resolve` derives the `Frame` to show from it and one
-`Snapshot` of the disk; it is the only code that knows where anything sits. `screen.draw` draws
-that frame and `handle` acts on the same frame, so a row a key moves to is a row drawn. A field of
-`State` left None means "derive it every frame"; a value means the user chose it.
+`State` holds the user's intent, and the commands (`run_ref`, `remove_id`, `disable_request`,
+`enable_request`) and message the shell exchanges with `handle`. `resolve` derives the `Frame` to
+show from it and one `Snapshot` of the disk; it is the only code that knows where anything sits.
+`screen.draw` draws that frame and `handle` acts on the same frame, so a row a key moves to is a row
+drawn. A field of `State` left None means "derive it every frame"; a value means the user chose it.
 """
 
 import re
