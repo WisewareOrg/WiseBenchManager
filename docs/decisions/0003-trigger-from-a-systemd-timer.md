@@ -63,7 +63,7 @@ host. What the choice is held to:
 - **Queue-head selection is our code**, a `git ls-remote` read kept behind one class, where an
   Actions runner would have done it for free.
 - **The bench stops itself.** The timer is the unit the bench's own failure stops, so a broken
-  bench does not keep failing on every tick; restarting it is a hand step.
+  bench does not keep failing on every tick; restarting it is `:enable` in `bench status --watch`.
 - **A hand stop does not persist.** A user-manager restart or a reboot re-arms the timer. After a
   fault the re-armed timer starts nothing, because every tick refuses on `DISABLED`.
 

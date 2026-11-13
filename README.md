@@ -245,8 +245,8 @@ the run timer (a run in progress finishes) and `:enable`, after a `y` to its pro
 `DISABLED` and starts the timer. It reads
 `records/*/bench.log`, each suite's `report.jsonl`, whether `records/DISABLED` exists, the holder of
 the `lock` file from `/proc/locks`, the run timer's state from `systemctl --user`, and `bench.toml`.
-It takes no lock and runs no git itself, only `:enable` writes a file (it removes `DISABLED`) and
-only `:disable` and `:enable` run `systemctl`: the Queue tab reads and changes the queue
+It takes no lock and runs no git itself. Only `:enable` writes a file (it removes `DISABLED`) and
+only `:disable` and `:enable` run `systemctl`. The Queue tab reads and changes the queue
 only through `Queue`, the same entry point as `bench test` and `bench unqueue`. No maintained viewer
 reads the runner's markers or joins them to pytest-reportlog's outcomes, so the view is the runner's
 own, on stdlib `curses`. Bitbake shows its task progress only on the terminal that ran the build, so
@@ -268,8 +268,8 @@ A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`,
 `DISABLED` beside the records and stops that timer. Clearing it is not something `bench run` does
 itself: read `DISABLED`, then `:enable` in `bench status --watch`, or by hand remove it and run
 `systemctl --user start <unit>.timer`. The run that faulted is not queued again; queue it again
-after clearing `DISABLED`. If the reason is a database error, remove `records/queue.db` as well; the runs queued by
-hand in it are lost.
+after clearing `DISABLED`. If the reason is a database error, remove `records/queue.db` as well;
+the runs queued by hand in it are lost.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 
