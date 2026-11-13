@@ -7,7 +7,7 @@ from contextlib import closing
 from datetime import datetime, timedelta
 
 import pytest
-from helpers import repo_with_one_commit
+from helpers import repo_with_one_commit, stub_fetch
 
 from wisebench import bench_test, queue
 
@@ -165,7 +165,7 @@ _MERGE_HEAD = {
 
 @pytest.fixture
 def hand(monkeypatch, tmp_path):
-    """A repo with one commit, `Queue.head` stubbed to no merge entry, and a `Queue` over it.
+    """A repo with one commit, `git fetch` and `Queue.head` stubbed, and a `Queue` over it.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Restores `Queue.head` at teardown.
@@ -175,6 +175,7 @@ def hand(monkeypatch, tmp_path):
         wisebench.queue.Queue: The queue; set `queue.Queue.head` again to put a merge entry in.
     """
     repo_with_one_commit(tmp_path)
+    stub_fetch(monkeypatch)
     monkeypatch.setattr(queue.Queue, "head", lambda self: None)
     return queue.Queue(tmp_path, tmp_path / "records")
 

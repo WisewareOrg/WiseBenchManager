@@ -8,7 +8,7 @@ import signal
 import subprocess
 
 import pytest
-from helpers import repo_with_one_commit
+from helpers import repo_with_one_commit, stub_fetch
 
 from wisebench import bench_run, bench_test, cli, queue
 from wisebench.lock import Lock
@@ -128,6 +128,7 @@ def test_main_unqueue_of_a_run_already_taken_exits_2(monkeypatch, tmp_path, caps
     """A taken (running) entry cannot be unqueued."""
     repo_with_one_commit(tmp_path)
     monkeypatch.chdir(tmp_path)
+    stub_fetch(monkeypatch)
     monkeypatch.setattr(queue.Queue, "head", lambda self: None)
     store = queue.Queue(tmp_path, tmp_path / "records")
     entry_id, _, _ = store.add("HEAD", None, False, [])

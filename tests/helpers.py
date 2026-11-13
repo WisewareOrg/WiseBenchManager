@@ -61,3 +61,21 @@ def marker_lines(tmp_path):
         for line in log_text.splitlines()
         if line.startswith("bench: ")
     ]
+
+
+def stub_fetch(monkeypatch):
+    """Make `git fetch` succeed without a remote, for a repo with no `origin`.
+
+    Every other command runs as before, through whatever `subprocess.run` is in place.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores `subprocess.run` at teardown.
+    """
+    real_run = subprocess.run
+
+    def run(command, **kwargs):
+        if command[:2] == ["git", "fetch"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
