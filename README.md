@@ -28,7 +28,7 @@ the run will build, and its place among the runs queued by hand. A ref that does
 commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the merge
 queue's head, one entry per start; to run one now, start `bench run` by hand. A run queued by hand
 posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an entry cannot be removed
-(ADR 0005 rev 1).
+(ADR 0005 rev 2).
 
 `bench test` does not fetch: it resolves the ref in the bench checkout, which refreshes `origin/*` on
 every idle tick. For a branch pushed since, run `git fetch origin <branch>` there first. Queue from
