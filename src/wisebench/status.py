@@ -1,19 +1,26 @@
 """Status: `bench status --watch`, the read-only curses shell around `view` and `screen`.
 
 Once a second, and on every key, it reads the records and the bench once, resolves a frame, draws
-it and hands the next key to `view.handle` with that frame. Nothing here writes a file or takes
-a lock.
+it and hands the next key to `view.handle` with that frame. Nothing here writes a file or takes a
+lock of its own: the Queue tab reads `Queue.entries` and `Queue.preview` on a background thread, and
+`:run` and `dd` call `Queue.add` and `Queue.remove`.
 """
 
 import curses
+import functools
 import math
 import os
+import subprocess
 import sys
-from datetime import UTC, datetime
+import threading
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from queue import SimpleQueue
 
 from wisebench import screen, view
 from wisebench.bench_state import read_bench, read_run_unit
+from wisebench.queue import Queue
 from wisebench.records import Records
 
 _FIRST_COLOUR = 16
@@ -32,7 +39,8 @@ _XTERM = {
     screen.FAILED_TINT: 235,
     screen.SELECTION: 235,
 }
-_KEYS = {curses.KEY_ENTER: "\n", curses.KEY_BACKSPACE: "\x7f"}
+_KEYS = {curses.KEY_ENTER: "\n", curses.KEY_BACKSPACE: "\x7f", curses.KEY_BTAB: "\x1b[Z"}
+_QUEUE_REFRESH = timedelta(seconds=30)
 
 
 def watch(directory):
@@ -53,8 +61,125 @@ def watch(directory):
         return 2
 
 
-def _loop(window, directory):
-    """Draw a frame once a second and on every key; 0 on a quit key."""
+@dataclass
+class _Reads:
+    """What the Queue tab knows between turns.
+
+    Args:
+        entries (list[dict] | None): The last good `Queue.entries()` read.
+        preview (tuple[str, dict | str] | None): The last `Queue.preview` outcome with its ref.
+        read_at (datetime | None): When `entries` was last requested; None asks again.
+        asked (str | None): The ref last previewed.
+        shown (bool): The Queue tab showed on the previous turn.
+    """
+
+    entries: list[dict] | None = None
+    preview: tuple[str, dict | str] | None = None
+    read_at: datetime | None = None
+    asked: str | None = None
+    shown: bool = False
+
+
+def _serve(requests):
+    """Run each piece of work put on `requests`, forever."""
+    while True:
+        requests.get()()
+
+
+@functools.cache
+def _requests():
+    """The queue of the one background thread, which starts on first use."""
+    requests = SimpleQueue()
+    threading.Thread(target=_serve, args=(requests,), daemon=True).start()
+    return requests
+
+
+def _background(work):
+    """Run `work`, a function of no arguments, on the background thread."""
+    _requests().put(work)
+
+
+def _outcome(call):
+    """What `call()` returns, or the exception it raises."""
+    try:
+        return call()
+    except Exception as exc:
+        return exc
+
+
+def _reason(exc):
+    """The first stderr line of a failed git call, else the exception's text."""
+    lines = (
+        (exc.stderr or "").strip().splitlines()
+        if isinstance(exc, subprocess.CalledProcessError)
+        else []
+    )
+    return lines[0] if lines else str(exc)
+
+
+def _collect(results, reads, state):
+    """Take every finished background read into `reads`; a failed `entries()` becomes a message.
+
+    The message is not set while the command line is open. The newest result of each kind wins.
+    """
+    while not results.empty():
+        kind, *outcome = results.get()
+        if kind == "preview":
+            ref, result = outcome
+            reads.preview = (ref, _reason(result) if isinstance(result, Exception) else result)
+        elif isinstance(outcome[0], Exception):
+            if state.prompt is None:
+                state.message = _reason(outcome[0])
+        else:
+            reads.entries = outcome[0]
+
+
+def _request(queue, run, results, reads, state, now):
+    """Ask `run` for the reads the state calls for.
+
+    `Queue.entries` is read on entering the Queue tab and every 30 seconds while it shows;
+    `Queue.preview` whenever the ref typed after `:run ` is not the one last asked for.
+    """
+    shown = state.tab == "queue"
+    due = reads.read_at is None or now - reads.read_at >= _QUEUE_REFRESH
+    if shown and (due or not reads.shown):
+        reads.read_at = now
+        run(lambda: results.put(("entries", _outcome(queue.entries))))
+    reads.shown = shown
+    ref = view.typed_ref(state.prompt)
+    if ref != reads.asked:
+        reads.asked = ref
+        if ref is not None:
+            run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(ref)))))
+
+
+def _perform(queue, reads, state):
+    """Carry out the `:run` and `dd` the view asked for, say how it went, and ask for a re-read."""
+    if state.run_ref is not None:
+        ref, state.run_ref = state.run_ref, None
+        try:
+            entry_id, sha, _ = queue.add(ref, None, False, [])
+        except subprocess.CalledProcessError:
+            state.message = f"{ref} does not resolve to a commit"
+        else:
+            state.message = f"queued {entry_id} {sha[:7]}"
+        reads.read_at = None
+    if state.remove_id is not None:
+        entry_id, state.remove_id = state.remove_id, None
+        if not queue.remove(entry_id):
+            state.message = f"no queued run {entry_id}"
+        reads.read_at = None
+
+
+def _loop(window, directory, run=_background):
+    """Draw a frame once a second and on every key; 0 on a quit key.
+
+    Args:
+        window: The curses window.
+        directory (pathlib.Path): The records directory.
+        run (Callable): Runs a function of no arguments away from the draw path; tests pass a
+            function that calls it at once.
+    """
     window.timeout(1000)
     attributes = _attributes()
     window.bkgd(" ", attributes(screen.TEXT, None, False))
@@ -62,13 +187,16 @@ def _loop(window, directory):
     run_unit = read_run_unit(Path.cwd())
     state = view.State()
     shown_directory = os.path.relpath(directory)
+    queue, results, reads = Queue(Path.cwd(), directory), SimpleQueue(), _Reads()
     while True:
+        _collect(results, reads, state)
         runs = records.runs()
         bench = read_bench(directory, runs[0] if runs else None, run_unit, Path("/proc"))
         rows, cols = window.getmaxyx()
-        frame = view.resolve(
-            state, view.Snapshot(runs, bench, datetime.now(UTC), shown_directory), rows, cols
-        )
+        now = datetime.now(UTC)
+        _request(queue, run, results, reads, state, now)
+        snap = view.Snapshot(runs, bench, now, shown_directory, reads.entries, reads.preview)
+        frame = view.resolve(state, snap, rows, cols)
         state.scroll, state.history_scroll = frame.scroll, frame.history_scroll
         window.erase()
         screen.draw(_Surface(window, rows, cols, attributes), frame)
@@ -79,6 +207,7 @@ def _loop(window, directory):
             continue
         if view.handle(state, _KEYS.get(key, key), frame):
             return 0
+        _perform(queue, reads, state)
 
 
 def _attributes():

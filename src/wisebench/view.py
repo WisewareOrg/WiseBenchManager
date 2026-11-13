@@ -380,8 +380,15 @@ def _queue_cursor(at, rows):
     return found if found is not None else min(index, len(rows) - 1)
 
 
-def _typed_ref(prompt):
-    """The ref typed after `:run `, stripped; None when the command line holds no such ref."""
+def typed_ref(prompt):
+    """The ref typed after `:run `, stripped.
+
+    Args:
+        prompt (str | None): The command line's text, or None while it is closed.
+
+    Returns:
+        str | None: The ref; None when the command line holds no such ref.
+    """
     found = prompt is not None and _RUN_PROMPT.fullmatch(prompt)
     return (found.group(1).strip() or None) if found else None
 
@@ -392,7 +399,7 @@ def _preview_lines(prompt, preview, rows):
     The place counts the running run and the hand entries up to the new one; the merge head
     comes after it.
     """
-    ref = _typed_ref(prompt)
+    ref = typed_ref(prompt)
     if ref is None or preview is None or preview[0] != ref:
         return None
     result = preview[1]
@@ -608,7 +615,7 @@ def _prompt_key(state, key, frame):
         text, state.prompt = state.prompt, None
         if text == ":q":
             return True
-        if (ref := _typed_ref(text)) is not None:
+        if (ref := typed_ref(text)) is not None:
             state.run_ref = ref
         if text.startswith("/") and len(text) > 1:
             state.pattern = text[1:]
