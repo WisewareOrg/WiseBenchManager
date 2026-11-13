@@ -1,4 +1,7 @@
-"""Bench state: whether a run is executing, whether the bench is disabled, the timer's state."""
+"""Bench state: whether a run is executing, whether the bench is disabled, the timer's state.
+
+It also changes the timer and `DISABLED`: `stop_timer` and `enable`.
+"""
 
 import os
 import subprocess
@@ -9,6 +12,7 @@ from pathlib import Path
 from wisebench.config import Config
 
 DASH = "—"
+DISABLED = "DISABLED"
 
 
 @dataclass(frozen=True)
@@ -71,11 +75,71 @@ def timer_state(run_unit):
         str: "on" (exit 0), "off" (exit 3), or "—" for any other exit or a failed call.
     """
     try:
-        argv = ["systemctl", "--user", "is-active", f"{run_unit}.timer"]
-        done = subprocess.run(argv, capture_output=True, timeout=1)
+        done = _systemctl_run("is-active", run_unit)
     except (OSError, subprocess.SubprocessError):
         return DASH
     return {0: "on", 3: "off"}.get(done.returncode, DASH)
+
+
+def _systemctl_run(verb, run_unit):
+    """The `CompletedProcess` of `systemctl --user <verb> <run_unit>.timer`, text captured.
+
+    Raises:
+        OSError: `systemctl` could not be started.
+        subprocess.SubprocessError: The call timed out after 1 s.
+    """
+    argv = ["systemctl", "--user", verb, f"{run_unit}.timer"]
+    return subprocess.run(argv, capture_output=True, text=True, timeout=1)
+
+
+def _change_timer(verb, run_unit):
+    """Stop or start the run timer: None on success, else a message-ready failure text.
+
+    Args:
+        verb (str): "stop" or "start".
+        run_unit (str): The systemd unit base name.
+
+    Returns:
+        str | None: None on exit 0, else `systemctl failed: <detail>` -- stderr, else the exit
+            code, else the exception's text. Never raises.
+    """
+    try:
+        done = _systemctl_run(verb, run_unit)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"systemctl failed: {exc}"
+    if done.returncode == 0:
+        return None
+    return f"systemctl failed: {done.stderr.strip() or f'exit {done.returncode}'}"
+
+
+def stop_timer(run_unit):
+    """Stop the run timer; a run in progress is the `.service` and is left alone.
+
+    Args:
+        run_unit (str): The systemd unit base name.
+
+    Returns:
+        str | None: None on success, else a message-ready failure text.
+    """
+    return _change_timer("stop", run_unit)
+
+
+def enable(directory, run_unit):
+    """Remove `DISABLED` (absent is fine), then start the run timer.
+
+    Args:
+        directory (pathlib.Path): The records directory `DISABLED` sits in.
+        run_unit (str): The systemd unit base name.
+
+    Returns:
+        str | None: None on success, else a message-ready failure text; the timer is not
+            started when `DISABLED` cannot be removed.
+    """
+    try:
+        (Path(directory) / DISABLED).unlink(missing_ok=True)
+    except OSError as exc:
+        return f"cannot remove DISABLED: {exc}"
+    return _change_timer("start", run_unit)
 
 
 def read_run_unit(cwd):
@@ -107,6 +171,6 @@ def read_bench(directory, newest, run_unit, proc_root):
     """
     return Bench(
         live=newest is not None and is_live(directory, newest, proc_root),
-        disabled=(Path(directory) / "DISABLED").exists(),
+        disabled=(Path(directory) / DISABLED).exists(),
         timer=DASH if run_unit is None else timer_state(run_unit),
     )

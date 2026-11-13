@@ -1,9 +1,9 @@
 """Status: `bench status --watch`, the curses shell around `view` and `screen`.
 
 Once a second, and on every key, it reads the records and the bench once, resolves a frame, draws
-it and hands the next key to `view.handle` with that frame. Nothing here writes a file or takes a
-lock of its own: the Queue tab reads `Queue.entries` and `Queue.preview` on a background thread, and
-`:run` and `dd` call `Queue.add` and `Queue.remove`.
+it and hands the next key to `view.handle` with that frame. Nothing here takes a lock of its own:
+the Queue tab reads `Queue.entries` and `Queue.preview` on a background thread, `:run` and `dd` call
+`Queue.add` and `Queue.remove`, and `:disable` and `:enable` call `stop_timer` and `enable`.
 """
 
 import curses
@@ -19,7 +19,7 @@ from pathlib import Path
 from queue import SimpleQueue
 
 from wisebench import screen, view
-from wisebench.bench_state import read_bench, read_run_unit
+from wisebench.bench_state import enable, read_bench, read_run_unit, stop_timer
 from wisebench.queue import Queue
 from wisebench.records import Records
 
@@ -113,7 +113,8 @@ def _outcome(call):
 def _collect(results, reads, state):
     """Take every finished background read into `reads`; a failed `entries()` becomes a message.
 
-    The message is not set while the command line is open. The newest result of each kind wins.
+    The message is not set while the command line is open or `:enable` waits for its answer.
+    The newest result of each kind wins.
     """
     while not results.empty():
         kind, ref, outcome = results.get()
@@ -121,7 +122,7 @@ def _collect(results, reads, state):
         if kind == "preview":
             reads.preview = (ref, str(outcome) if isinstance(outcome, Exception) else outcome)
         elif isinstance(outcome, Exception):
-            if state.prompt is None:
+            if state.prompt is None and not state.confirm_enable:
                 state.message = str(outcome)
         else:
             reads.entries = outcome
@@ -151,8 +152,8 @@ def _request(queue, run, results, reads, state, now):
         run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(ref)))))
 
 
-def _perform(queue, reads, state):
-    """Carry out the `:run` and `dd` the view asked for, say how it went, and ask for a re-read."""
+def _perform(queue, reads, state, directory, run_unit):
+    """Carry out the `:run`, `dd`, `:disable` and `:enable` the view asked for."""
     if state.run_ref is not None:
         ref, state.run_ref = state.run_ref, None
         try:
@@ -175,6 +176,14 @@ def _perform(queue, reads, state):
                 f"removed queued run {entry_id}" if removed else f"no queued run {entry_id}"
             )
         reads.read_at = None
+    if state.disable_request or state.enable_request:
+        if run_unit is None:
+            state.message = "no [run] unit in bench.toml"
+        elif state.disable_request:
+            state.message = stop_timer(run_unit) or "bench disabled"
+        else:
+            state.message = enable(directory, run_unit) or "bench enabled"
+        state.disable_request = state.enable_request = False
 
 
 def _loop(window, directory, run=_background):
@@ -213,7 +222,7 @@ def _loop(window, directory, run=_background):
             continue
         if view.handle(state, _KEYS.get(key, key), frame):
             return 0
-        _perform(queue, reads, state)
+        _perform(queue, reads, state, directory, run_unit)
 
 
 def _attributes():

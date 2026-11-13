@@ -88,7 +88,7 @@ private_key = "/path/outside/the/tree/app.pem"
 check       = "bench"
 
 [run]
-unit        = "bench-run"  # bench run disables bench-run.timer on the bench's own failure
+unit        = "bench-run"  # bench run stops bench-run.timer on the bench's own failure
 ```
 
 `[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
@@ -240,15 +240,18 @@ curses screen refreshed once a second: Run shows the newest run's stages and the
 log, headed by bitbake's task progress while a build runs, Queue lists what waits (the running run,
 the runs queued by hand, then the merge queue's head) and History lists every run on disk. `Tab` and
 `Shift-Tab` cycle the views and `1` to `3` jump to one; in Queue, `:run <ref>` previews the ref as
-you type and `Enter` queues it, and `dd` removes the selected run queued by hand. It reads
-`records/*/bench.log`, each suite's `report.jsonl`, whether `records/DISABLED` exists, the holder of
-the `lock` file from `/proc/locks`, the run timer's state from `systemctl --user`, and `bench.toml`.
-It writes no file, takes no lock and runs no git itself: the Queue tab reads and changes the queue
-only through `Queue`, the same entry point as `bench test` and `bench unqueue`. No maintained viewer
-reads the runner's markers or joins them to pytest-reportlog's outcomes, so the view is the runner's
-own, on stdlib `curses`. Bitbake shows its task progress only on the terminal that ran the build, so
-the view reads bitbake's `NOTE:` lines from the log; and it asks the kernel's `/proc/locks` who
-holds the lock rather than `lslocks`, which resolves holders by path through `/proc/<pid>/fd`.
+you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
+the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes
+`DISABLED` and starts the timer. It reads `records/*/bench.log`, each suite's `report.jsonl`,
+whether `records/DISABLED` exists, the holder of the `lock` file from `/proc/locks`, the run timer's
+state from `systemctl --user`, and `bench.toml`. It takes no lock and runs no git itself. The Queue
+tab reads and changes the queue only through `Queue`, the same entry point as `bench test` and
+`bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`), and only
+`:disable` and `:enable` change the timer. No maintained viewer reads the runner's markers or joins
+them to pytest-reportlog's outcomes, so the view is the runner's own, on stdlib `curses`. Bitbake
+shows its task progress only on the terminal that ran the build, so the view reads bitbake's `NOTE:`
+lines from the log; and it asks the kernel's `/proc/locks` who holds the lock rather than `lslocks`,
+which resolves holders by path through `/proc/<pid>/fd`.
 
 ### Installing `bench run`
 
@@ -262,11 +265,11 @@ Link and start both units straight from this checkout: `systemctl --user enable 
 clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
 
 A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`, writes
-`DISABLED` beside the records and disables that timer. Clearing it is a by-hand step, not
-something `bench run` does itself: read `DISABLED`, remove it, then `systemctl --user enable
---now <unit>.timer` again. The run that faulted is not queued again; queue it again after clearing
-`DISABLED`. If the reason is a database error, remove `records/queue.db` as well; the runs queued by
-hand in it are lost.
+`DISABLED` beside the records and stops that timer. Clearing it is not something `bench run` does
+itself: read `DISABLED`, then `:enable` in `bench status --watch`, or by hand remove it and run
+`systemctl --user start <unit>.timer`. The run that faulted is not queued again; queue it again
+after clearing `DISABLED`. If the reason is a database error, remove `records/queue.db` as well;
+the runs queued by hand in it are lost.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

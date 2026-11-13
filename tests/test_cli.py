@@ -8,7 +8,7 @@ import signal
 import subprocess
 
 import pytest
-from helpers import repo_with_one_commit, stub_fetch
+from helpers import repo_with_one_commit, stop_argv, stub_fetch
 
 from wisebench import bench_run, bench_test, cli, queue
 from wisebench.lock import Lock
@@ -292,10 +292,10 @@ def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_pa
     assert made_run[0].run_calls == ["unused.yaml"]
 
 
-def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
-    bench_test_class, timer_disable, monkeypatch, tmp_path
+def test_main_run_on_sigterm_writes_disabled_and_stops_the_timer(
+    bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """main exits 2 on SIGTERM, writing DISABLED and disabling the timer."""
+    """main exits 2 on SIGTERM, writing DISABLED and stopping the timer."""
     _write_bench_toml(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LG_ENV", "unused.yaml")
@@ -338,7 +338,7 @@ def test_main_run_on_sigterm_writes_disabled_and_disables_the_timer(
 
     disabled = (tmp_path / "records" / "DISABLED").read_text().splitlines()
     assert "TimeoutStartSec" in disabled[1]
-    assert timer_disable == ["bench-run"]
+    assert systemctl.calls == [stop_argv("bench-run")]
 
     with Lock(tmp_path / "records"):
         pass

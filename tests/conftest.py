@@ -2,6 +2,7 @@
 
 import subprocess
 import time
+from pathlib import Path
 from unittest.mock import create_autospec
 
 import pytest
@@ -40,31 +41,78 @@ def bench_test_class(monkeypatch):
     return mock
 
 
-@pytest.fixture
-def timer_disable(monkeypatch):
-    """Fake BenchRun's timer-disable call and record the unit it names.
+ALLOWED_VERBS = ("is-active", "stop", "start")
 
-    Only `systemctl --user disable --now <unit>.timer` is faked (it succeeds); any other
-    command runs as before. A test that stubs `subprocess.run` further must pass `systemctl`
-    commands on to the `bench_run.subprocess.run` it finds in place.
+
+class Systemctl:
+    """The recorded `systemctl` calls and the answers they get.
+
+    Args:
+        calls (list[list[str]]): The argv of each call, in order.
+        invocations (list[tuple[list[str], dict]]): The argv and keyword arguments of each call.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self.invocations = []
+        self._answers = {}
+
+    def answer(self, verb, returncode=0, stderr="", raises=None):
+        """Set what every later `systemctl --user <verb> ...` call returns or raises.
+
+        Args:
+            verb (str): The systemctl verb, such as "stop".
+            returncode (int): The exit code.
+            stderr (str): The captured stderr text.
+            raises (BaseException | None): Raised instead of returning.
+        """
+        self._answers[verb] = (returncode, stderr, raises)
+
+    def run(self, command, **kwargs):
+        """Record the call and answer it; the stand-in for `subprocess.run`.
+
+        Raises:
+            AssertionError: The verb is not one of `is-active`, `stop` and `start`.
+        """
+        self.calls.append(list(command))
+        self.invocations.append((list(command), kwargs))
+        if command[2] not in ALLOWED_VERBS:
+            raise AssertionError(f"unexpected systemctl verb {command[2]!r}: {list(command)}")
+        default = (3, "", None) if command[2] == "is-active" else (0, "", None)
+        returncode, stderr, raises = self._answers.get(command[2], default)
+        if raises is not None:
+            raise raises
+        text = kwargs.get("text") or kwargs.get("universal_newlines")
+        empty = "" if text else b""
+        return subprocess.CompletedProcess(
+            command, returncode, stdout=empty, stderr=stderr if text else stderr.encode()
+        )
+
+
+@pytest.fixture(autouse=True)
+def systemctl(monkeypatch):
+    """Answer every `systemctl` call through `subprocess.run` with a recording fake.
+
+    The real binary never runs. By default `is-active` exits 3 and every other call exits 0;
+    `answer` overrides a verb. Other commands run as before. A test that stubs `subprocess.run`
+    further must pass `systemctl` commands on to the `subprocess.run` it finds in place.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Restores `subprocess.run` at teardown.
 
     Returns:
-        list[str]: The unit name of each disable call, in order.
+        Systemctl: The recorder.
     """
+    fake = Systemctl()
     real_run = subprocess.run
-    units = []
 
-    def run(command, **kwargs):
-        if command[:4] == ["systemctl", "--user", "disable", "--now"]:
-            units.append(command[4].removesuffix(".timer"))
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        return real_run(command, **kwargs)
+    def run(command, *args, **kwargs):
+        if Path(command[0]).name == "systemctl":
+            return fake.run(command, **kwargs)
+        return real_run(command, *args, **kwargs)
 
-    monkeypatch.setattr(bench_run.subprocess, "run", run)
-    return units
+    monkeypatch.setattr(subprocess, "run", run)
+    return fake
 
 
 @pytest.fixture

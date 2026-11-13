@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 
+from wisebench.bench_state import DISABLED, stop_timer
 from wisebench.bench_test import BenchTest, CandidateFailure
 from wisebench.check import Check
 from wisebench.queue import Queue
@@ -26,7 +27,7 @@ class BenchRun:
             checkout (pathlib.Path): The layer's clone this run reads the queue against,
                 fetches the job's ref into, and tests.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
-                names the systemd unit this run disables on the bench's own failure.
+                names the systemd unit this run stops on the bench's own failure.
             result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value.
 
         Raises:
@@ -50,10 +51,10 @@ class BenchRun:
 
         Raises:
             Exception: A failure that is this runner's own, not the candidate's -- the
-                `DISABLED` marker is written and `config.run_unit`'s timer disabled first, then
+                `DISABLED` marker is written and `config.run_unit`'s timer stopped first, then
                 this is re-raised as-is so the CLI exits 2.
         """
-        disabled_path = self._result_dir / "DISABLED"
+        disabled_path = self._result_dir / DISABLED
         if disabled_path.exists():
             print("bench run: disabled, see DISABLED")
             return
@@ -99,13 +100,9 @@ class BenchRun:
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""
             disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{reason}\n")
-            result = subprocess.run(
-                ["systemctl", "--user", "disable", "--now", f"{self.config.run_unit}.timer"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                print(f"bench run: systemctl failed: {result.stderr.strip()}", file=sys.stderr)
+            failure = stop_timer(self.config.run_unit)
+            if failure:
+                print(f"bench run: {failure}", file=sys.stderr)
             raise
 
     def _run_hand(self, entry, lg_env):

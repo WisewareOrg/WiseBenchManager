@@ -1163,3 +1163,66 @@ def test_no_preview_without_the_run_prompt_or_a_result():
 def test_the_running_row_shows_before_the_queue_has_been_read():
     frame = resolve([live("build")], LIVE, queue_state())
     assert [(r.marker, r.stage) for r in frame.queue_rows] == [("▶", "build")]
+
+
+ENABLE_PROMPT = "Enable the bench? Clears DISABLED and starts the timer. [y/N]"
+
+
+def requests(state):
+    """The three bench-change fields of `state`."""
+    return state.disable_request, state.enable_request, state.confirm_enable
+
+
+@pytest.mark.parametrize("opener", [":", ";"])
+def test_disable_with_enter_sets_the_disable_request_and_asks_nothing(opener):
+    state = view.State()
+    press(state, [run()], opener + "disable" + ENTER)
+    assert requests(state) == (True, False, False)
+    assert (state.prompt, state.message) == (None, None)
+
+
+@pytest.mark.parametrize("opener", [":", ";"])
+def test_enable_with_enter_asks_the_canvas_question_and_sets_no_request(opener):
+    state = view.State()
+    press(state, [run()], opener + "enable" + ENTER)
+    assert requests(state) == (False, False, True)
+    assert (state.prompt, state.message) == (None, ENABLE_PROMPT)
+
+
+@pytest.mark.parametrize("tab", ["run", "queue", "history", "help"])
+def test_y_after_enable_sets_the_enable_request_whatever_tab_shows(tab):
+    state = view.State(tab=tab, back="run")
+    press(state, [run()], ":enable" + ENTER + "y")
+    assert requests(state) == (False, True, False)
+    assert state.tab == tab
+
+
+@pytest.mark.parametrize("tab", ["run", "queue", "history", "help"])
+@pytest.mark.parametrize("key", ["n", "N", "x", "Y", "q", "2", "?", ":", "/", "d", ESC, ENTER])
+def test_any_other_key_after_enable_cancels_it_and_does_nothing_else(tab, key):
+    state = view.State(tab=tab, back="run")
+    quits = press(state, [run()], ":enable" + ENTER + key)
+    assert quits is False
+    assert requests(state) == (False, False, False)
+    assert (state.message, state.prompt, state.tab, state.pending) == (None, None, tab, None)
+
+
+def test_the_key_after_a_cancelled_enable_is_an_ordinary_key_again():
+    state = view.State()
+    press(state, [run()], ":enable" + ENTER + "n" + "2")
+    assert state.tab == "queue"
+    assert requests(state) == (False, False, False)
+
+
+@pytest.mark.parametrize("typed", [":disabled", ":disable now", ":enablex", ":enable now"])
+def test_near_miss_bench_commands_are_rejected_and_set_no_request(typed):
+    state = view.State()
+    press(state, [run()], typed + ENTER)
+    assert requests(state) == (False, False, False)
+    assert (state.prompt, state.message, state.run_ref, state.remove_id) == (None, None, None, None)
+
+
+def test_y_with_no_enable_pending_requests_nothing():
+    state = view.State()
+    press(state, [run()], "y")
+    assert requests(state) == (False, False, False)

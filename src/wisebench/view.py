@@ -1,10 +1,10 @@
 """View: what the user chose, the frame derived from it, and the keys that act on that frame.
 
-`State` holds the user's intent, and the commands (`run_ref`, `remove_id`) and message the shell
-exchanges with `handle`. `resolve` derives the `Frame` to show from it and one
-`Snapshot` of the disk; it is the only code that knows where anything sits. `screen.draw` draws
-that frame and `handle` acts on the same frame, so a row a key moves to is a row drawn. A field of
-`State` left None means "derive it every frame"; a value means the user chose it.
+`State` holds the user's intent, and the commands (`run_ref`, `remove_id`, `disable_request`,
+`enable_request`) and message the shell exchanges with `handle`. `resolve` derives the `Frame` to
+show from it and one `Snapshot` of the disk; it is the only code that knows where anything sits.
+`screen.draw` draws that frame and `handle` acts on the same frame, so a row a key moves to is a row
+drawn. A field of `State` left None means "derive it every frame"; a value means the user chose it.
 """
 
 import re
@@ -22,6 +22,7 @@ _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _ENTER = ("\n", "\r")
 _BACKSPACE = ("\x7f", "\b")
 _ESC = "\x1b"
+_ENABLE_PROMPT = "Enable the bench? Clears DISABLED and starts the timer. [y/N]"
 _TAB, _BTAB = "\t", "\x1b[Z"
 _TABS = ("run", "queue", "history")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
@@ -72,6 +73,10 @@ class State:
         run_ref (str | None): The ref `:run` asked to queue; the shell queues it and clears this.
         remove_id (int | None): The hand entry `dd` asked to remove; the shell removes it and
             clears this.
+        disable_request (bool): `:disable` asked to stop the timer; the shell does it and
+            clears this.
+        confirm_enable (bool): `:enable` asked and the next key answers y/N.
+        enable_request (bool): `y` confirmed `:enable`; the shell does it and clears this.
         message (str | None): The text shown in the command line's row while it is closed.
         scroll (int): The log scroll the last frame drew; written only from a frame.
         history_scroll (int): The History scroll the last frame drew; written only from a frame.
@@ -91,6 +96,9 @@ class State:
     queue_at: tuple | None = None
     run_ref: str | None = None
     remove_id: int | None = None
+    disable_request: bool = False
+    confirm_enable: bool = False
+    enable_request: bool = False
     message: str | None = None
     scroll: int = 0
     history_scroll: int = 0
@@ -567,6 +575,10 @@ def handle(state, key, frame):
     Returns:
         bool: True to quit.
     """
+    if state.confirm_enable:
+        state.confirm_enable, state.message = False, None
+        state.enable_request = key == "y"
+        return False
     if state.prompt is not None:
         return _prompt_key(state, key, frame)
     if state.tab == "help":
@@ -628,6 +640,10 @@ def _prompt_key(state, key, frame):
         text, state.prompt = state.prompt, None
         if text == ":q":
             return True
+        if text == ":disable":
+            state.disable_request = True
+        if text == ":enable":
+            state.confirm_enable, state.message = True, _ENABLE_PROMPT
         if (ref := typed_ref(text)) is not None:
             state.run_ref = ref
         if text.startswith("/") and len(text) > 1:

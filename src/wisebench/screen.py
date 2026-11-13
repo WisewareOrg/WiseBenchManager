@@ -25,7 +25,7 @@ _STAGES_WIDTH, _DIVIDER, _PANE = 34, 35, 37
 _START_COL, _TOOK_COL = 17, 27
 _BAR_CELLS = 33
 _NAME_MIN = 14
-_HELP_GAP = 3
+_HELP_GAP = 2  # the three Help columns must fit 80 columns
 _MARKER_WIDTH, _SOURCE_WIDTH, _WHAT_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 22, 9, 7
 _PROMPT_HINT = "Enter queue it  Esc cancel"
 _BODY_INDENT = " " * 6
@@ -63,7 +63,14 @@ _HELP = (
     ),
     (
         "commands",
-        [(":q", "quit"), (":run ref", "queue a ref"), ("?", "this screen"), ("q", "quit")],
+        [
+            (":q", "quit"),
+            (":run ref", "queue a ref"),
+            (":disable", "stop bench"),
+            (":enable", "start again"),
+            ("?", "this screen"),
+            ("q", "quit"),
+        ],
     ),
 )
 
