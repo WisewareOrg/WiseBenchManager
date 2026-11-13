@@ -1,4 +1,7 @@
-"""Bench state: whether a run is executing, whether the bench is disabled, the timer's state."""
+"""Bench state: whether a run is executing, whether the bench is disabled, the timer's state.
+
+It also changes the timer and `DISABLED`: `stop_timer` and `enable`.
+"""
 
 import os
 import subprocess

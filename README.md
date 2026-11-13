@@ -242,12 +242,12 @@ the runs queued by hand, then the merge queue's head) and History lists every ru
 `Shift-Tab` cycle the views and `1` to `3` jump to one; in Queue, `:run <ref>` previews the ref as
 you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
 the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes
-`DISABLED` and starts the timer. It reads
-`records/*/bench.log`, each suite's `report.jsonl`, whether `records/DISABLED` exists, the holder of
-the `lock` file from `/proc/locks`, the run timer's state from `systemctl --user`, and `bench.toml`.
-It takes no lock and runs no git itself. Only `:enable` writes a file (it removes `DISABLED`) and
-only `:disable` and `:enable` run `systemctl`. The Queue tab reads and changes the queue
-only through `Queue`, the same entry point as `bench test` and `bench unqueue`. No maintained viewer
+`DISABLED` and starts the timer. It reads `records/*/bench.log`, each suite's `report.jsonl`,
+whether `records/DISABLED` exists, the holder of the `lock` file from `/proc/locks`, the run timer's
+state from `systemctl --user`, and `bench.toml`. It takes no lock and runs no git itself. The Queue
+tab reads and changes the queue only through `Queue`, the same entry point as `bench test` and
+`bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`), and only
+`:disable` and `:enable` change the timer. No maintained viewer
 reads the runner's markers or joins them to pytest-reportlog's outcomes, so the view is the runner's
 own, on stdlib `curses`. Bitbake shows its task progress only on the terminal that ran the build, so
 the view reads bitbake's `NOTE:` lines from the log; and it asks the kernel's `/proc/locks` who

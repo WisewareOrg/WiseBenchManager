@@ -113,7 +113,7 @@ def _outcome(call):
 def _collect(results, reads, state):
     """Take every finished background read into `reads`; a failed `entries()` becomes a message.
 
-    The message is not set while the command line is open. The newest result of each kind wins.
+    The message is not set while the command line is open or `:enable` waits for its answer. The newest result of each kind wins.
     """
     while not results.empty():
         kind, ref, outcome = results.get()
@@ -121,7 +121,7 @@ def _collect(results, reads, state):
         if kind == "preview":
             reads.preview = (ref, str(outcome) if isinstance(outcome, Exception) else outcome)
         elif isinstance(outcome, Exception):
-            if state.prompt is None:
+            if state.prompt is None and not state.confirm_enable:
                 state.message = str(outcome)
         else:
             reads.entries = outcome
