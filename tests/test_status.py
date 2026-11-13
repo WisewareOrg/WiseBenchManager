@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 from helpers import (
+    FakeScreen,
     repo_with_one_commit,
+    terminal,
     write_bench_toml,
     write_lg_env,
     write_suite,
@@ -644,8 +646,6 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     the only `Queue` methods called are `entries`, `preview`, `add` and `remove` (stubbed)."""
     import curses
     import fcntl
-
-    from test_status_watch import FakeScreen, terminal
 
     from wisebench import queue
 

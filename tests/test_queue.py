@@ -1,8 +1,12 @@
 """`Queue`: the merge queue's head from `git ls-remote`; hand entries in `records/queue.db`."""
 
+import contextlib
 import json
+import os
+import signal
 import sqlite3
 import subprocess
+import time
 from contextlib import closing
 from datetime import datetime, timedelta
 
@@ -11,14 +15,22 @@ from helpers import repo_with_one_commit, stub_fetch
 
 from wisebench import bench_test, queue
 
+LS_REMOTE = [
+    "git",
+    "ls-remote",
+    "origin",
+    "refs/heads/main",
+    "refs/heads/gh-readonly-queue/main/*",
+]
+
 
 def _stub_git(
     monkeypatch, main_sha, ls_remote_lines, calls=None, kwargs_seen=None, main_lines=None
 ):
-    """Fake `queue.subprocess.run` for `git fetch` and the two `git ls-remote` reads.
+    """Fake `queue.subprocess.run` for `git fetch` and the one `git ls-remote` read.
 
-    `git ls-remote origin refs/heads/main` reports `main_sha`; the merge-queue pattern read
-    reports `ls_remote_lines`. Any other command fails the test.
+    The one `git ls-remote origin refs/heads/main refs/heads/gh-readonly-queue/main/*` reports
+    `main_sha` on `refs/heads/main` and then `ls_remote_lines`. Any other command fails the test.
 
     Args:
         main_sha (str): The sha `refs/heads/main` has on the remote.
@@ -37,14 +49,13 @@ def _stub_git(
             kwargs_seen.append(kwargs)
         if command[:2] == ["git", "fetch"]:
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        if command[:2] == ["git", "ls-remote"] and command[-1] == "refs/heads/main":
-            lines = main_lines if main_lines is not None else [f"{main_sha}\trefs/heads/main"]
+        if command == LS_REMOTE:
+            main = main_lines if main_lines is not None else [f"{main_sha}\trefs/heads/main"]
             return subprocess.CompletedProcess(
-                command, 0, stdout="".join(f"{line}\n" for line in lines), stderr=""
-            )
-        if command[:2] == ["git", "ls-remote"]:
-            return subprocess.CompletedProcess(
-                command, 0, stdout="\n".join(ls_remote_lines) + "\n", stderr=""
+                command,
+                0,
+                stdout="".join(f"{line}\n" for line in [*main, *ls_remote_lines]),
+                stderr="",
             )
         raise AssertionError(f"unexpected command: {command}")
 
@@ -86,7 +97,7 @@ def test_head_runs_no_fetch_and_reads_main_with_ls_remote(monkeypatch, tmp_path)
     _stub_git(monkeypatch, "cafef00d", [], calls=calls)
     queue.Queue(tmp_path, tmp_path / "records").head()
     assert ["git", "fetch", "origin"] not in calls
-    assert ["git", "ls-remote", "origin", "refs/heads/main"] in calls
+    assert calls == [LS_REMOTE]
     assert not any(command[:2] == ["git", "rev-parse"] for command in calls)
 
 
@@ -418,8 +429,7 @@ def test_take_fetches_origin_before_reading_main_or_the_queue(monkeypatch, tmp_p
     calls = []
     _stub_git(monkeypatch, "cafef00d", [], calls=calls)
     assert queue.Queue(tmp_path, tmp_path / "records").take() is None
-    assert calls[0] == ["git", "fetch", "origin"]
-    assert len(calls) == 3
+    assert calls == [["git", "fetch", "origin"], LS_REMOTE]
 
 
 def test_take_fetches_even_when_a_hand_entry_is_the_one_it_returns(hand, monkeypatch):
@@ -467,7 +477,10 @@ def _repo_with_unreachable_origin(path):
     return queue.Queue(path, path / "records")
 
 
-def test_a_failed_fetch_in_take_raises_bench_failure_with_the_first_stderr_line(tmp_path):
+def test_a_failed_fetch_in_take_raises_bench_failure_with_the_first_stderr_line(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("LC_ALL", "C")
     with pytest.raises(bench_test.BenchFailure) as failure:
         _repo_with_unreachable_origin(tmp_path).take()
     message = str(failure.value)
@@ -476,7 +489,10 @@ def test_a_failed_fetch_in_take_raises_bench_failure_with_the_first_stderr_line(
     assert "\n" not in message
 
 
-def test_a_failed_ls_remote_in_head_raises_bench_failure_with_the_first_stderr_line(tmp_path):
+def test_a_failed_ls_remote_in_head_raises_bench_failure_with_the_first_stderr_line(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("LC_ALL", "C")
     with pytest.raises(bench_test.BenchFailure) as failure:
         _repo_with_unreachable_origin(tmp_path).head()
     message = str(failure.value)
@@ -489,12 +505,7 @@ def test_a_failed_ls_remote_in_head_raises_bench_failure_with_the_first_stderr_l
     ("operation", "hung", "prefix"),
     [
         ("take", ["git", "fetch"], "git fetch: "),
-        ("head", ["git", "ls-remote", "origin", "refs/heads/main"], "git ls-remote: "),
-        (
-            "head",
-            ["git", "ls-remote", "origin", "refs/heads/gh-readonly-queue/main/*"],
-            "git ls-remote: ",
-        ),
+        ("head", LS_REMOTE, "git ls-remote: "),
     ],
 )
 def test_a_timed_out_network_call_raises_bench_failure(
@@ -514,13 +525,54 @@ def test_a_timed_out_network_call_raises_bench_failure(
     assert str(failure.value).startswith(prefix)
 
 
-def test_every_network_call_has_a_30_second_timeout_and_captured_stderr(monkeypatch, tmp_path):
+def _alive(pid):
+    """Whether `pid` is a running process; a zombie awaiting its reaper is not."""
+    try:
+        with open(f"/proc/{pid}/stat") as stat:
+            return stat.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+@pytest.mark.parametrize("operation", ["take", "head"])
+def test_a_timed_out_network_call_kills_git_and_every_process_it_started(
+    monkeypatch, tmp_path, operation
+):
+    bin_dir, pid_file = tmp_path / "bin", tmp_path / "grandchild.pid"
+    bin_dir.mkdir()
+    fake_git = bin_dir / "git"
+    fake_git.write_text(f"#!/bin/sh\nsleep 60 >/dev/null 2>&1 &\necho $! > {pid_file}\nwait\n")
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setattr(queue, "_NETWORK_TIMEOUT", 0.5)
+    try:
+        with pytest.raises(bench_test.BenchFailure, match="timed out"):
+            getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
+        grandchild = int(pid_file.read_text())
+        for _ in range(50):
+            if not _alive(grandchild):
+                break
+            time.sleep(0.02)
+        assert not _alive(grandchild)
+    finally:
+        if pid_file.exists():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
+@pytest.mark.parametrize(("operation", "count"), [("take", 2), ("head", 1)])
+def test_every_network_call_is_bounded_detached_never_prompting_and_captures_stderr(
+    monkeypatch, tmp_path, operation, count
+):
     calls, kwargs_seen = [], []
     _stub_git(monkeypatch, "cafef00d", [], calls=calls, kwargs_seen=kwargs_seen)
-    queue.Queue(tmp_path, tmp_path / "records").take()
-    assert len(calls) == 3
+    getattr(queue.Queue(tmp_path, tmp_path / "records"), operation)()
+    assert len(calls) == count
+    assert LS_REMOTE in calls
     for kwargs in kwargs_seen:
         assert kwargs["timeout"] == 30
+        assert kwargs["start_new_session"] is True
+        assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
         assert kwargs.get("capture_output") or kwargs.get("stderr") == subprocess.PIPE
 
 

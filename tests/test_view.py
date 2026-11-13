@@ -804,6 +804,31 @@ def test_j_k_gg_and_capital_g_move_the_queue_cursor_and_clamp(keys, at):
     assert resolve([run()], state=state, **read).queue_cursor == at
 
 
+def _crowded(count=29):
+    """`count` hand entries, more than a 24-row Queue pane draws, with refs r00, r01, ..."""
+    return [{**HAND1, "id": i + 1, "ref": f"r{i:02d}"} for i in range(count)]
+
+
+@pytest.mark.parametrize(
+    "keys",
+    ["G", "j" * 40, HALF_DOWN * 6, "j" * 25 + "G"],
+    ids=["G", "j past the end", "^d past the end", "j then G"],
+)
+def test_the_queue_cursor_stops_on_the_last_drawn_row_so_dd_never_acts_on_an_undrawn_one(keys):
+    entries = _crowded()
+    state = view.State()
+    press(state, [run()], "2" + keys, queue=entries)
+    frame = resolve([run()], state=state, queue=entries)
+    grid = Grid(*SIZE)
+    screen.draw(grid, frame)
+    drawn = "\n".join(grid.text(y) for y in range(grid.rows))
+    at = frame.queue_cursor
+    assert f"r{at:02d}" in drawn
+    assert f"r{at + 1:02d}" not in drawn
+    press(state, [run()], "dd", queue=entries)
+    assert state.remove_id == frame.queue_rows[at].id
+
+
 def test_the_queue_has_a_running_row_then_hand_entries_then_the_merge_head():
     frame = resolve(THREE, LIVE, queue_state(), queue=[HAND1, HAND2, MERGE])
     assert [(r.marker, r.source, r.what) for r in frame.queue_rows] == [

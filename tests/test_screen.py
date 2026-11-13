@@ -696,14 +696,39 @@ def test_the_help_lists_the_new_keys_and_no_longer_h_l():
     assert "prev / next view" not in text
 
 
-@pytest.mark.parametrize("size", [SIZE, (10, 40), (3, 5)])
-def test_the_queue_tab_draws_on_any_size_with_rows_a_preview_and_a_message(size):
-    queue_drawn([live("build")], LIVE, [HAND_ENTRY, MERGE_ENTRY], size=size)
-    queue_drawn(queue=None, size=size)
-    queue_drawn(
+@pytest.mark.parametrize("size", [SIZE, (24, 120), (40, 80), (50, 200)])
+def test_the_queue_tab_draws_on_every_size_it_is_drawn_at_with_rows_a_preview_and_a_message(size):
+    grid, _ = queue_drawn([live("build")], LIVE, [HAND_ENTRY, MERGE_ENTRY], size=size)
+    grid.find(r"merge queue +PR #14")
+    grid, _ = queue_drawn(queue=None, size=size)
+    grid.find(r"2 Queue")
+    grid, _ = queue_drawn(
         queue=[HAND_ENTRY], prompt=":run feature-c", preview=("feature-c", CLEAN), size=size
     )
-    queue_drawn(queue=[HAND_ENTRY], message="queued 5 1234567", size=size)
+    grid.find(r"joins as 2, after feature-a")
+    grid, frame = queue_drawn(queue=[HAND_ENTRY], message="queued 5 1234567", size=size)
+    assert "queued 5 1234567" in grid.text(frame.layout.prompt)
+
+
+def test_the_preview_box_clears_the_queue_rows_it_covers_and_everything_right_of_its_border():
+    crowded = [{**HAND_ENTRY, "id": i, "ref": f"feature-{i:02d}-a-long-branch"} for i in range(18)]
+    state = {"prompt": ":run feature-c", "preview": ("feature-c", CLEAN)}
+    grid, frame = queue_drawn(queue=crowded, **state)
+    top = grid.find(r"will queue")[0] - 1
+    bottom = grid.find(r"joins as 19, after feature-17")[0] + 1
+    assert top > frame.layout.pane_top
+    box = [grid.text(y).rstrip() for y in range(top, bottom + 1)]
+    assert all(row[0] in "┌│└" and row[-1] in "┐│┘" for row in box)
+    assert [row[1:-1].strip() for row in box[1:-1]] == frame.preview_lines
+    assert {len(row) for row in box} == {len(box[0])}
+
+
+def test_a_long_ref_in_the_run_prompt_is_not_overwritten_by_the_hint():
+    prompt = ":run " + "x" * 60
+    grid, frame = queue_drawn(prompt=prompt)
+    row = grid.text(frame.layout.prompt)
+    assert row.startswith(prompt)
+    assert "Enter queue it" not in row
 
 
 def test_the_selected_row_draws_on_the_selection_even_when_it_is_the_running_row():
