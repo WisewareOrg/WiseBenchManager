@@ -441,6 +441,13 @@ def test_dd_removes_the_hand_row_under_the_cursor_and_reads_the_queue_again(monk
     assert calls == [("entries",), ("remove", 3), ("entries",)]
 
 
+def test_a_successful_dd_says_which_run_was_removed(monkeypatch, tmp_path):
+    stub_queue(monkeypatch, entries=lambda: [HAND])
+    keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"]
+    fake = watch_with(monkeypatch, tmp_path, keys)
+    assert "removed queued run 3" in last_frame(fake)
+
+
 def test_dd_on_a_row_already_gone_says_there_is_no_such_run(monkeypatch, tmp_path):
     stub_queue(monkeypatch, entries=lambda: [HAND], remove=lambda entry_id: False)
     keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"]

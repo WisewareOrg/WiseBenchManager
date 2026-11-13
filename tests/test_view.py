@@ -829,6 +829,60 @@ def test_the_queue_cursor_stops_on_the_last_drawn_row_so_dd_never_acts_on_an_und
     assert state.remove_id == frame.queue_rows[at].id
 
 
+@pytest.mark.parametrize(
+    ("tab", "keys", "pending"),
+    [
+        ("queue", "d", "d"),
+        ("run", "g", "g"),
+        ("queue", "g", "g"),
+        ("history", "g", "g"),
+        ("run", "z", "z"),
+        ("run", "d", None),
+        ("history", "d", None),
+    ],
+    ids=[
+        "d on Queue",
+        "g on Run",
+        "g on Queue",
+        "g on History",
+        "z on Run",
+        "d off Queue",
+        "d on History",
+    ],
+)
+def test_the_frame_carries_the_first_key_of_a_pair_while_it_waits_for_the_second(
+    tab, keys, pending
+):
+    state = view.State(tab=tab)
+    press(state, THREE, keys, LIVE, queue=[HAND1, HAND2])
+    assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending == pending
+
+
+@pytest.mark.parametrize(
+    ("tab", "first", "second"),
+    [
+        ("queue", "d", "d"),
+        ("run", "g", "g"),
+        ("run", "z", "a"),
+        ("queue", "d", "j"),
+        ("queue", "d", ESC),
+    ],
+    ids=["dd", "gg", "za", "d then j", "d then Esc"],
+)
+def test_the_second_key_or_esc_clears_the_pending_key_from_the_frame(tab, first, second):
+    state = view.State(tab=tab)
+    press(state, THREE, first, LIVE, queue=[HAND1, HAND2])
+    assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending == first
+    press(state, THREE, second, LIVE, queue=[HAND1, HAND2])
+    assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending is None
+
+
+def test_a_pending_key_shifts_no_row_of_the_layout():
+    plain_frame = resolve(THREE, LIVE, queue_state(), queue=[HAND1])
+    waiting = resolve(THREE, LIVE, queue_state(pending="d"), queue=[HAND1])
+    assert waiting.layout == plain_frame.layout
+
+
 def test_the_queue_has_a_running_row_then_hand_entries_then_the_merge_head():
     frame = resolve(THREE, LIVE, queue_state(), queue=[HAND1, HAND2, MERGE])
     assert [(r.marker, r.source, r.what) for r in frame.queue_rows] == [

@@ -731,6 +731,23 @@ def test_a_long_ref_in_the_run_prompt_is_not_overwritten_by_the_hint():
     assert "Enter queue it" not in row
 
 
+@pytest.mark.parametrize(
+    ("tab", "pending"), [("queue", "d"), ("run", "g"), ("history", "z")], ids=["d", "g", "z"]
+)
+def test_a_pending_key_is_drawn_in_the_status_bar_just_left_of_the_keys_box(tab, pending):
+    grid, frame = drawn([run()], tab=tab, pending=pending)
+    bar = grid.text(frame.layout.bar)
+    keys = bar.index("? keys")
+    assert re.search(rf" {pending} +\? keys$", bar.rstrip())
+    assert bar[:keys].rstrip().endswith(pending) and keys == SIZE[1] - 6
+    assert bar.index("timer") < bar.rindex(pending)
+
+
+def test_no_pending_text_is_drawn_when_no_key_waits():
+    grid, frame = drawn([run()], tab="queue")
+    assert re.search(r"timer \w+ +\? keys$", grid.text(frame.layout.bar).rstrip())
+
+
 def test_the_selected_row_draws_on_the_selection_even_when_it_is_the_running_row():
     grid, _ = queue_drawn([live("build")], LIVE, queue=[HAND_ENTRY])
     for pattern in (r"▶", r"merge queue +PR #31 +a1b2c3d", r"running, build"):
