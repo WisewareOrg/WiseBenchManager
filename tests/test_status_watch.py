@@ -14,7 +14,7 @@ import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import COLS, ROWS, FakeScreen, start_argv, stop_argv, terminal
+from helpers import COLS, ROWS, FakeScreen, start_argv, stop_argv, terminal, write_bench_toml
 
 from wisebench import queue, screen, status
 
@@ -591,7 +591,9 @@ def bench_command(monkeypatch, tmp_path, keys, *, unit=True, disabled=True):
     directory = tmp_path / "records"
     directory.mkdir(exist_ok=True)
     if unit:
-        (tmp_path / "bench.toml").write_text(UNIT_TABLE)
+        write_bench_toml(tmp_path)
+        with open(tmp_path / "bench.toml", "a") as f:
+            f.write(UNIT_TABLE)
     if disabled:
         (directory / "DISABLED").write_text("2026-11-13T00:00:00+00:00\nboom\n")
     return watch_with(monkeypatch, tmp_path, keys), directory
@@ -620,7 +622,7 @@ def test_disable_with_no_disabled_file_writes_none(monkeypatch, tmp_path, system
 
 
 def test_enable_asks_first_and_changes_nothing_until_y(monkeypatch, tmp_path, systemctl):
-    fake, directory = bench_command(monkeypatch, tmp_path, [*":enable", "\n", TIMEOUT, "q"])
+    fake, directory = bench_command(monkeypatch, tmp_path, [*":enable", "\n", TIMEOUT, "q", "q"])
     assert changes(systemctl) == []
     assert (directory / "DISABLED").exists()
     assert any(ASK in "\n".join(frame) for frame in fake.frames)
