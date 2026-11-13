@@ -87,7 +87,9 @@ class Queue:
         if process.returncode:
             if network:
                 lines = err.strip().splitlines()
-                raise BenchFailure(f"git {args[0]}: {lines[0] if lines else 'failed'}")
+                raise BenchFailure(
+                    f"git {args[0]}: {lines[0] if lines else f'exit status {process.returncode}'}"
+                )
             raise subprocess.CalledProcessError(process.returncode, ["git", *args], out, err)
         return out
 
