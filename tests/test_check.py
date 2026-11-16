@@ -23,28 +23,12 @@ class FakeRepository:
         self.calls.append(kwargs)
 
 
-class FakeRequester:
-    """Records every `graphql_query` call and answers `(headers, response)`.
-
-    `data` is the whole GraphQL response, `{"data": {...}}`, as PyGithub returns it.
-    """
-
-    def __init__(self):
-        self.data = {}
-        self.calls = []
-
-    def graphql_query(self, query, variables):
-        self.calls.append((query, variables))
-        return {}, self.data
-
-
 class FakeGithub:
     """Records every `get_repo` call; `get_repo` returns the one `FakeRepository`."""
 
     def __init__(self, repository):
         self._repository = repository
         self.get_repo_calls = []
-        self.requester = FakeRequester()
 
     def get_repo(self, full_name_or_id):
         self.get_repo_calls.append(full_name_or_id)
@@ -177,23 +161,39 @@ def test_post_never_calls_github_integration_on_an_invalid_conclusion(
 
 
 def _serve(monkeypatch, response):
-    """Make every `GithubIntegration` the check builds answer `graphql_query` with `response`."""
-    original = FakeGithubIntegration.get_repo_installation
+    """Make the check's installation a real `Github` whose HTTP call returns `response` as the body.
 
-    def capture(self, owner, name):
-        installation = original(self, owner, name)
-        installation.github.requester.data = response
-        return installation
+    Only `Requester.requestJsonAndCheck` is replaced, so PyGithub's own `graphql_query` runs.
 
-    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
-    monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
+    Returns:
+        list[dict]: The input (query and variables) of each request, in order.
+    """
+    sent = []
+
+    def request(self, verb, url, parameters=None, headers=None, input=None, **kwargs):
+        sent.append(input)
+        return {}, response
+
+    class Installation:
+        def get_github_for_installation(self):
+            return Github(auth=Auth.Token("unused"))
+
+    class Integration:
+        def __init__(self, *, auth):
+            pass
+
+        def get_repo_installation(self, owner, name):
+            return Installation()
+
+    monkeypatch.setattr(Requester, "requestJsonAndCheck", request)
+    monkeypatch.setattr(check, "GithubIntegration", Integration)
+    return sent
 
 
 def test_merge_queue_parses_a_recorded_response_into_entries_in_githubs_order(
     monkeypatch, private_key_path
 ):
-    FakeGithubIntegration.instances = []
-    _serve(monkeypatch, json.loads((FIXTURES / "merge_queue_response.json").read_text()))
+    sent = _serve(monkeypatch, json.loads((FIXTURES / "merge_queue_response.json").read_text()))
 
     entries = check.Check("acme/layer", 1, private_key_path, "bench").merge_queue()
 
@@ -214,10 +214,10 @@ def test_merge_queue_parses_a_recorded_response_into_entries_in_githubs_order(
             "sha": None,
         },
     ]
-    ((query, variables),) = FakeGithubIntegration.instances[0].installation.github.requester.calls
-    assert variables == {"o": "acme", "n": "layer"}
-    assert 'mergeQueue(branch:"main")' in query
-    assert "entries(first:50)" in query
+    (request,) = sent
+    assert request["variables"] == {"owner": "acme", "name": "layer"}
+    assert 'mergeQueue(branch: "main")' in request["query"]
+    assert "entries(first: 50)" in request["query"]
 
 
 def test_merge_queue_of_an_empty_queue_is_empty(monkeypatch, private_key_path):

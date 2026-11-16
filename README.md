@@ -26,8 +26,8 @@ bench status --watch           # the run in progress, what waits to run, and eve
 `bench test` runs nothing. It resolves the ref to a commit in the bench checkout, queues the run in
 `records/queue.db`, and prints `queued <id> <sha> place <n>`: the id for `bench unqueue`, the commit
 the run will build, and its place among the runs queued by hand. A ref that does not resolve to a
-commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the merge
-queue's head, one entry per start; to run one now, start `bench run` by hand. A run queued by hand
+commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the first
+merge-queue entry GitHub has built, one entry per start; to run one now, start `bench run` by hand. A run queued by hand
 posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an entry cannot be removed
 (ADR 0005 rev 1).
 

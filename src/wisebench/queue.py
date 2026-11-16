@@ -172,6 +172,7 @@ class Queue:
             OSError: `<checkout>/bench.toml` could not be read.
             ValueError: `bench.toml` has no complete `[github]` table.
             github.GithubException: PyGithub's own call failed.
+            jwt.exceptions.InvalidKeyError: The App's private key is malformed.
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
         with closing(self._db()) as db:
@@ -219,6 +220,7 @@ class Queue:
             OSError: `<checkout>/bench.toml` could not be read.
             ValueError: `bench.toml` has no complete `[github]` table.
             github.GithubException: PyGithub's own call failed.
+            jwt.exceptions.InvalidKeyError: The App's private key is malformed.
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
         entries = self.entries()

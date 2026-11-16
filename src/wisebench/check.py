@@ -5,10 +5,20 @@ from pathlib import Path
 from github import Auth, GithubIntegration
 
 _CONCLUSIONS = ("success", "failure")
-_MERGE_QUEUE = (
-    'query($o:String!,$n:String!){repository(owner:$o,name:$n){mergeQueue(branch:"main")'
-    "{entries(first:50){nodes{pullRequest{number title} headCommit{oid}}}}}}"
-)
+_MERGE_QUEUE = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    mergeQueue(branch: "main") {
+      entries(first: 50) {
+        nodes {
+          pullRequest { number title }
+          headCommit { oid }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 class Check:
@@ -73,7 +83,7 @@ class Check:
             jwt.exceptions.InvalidKeyError: the App's private key is malformed.
         """
         _, data = self._github().requester.graphql_query(
-            _MERGE_QUEUE, {"o": self._owner, "n": self._name}
+            _MERGE_QUEUE, {"owner": self._owner, "name": self._name}
         )
         queue = data["data"]["repository"]["mergeQueue"]
         if queue is None:

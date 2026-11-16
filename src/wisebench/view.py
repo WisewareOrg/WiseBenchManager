@@ -333,6 +333,11 @@ def _layout(rows, cols, prompt_row):
     )
 
 
+def _pr_label(entry):
+    """A merge-queue entry's `what`: `PR #<n> <title>`."""
+    return f"PR #{entry['pr']} {entry['title']}"
+
+
 def _queue_rows(snap):
     """The Queue tab's rows: the running run, the hand entries, then the merge-queue entries.
 
@@ -346,16 +351,19 @@ def _queue_rows(snap):
         opened = next((s for s in run.stages if s.state == "open"), None)
         checkout = next((s for s in run.stages if s.name == "checkout"), None)
         running_sha = checkout.sha if checkout else None
-        titled = next(
-            (e for e in snap.queue or [] if e["kind"] == "run" and run.pr and e["pr"] == run.pr),
-            None,
-        )
-        title = f" {titled['title']}" if titled else ""
+        what = run.ref or ""
+        if run.pr:
+            what = f"PR #{run.pr}"
+            merge_entry = next(
+                (e for e in snap.queue or [] if e["kind"] == "run" and e["pr"] == run.pr), None
+            )
+            if merge_entry:
+                what = _pr_label(merge_entry)
         rows.append(
             QueueRow(
                 _RUNNING,
                 "by hand" if run.kind == "test" else "merge queue",
-                f"PR #{run.pr}{title}" if run.pr else run.ref or "",
+                what,
                 (running_sha or "")[:7],
                 "",
                 opened.name if opened else "",
@@ -375,7 +383,7 @@ def _queue_rows(snap):
             QueueRow(
                 str(len(rows) + 1),
                 "by hand" if hand else "merge queue",
-                entry["ref"] if hand else f"PR #{entry['pr']} {entry['title']}",
+                entry["ref"] if hand else _pr_label(entry),
                 (entry["sha"] or "")[:7],
                 added,
                 "",

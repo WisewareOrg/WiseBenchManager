@@ -27,7 +27,7 @@ _START_COL, _TOOK_COL = 17, 27
 _BAR_CELLS = 33
 _NAME_MIN = 14
 _HELP_GAP = 2  # the three Help columns must fit 80 columns
-_MARKER_WIDTH, _SOURCE_WIDTH, _WHAT_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 26, 9, 7
+_MARKER_WIDTH, _SOURCE_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 9, 7
 _RUNNING_STAGE = "running, {}"
 _RUNNING_STAGE_WIDTH = max(len(_RUNNING_STAGE.format(name)) for name in (*STAGES, POSTED))
 _PROMPT_HINT = "Enter queue it  Esc cancel"
@@ -479,10 +479,10 @@ def _section_head(surface, y, row, running, now, bg):
 def _what_width(cols):
     """The width of the Queue tab's `what` column at `cols` columns.
 
-    The room the other columns and the longest running stage leave, at least `_WHAT_WIDTH`.
+    The room the other columns and the longest running stage leave.
     """
     others = _MARKER_WIDTH + _SOURCE_WIDTH + _SHA_WIDTH + _ADDED_WIDTH + _RUNNING_STAGE_WIDTH
-    return max(_WHAT_WIDTH, cols - others)
+    return cols - others
 
 
 def _queue(surface, frame):
