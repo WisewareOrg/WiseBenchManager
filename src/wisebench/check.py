@@ -1,4 +1,4 @@
-"""Check: posts a run's verdict as a GitHub check run, authenticated as a GitHub App."""
+"""Check: posts a run's verdict as a GitHub check run and reads the merge queue, as a GitHub App."""
 
 from pathlib import Path
 
@@ -12,7 +12,9 @@ _MERGE_QUEUE = (
 
 
 class Check:
-    """One check run per `post`, authenticated as a GitHub App installed on one repository.
+    """One check run per `post`, and the merge queue by `merge_queue`, as a GitHub App.
+
+    The App is installed on one repository.
 
     Holds the repository's owner and name, split from "owner/name", the app's authentication
     and the check run's name; calls PyGithub's `GithubIntegration` and the objects it returns,
