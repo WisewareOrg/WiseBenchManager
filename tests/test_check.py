@@ -1,10 +1,16 @@
 """`Check.post`: one completed check run through PyGithub's app authentication."""
 
+import json
+from pathlib import Path
+
 import pytest
 from github import Auth, Github, GithubIntegration, Repository
 from github.Installation import Installation
+from github.Requester import Requester
 
 from wisebench import check
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeRepository:
@@ -70,6 +76,8 @@ def test_pygithub_app_auth_chain_exists_on_the_installed_version():
     assert hasattr(Installation, "get_github_for_installation")
     assert hasattr(Github, "get_repo")
     assert hasattr(Repository.Repository, "create_check_run")
+    assert hasattr(Github, "requester")
+    assert hasattr(Requester, "graphql_query")
 
 
 def test_init_raises_oserror_when_the_private_key_path_is_missing(tmp_path):
@@ -150,3 +158,77 @@ def test_post_never_calls_github_integration_on_an_invalid_conclusion(
     one = check.Check("acme/layer", 1, private_key_path, "bench")
     with pytest.raises(ValueError):
         one.post("deadbeef", conclusion, "title", "summary")
+
+
+def _serve(monkeypatch, response):
+    """Make the check's installation a real `Github` whose HTTP call returns `response` as the body.
+
+    Only `Requester.requestJsonAndCheck` is replaced, so PyGithub's own `graphql_query` runs.
+
+    Returns:
+        list[dict]: The input (query and variables) of each request, in order.
+    """
+    sent = []
+
+    def request(self, verb, url, parameters=None, headers=None, input=None, **kwargs):
+        sent.append(input)
+        return {}, response
+
+    class Installation:
+        def get_github_for_installation(self):
+            return Github(auth=Auth.Token("unused"))
+
+    class Integration:
+        def __init__(self, *, auth):
+            pass
+
+        def get_repo_installation(self, owner, name):
+            return Installation()
+
+    monkeypatch.setattr(Requester, "requestJsonAndCheck", request)
+    monkeypatch.setattr(check, "GithubIntegration", Integration)
+    return sent
+
+
+def test_merge_queue_parses_a_recorded_response_into_entries_in_githubs_order(
+    monkeypatch, private_key_path
+):
+    sent = _serve(monkeypatch, json.loads((FIXTURES / "merge_queue_response.json").read_text()))
+
+    entries = check.Check("acme/layer", 1, private_key_path, "bench").merge_queue()
+
+    assert entries == [
+        {
+            "pr": 327,
+            "title": "chore(deps): lock file maintenance",
+            "sha": "8d534d9120f0859443d92cfa05a88b02d1dc786e",
+        },
+        {
+            "pr": 323,
+            "title": "chore(deps): update example-layer digest to f071746",
+            "sha": None,
+        },
+        {
+            "pr": 325,
+            "title": "chore(deps): update dependency astral-sh/uv to v0.13.8",
+            "sha": None,
+        },
+    ]
+    (request,) = sent
+    assert request["variables"] == {"owner": "acme", "name": "layer"}
+    assert 'mergeQueue(branch: "main")' in request["query"]
+    assert "entries(first: 50)" in request["query"]
+
+
+def test_merge_queue_of_an_empty_queue_is_empty(monkeypatch, private_key_path):
+    nodes = {"entries": {"nodes": []}}
+    _serve(monkeypatch, {"data": {"repository": {"mergeQueue": nodes}}})
+    assert check.Check("acme/layer", 1, private_key_path, "bench").merge_queue() == []
+
+
+def test_merge_queue_of_a_repository_without_a_merge_queue_raises_naming_the_repository(
+    monkeypatch, private_key_path
+):
+    _serve(monkeypatch, {"data": {"repository": {"mergeQueue": None}}})
+    with pytest.raises(ValueError, match="acme/layer has no merge queue on main"):
+        check.Check("acme/layer", 1, private_key_path, "bench").merge_queue()

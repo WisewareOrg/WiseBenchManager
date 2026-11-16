@@ -1,7 +1,6 @@
 """BenchRun: one `bench run` cycle -- the next queue entry, through `BenchTest`."""
 
 import os
-import subprocess
 import sys
 from datetime import UTC, datetime
 
@@ -25,7 +24,7 @@ class BenchRun:
 
         Args:
             checkout (pathlib.Path): The layer's clone this run reads the queue against,
-                fetches the job's ref into, and tests.
+                and tests.
             config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
                 names the systemd unit this run stops on the bench's own failure.
             result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value.
@@ -67,9 +66,7 @@ class BenchRun:
             if entry["kind"] == "test":
                 self._run_hand(entry, lg_env)
                 return
-            ref, sha, pr = entry["ref"], entry["sha"], entry["pr"]
-
-            subprocess.run(["git", "fetch", "origin", ref], cwd=self.checkout, check=True)
+            sha, pr = entry["sha"], entry["pr"]
 
             check = Check(
                 self.config.github_repo,

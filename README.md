@@ -9,10 +9,11 @@ decisions are in [`docs/decisions/`](docs/decisions/README.md).
 
 ```sh
 bench run                      # on a timer: take one entry -- the oldest run queued by hand, else the
-                               # merge queue's head -- build it, run the suites (the layer's own
-                               # fixture installs it on the board); a merge-queue entry's pass or
-                               # fail is reported to GitHub, a run queued by hand posts nothing; if
-                               # the bench itself broke, post nothing and stop the timer
+                               # first built merge-queue entry -- build it, run the suites (the
+                               # layer's own fixture installs it on the board); a merge-queue
+                               # entry's pass or fail is reported to GitHub, a run queued by hand
+                               # posts nothing; if the bench itself broke, post nothing and stop
+                               # the timer
 bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: queue a run of <ref> and return; the
                                # next `bench run` takes it; --set names a replay set for tests that
@@ -25,10 +26,10 @@ bench status --watch           # the run in progress, what waits to run, and eve
 `bench test` runs nothing. It resolves the ref to a commit in the bench checkout, queues the run in
 `records/queue.db`, and prints `queued <id> <sha> place <n>`: the id for `bench unqueue`, the commit
 the run will build, and its place among the runs queued by hand. A ref that does not resolve to a
-commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the merge
-queue's head, one entry per start; to run one now, start `bench run` by hand. A run queued by hand
-posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an entry cannot be removed
-(ADR 0005 rev 2).
+commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the first
+merge-queue entry GitHub has built, one entry per start; to run one now, start `bench run` by hand.
+A run queued by hand posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an
+entry cannot be removed (ADR 0005 rev 1).
 
 `bench test` does not fetch: it resolves the ref in the bench checkout, which refreshes `origin/*` on
 every idle tick. For a branch pushed since, run `git fetch origin <branch>` there first. Queue from
@@ -94,9 +95,10 @@ unit        = "bench-run"  # bench run stops bench-run.timer on the bench's own 
 `[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
 layer's own repository, `app_id` the App's id, `private_key` a filesystem path to the App's
 PEM-encoded private key outside any tree (`~` is expanded), `check` the check run's name,
-exactly as the layer's ruleset lists it as a required check. A run queued by hand does not read
-`[github]`; a `bench.toml` without the table is fine for it. `Check`, built only for a merge-queue
-entry, raises if any of the four is missing.
+exactly as the layer's ruleset lists it as a required check. `Queue` builds a `Check` from the
+table whenever it reads the merge queue -- `bench run` on every tick and `bench status --watch` --
+so a `bench.toml` without the table fails those reads, a run queued by hand included; `bench test`
+and `bench unqueue` never read it. `Check` raises if any of the four is missing.
 
 For a merge-queue entry, `bench run` calls:
 
@@ -230,15 +232,16 @@ That env file, and everything else naming this board, lives in the layer, not he
 The runner is cloned on the pipeline host and run from its checkout at a tag; the record names the
 tag. `bench run` is started by a systemd user timer and holds a `fcntl.flock` on a `lock` file
 beside the records for the whole of a run; it backs off with exit 0 if the lock is already held. It
-asks `Queue.take()` for one entry: the oldest run queued by hand, else `Queue.head()`'s merge queue
-head entry -- the `gh-readonly-queue` ref whose own base is `origin/main`'s current tip, read with
-`git ls-remote` -- whose verdict it posts as a GitHub check run (`Check.post`). A waiting run queued
-by hand starts only when that read of the merge queue succeeds: a `git fetch` or `ls-remote` fault,
-or more than one qualifying ref, writes `DISABLED` as on any tick, before the hand entry runs.
+asks `Queue.take()` for one entry: the oldest run queued by hand, else the first merge-queue entry
+GitHub has built, read from the first 50 entries of GitHub's GraphQL merge queue as the bench's
+GitHub App (`Check.merge_queue`), whose verdict it posts as a GitHub check run (`Check.post`). A
+waiting run queued by hand starts only when that read of the merge queue succeeds: a `git fetch`
+fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before the hand entry
+runs.
 `bench status --watch` is the view of all of it, run from the directory `bench run` runs in. It is a
 curses screen refreshed once a second: Run shows the newest run's stages and the selected stage's
 log, headed by bitbake's task progress while a build runs, Queue lists what waits (the running run,
-the runs queued by hand, then the merge queue's head) and History lists every run on disk. `Tab` and
+the runs queued by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and
 `Shift-Tab` cycle the views and `1` to `3` jump to one; in Queue, `:run <ref>` previews the ref as
 you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
 the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes

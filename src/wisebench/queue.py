@@ -1,35 +1,34 @@
-"""Queue: runs queued by hand in `records/queue.db`, then the merge queue's head entry."""
+"""Queue: runs queued by hand in `records/queue.db`, then the GitHub merge queue's entries."""
 
 import contextlib
 import json
 import os
-import re
 import signal
 import sqlite3
 import subprocess
 from contextlib import closing
 
 from wisebench.bench_test import BenchFailure
+from wisebench.check import Check
+from wisebench.config import Config
 
-_REF_RE = re.compile(r"pr-(\d+)-([0-9a-f]+)")
 _NETWORK_TIMEOUT = 30
 
 
 class Queue:
-    """Runs queued by hand, then the GitHub merge queue's head entry, for one checkout.
+    """Runs queued by hand, then the GitHub merge queue's entries, for one checkout.
 
-    Hand entries live in the `queue` table of `<directory>/queue.db`; the merge queue's head is
-    read with `git ls-remote` against the checkout. `entries()` defines the run order and `take()`
-    claims its first entry; `head()` is swappable for a different queue adapter (e.g. Mergify)
-    behind the same signature.
+    Hand entries live in the `queue` table of `<directory>/queue.db`; the merge queue is read
+    from GitHub's GraphQL API through `Check`, built from the `[github]` table of the checkout's
+    `bench.toml`. `entries()` defines the run order and `take()` claims its first entry.
     """
 
     def __init__(self, checkout, directory):
         """Bind one Queue to a checkout and the directory holding `queue.db`.
 
         Args:
-            checkout (pathlib.Path): The layer's clone `git fetch`, `git ls-remote` and
-                `git rev-parse` run in.
+            checkout (pathlib.Path): The layer's clone `git fetch` and `git rev-parse` run in,
+                and whose `bench.toml` names the repository the merge queue is read from.
             directory (pathlib.Path): The records directory `queue.db` sits in; created on first
                 use.
         """
@@ -160,17 +159,21 @@ class Queue:
         return entry_id, sha, place
 
     def entries(self):
-        """List what waits, in run order: hand entries oldest first, then the merge queue's head.
+        """List what waits, in run order: hand entries oldest first, then the merge queue.
 
-        Runs `head()`, which reads `origin` but fetches nothing.
+        Reads the merge queue from GitHub; fetches nothing.
 
         Returns:
             list[dict]: A hand entry is `{kind: "test", id, added, ref, sha, set, skip_build,
-            args}`; the merge head is `{kind: "run", ref, sha, pr}`.
+            args}`; a merge-queue entry is `{kind: "run", pr, title, sha}`, in GitHub's order,
+            `sha` None while GitHub has not built it.
 
         Raises:
-            BenchFailure: More than one merge-queue ref qualifies, or `git ls-remote` failed or
-                timed out.
+            OSError: `<checkout>/bench.toml` could not be read.
+            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+                merge queue on `main`.
+            github.GithubException: PyGithub's own call failed.
+            jwt.exceptions.InvalidKeyError: The App's private key is malformed.
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
         with closing(self._db()) as db:
@@ -179,9 +182,14 @@ class Queue:
             {"kind": "test", "id": id_, "added": added, **json.loads(entry)}
             for id_, added, entry in rows
         ]
-        head = self.head()
-        if head is not None:
-            entries.append({"kind": "run", **head})
+        config = Config.load(self.checkout / "bench.toml")
+        check = Check(
+            config.github_repo,
+            config.github_app_id,
+            config.github_private_key,
+            config.github_check,
+        )
+        entries.extend({"kind": "run", **entry} for entry in check.merge_queue())
         return entries
 
     def remove(self, entry_id):
@@ -198,9 +206,10 @@ class Queue:
             return db.execute("DELETE FROM queue WHERE id = ?", (entry_id,)).rowcount == 1
 
     def take(self):
-        """Claim the first waiting entry: the oldest hand entry, else the merge queue's head.
+        """Claim the first waiting entry: the oldest hand entry, else the first built merge entry.
 
-        Fetches `origin` first.
+        Reads the queue, then fetches `origin`, which brings that commit; the read comes first so an
+        entry GitHub builds meanwhile is never read without its commit.
 
         A hand entry is deleted when claimed, so it is never returned again whatever its run's
         outcome; one removed in the meantime is skipped.
@@ -209,55 +218,20 @@ class Queue:
             dict | None: The claimed entry as `entries()` lists it, or None when nothing waits.
 
         Raises:
-            BenchFailure: More than one merge-queue ref qualifies, or `git fetch` or `git
-                ls-remote` failed or timed out.
+            BenchFailure: `git fetch` failed or timed out.
+            OSError: `<checkout>/bench.toml` could not be read.
+            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+                merge queue on `main`.
+            github.GithubException: PyGithub's own call failed.
+            jwt.exceptions.InvalidKeyError: The App's private key is malformed.
             sqlite3.DatabaseError: `queue.db` is unreadable.
         """
+        entries = self.entries()
         self._git(["fetch", "origin"], network=True)
-        for entry in self.entries():
-            if entry["kind"] == "run" or self.remove(entry["id"]):
+        for entry in entries:
+            if entry["kind"] == "run":
+                if entry["sha"] is not None:
+                    return entry
+            elif self.remove(entry["id"]):
                 return entry
         return None
-
-    def head(self):
-        """Read the queue entry whose own base is `origin/main`'s current tip.
-
-        Reads `main`'s tip and `refs/heads/gh-readonly-queue/main/*` from `origin` with one
-        `git ls-remote`, fetching nothing, and keeps the refs named `pr-<PR_NUMBER>-<BASE_SHA>`
-        whose `<BASE_SHA>` equals that tip; a stale entry (based on an earlier tip) reads as no
-        job, the same as an empty queue.
-
-        Returns:
-            dict | None: `{ref, sha, pr}`: the ref name, the ref's own sha (the commit to build,
-            from `git ls-remote`'s own column, not the ref name) and the PR number the ref names,
-            or None when no ref qualifies.
-
-        Raises:
-            BenchFailure: More than one ref qualifies, `origin` has no `refs/heads/main`, or
-                `git ls-remote` failed or timed out.
-        """
-        remote = self._git(
-            [
-                "ls-remote",
-                "origin",
-                "refs/heads/main",
-                "refs/heads/gh-readonly-queue/main/*",
-            ],
-            network=True,
-        )
-        refs = [line.split("\t") for line in remote.splitlines() if line]
-        main = next((sha for sha, ref in refs if ref == "refs/heads/main"), None)
-        if main is None:
-            raise BenchFailure("origin has no refs/heads/main")
-
-        matches = []
-        for sha, ref in refs:
-            match = _REF_RE.fullmatch(ref.rsplit("/", 1)[-1])
-            if match and match.group(2) == main:
-                matches.append({"ref": ref, "sha": sha, "pr": int(match.group(1))})
-
-        if not matches:
-            return None
-        if len(matches) > 1:
-            raise BenchFailure("more than one gh-readonly-queue ref based on origin/main")
-        return matches[0]

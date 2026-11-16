@@ -165,12 +165,16 @@ class QueueRow:
         marker (str): "▶" for the running run, else its place in the queue, the running run
             counting as 1.
         source (str): "by hand" or "merge queue".
-        what (str): "PR #<n>" when the run has a PR, else its ref.
-        sha7 (str): The commit's first 7 characters; blank until known.
+        what (str): A merge-queue entry reads "PR #<n> <title>"; the running run likewise when the
+            merge queue holds an entry with its PR, else "PR #<n>", or its ref when it has no
+            PR; a hand entry its ref.
+        sha7 (str): The commit's first 7 characters; blank until known (a merge-queue entry
+            GitHub has not built).
         added (str): A hand entry's local `HH:MM`; blank for the others.
         stage (str): The running run's open stage; blank for the others.
         kind (str): "test" or "run".
-        id (int | None): A hand entry's id; None for the running run and the merge head.
+        id (int | None): A hand entry's id; None for the running run and the merge-queue entries.
+        pr (int | None): A merge-queue entry's PR number; None for the others.
     """
 
     marker: str
@@ -181,6 +185,7 @@ class QueueRow:
     stage: str
     kind: str
     id: int | None
+    pr: int | None
 
 
 @dataclass(frozen=True)
@@ -211,7 +216,7 @@ class Frame:
         history_room (int): How many History rows are drawn.
         focus (str): "stages" or "log", the pane with focus.
         queue_rows (list[QueueRow]): The Queue tab's rows: the running run, the hand entries,
-            then the merge head.
+            then the merge-queue entries.
         queue_cursor (int | None): Index of the Queue selection; None without rows.
         preview_lines (list[str] | None): The preview box's lines while `:run <ref>` is typed and
             its result is in; None otherwise.
@@ -328,11 +333,17 @@ def _layout(rows, cols, prompt_row):
     )
 
 
-def _queue_rows(snap):
-    """The Queue tab's rows: the running run, the hand entries, then the merge head.
+def _pr_label(entry):
+    """A merge-queue entry's `what`: `PR #<n> <title>`."""
+    return f"PR #{entry['pr']} {entry['title']}"
 
-    The running run is the newest run while the bench is running it. The merge head is left out
-    while its sha is the sha the running run checked out.
+
+def _queue_rows(snap):
+    """The Queue tab's rows: the running run, the hand entries, then the merge-queue entries.
+
+    The running run is the newest run while the bench is running it. A merge-queue entry is left
+    out while its sha is the sha the running run checked out; the running run takes its title
+    from the entry with its PR number.
     """
     rows, running_sha = [], None
     if snap.bench.live and snap.runs:
@@ -340,20 +351,29 @@ def _queue_rows(snap):
         opened = next((s for s in run.stages if s.state == "open"), None)
         checkout = next((s for s in run.stages if s.name == "checkout"), None)
         running_sha = checkout.sha if checkout else None
+        what = run.ref or ""
+        if run.pr:
+            what = f"PR #{run.pr}"
+            merge_entry = next(
+                (e for e in snap.queue or [] if e["kind"] == "run" and e["pr"] == run.pr), None
+            )
+            if merge_entry:
+                what = _pr_label(merge_entry)
         rows.append(
             QueueRow(
                 _RUNNING,
                 "by hand" if run.kind == "test" else "merge queue",
-                f"PR #{run.pr}" if run.pr else run.ref or "",
+                what,
                 (running_sha or "")[:7],
                 "",
                 opened.name if opened else "",
                 run.kind or "",
                 None,
+                None,
             )
         )
     for entry in snap.queue or []:
-        if entry["kind"] == "run" and entry["sha"] == running_sha:
+        if entry["kind"] == "run" and entry["sha"] is not None and entry["sha"] == running_sha:
             continue
         hand = entry["kind"] == "test"
         added = (
@@ -363,12 +383,13 @@ def _queue_rows(snap):
             QueueRow(
                 str(len(rows) + 1),
                 "by hand" if hand else "merge queue",
-                entry["ref"] if hand else f"PR #{entry['pr']}",
-                entry["sha"][:7],
+                entry["ref"] if hand else _pr_label(entry),
+                (entry["sha"] or "")[:7],
                 added,
                 "",
                 entry["kind"],
                 entry["id"] if hand else None,
+                None if hand else entry["pr"],
             )
         )
     return rows
@@ -378,7 +399,7 @@ def _identity(row):
     """What keeps the Queue selection on a row as rows come and go."""
     if row.marker == _RUNNING:
         return ("running",)
-    return ("hand", row.id) if row.id is not None else ("merge",)
+    return ("hand", row.id) if row.id is not None else ("merge", row.pr)
 
 
 def _queue_room(lay):
@@ -417,8 +438,8 @@ def typed_ref(prompt):
 def _preview_lines(prompt, preview, rows):
     """The preview box for the ref typed after `:run `, once its result is in; else None.
 
-    The place counts the running run and the hand entries up to the new one; the merge head
-    comes after it.
+    The place counts the running run and the hand entries up to the new one; the merge-queue
+    entries come after it.
     """
     ref = typed_ref(prompt)
     if ref is None or preview is None or preview[0] != ref:

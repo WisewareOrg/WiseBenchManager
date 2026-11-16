@@ -1,14 +1,13 @@
 # 0005 — Queue runs by hand in an SQLite table beside the records; each tick takes one before the merge queue's head
 
 **Status:** accepted
-**Decided:** 2026-11-12 (WisewareOrg/WiseBenchManager #60 Queue behaviour)
-**Rev:** 2
+**Decided:** 2026-11-16 (WisewareOrg/WiseBenchManager #72 Queue tab shows the whole merge queue)
+**Rev:** 1
 
 ## Revisions
 
-- **rev 2** — 2026-11-13 — decision 5 restated: `take()` fetches `origin` and `entries()` does not,
-  so the watch view's read writes nothing into `.git` and may be made by a view (#23 Queue view).
-- **rev 1** — 2026-11-12 — first written (#60 Queue behaviour).
+- **rev 1** — 2026-11-16 — first written (#60 Queue behaviour; #23 Queue view; #72 Queue tab shows
+  the whole merge queue).
 
 ## Context
 
@@ -27,7 +26,7 @@ What the choice is held to:
 ## Decision
 
 **A systemd timer still starts one `bench run` per tick, and each tick takes one entry: the oldest
-run queued by hand, else the merge queue's head.**
+run queued by hand, else the first merge-queue entry GitHub has built.**
 
 1. **The wait stays one tick.** It is about a minute against runs of ten minutes to four hours, and a
    resident process would need the queue on disk anyway.
@@ -42,10 +41,13 @@ run queued by hand, else the merge queue's head.**
    nq) are second schedulers.
 4. **`Queue` is the one entry point.** `add`, `entries` and `remove` serve the terminal and the
    watch view, `preview` the watch view alone; `take` serves `bench run`. The order is defined once, in `entries()`.
-5. **The merge queue is read live, as its refs show it, the head only.** `take()` runs
-   `git fetch origin` and `entries()` does not; `head()` reads `main`'s tip and the queue with
-   `git ls-remote`. No snapshot of the merge queue is kept, so none can
-   go stale during a run.
+5. **The merge queue is read live and in full, from GitHub's GraphQL API.** `Queue` reads
+   `repository.mergeQueue(branch: "main").entries` through PyGithub, as the bench's GitHub App of
+   `bench.toml`'s `[github]` table, and lists every entry in GitHub's order with its PR number, title
+   and merge-group commit, which GitHub gives an entry only once it builds it. `take()` reads
+   the queue, then runs `git fetch origin`, which brings the commit of every entry still queued or
+   merged when it runs, and takes the first entry that has one; `entries()` fetches nothing. No
+   snapshot of the merge queue is kept, so none can go stale during a run.
 6. **The commit is resolved when the run is queued, in the bench checkout, without a fetch.** The run
    builds that commit and refuses a dirty tree when it starts, and its record reads
    `kind=test ref=<as typed>`. A run queued by hand may carry `--skip-build`; a merge-queue run
@@ -68,8 +70,8 @@ run queued by hand, else the merge queue's head.**
 - **A queue library or a job runner.** See decision 3: each was measured or read and rejected there.
 - **A hand-written spool directory** (one file per entry). Rejected: it is our code doing what SQLite
   does, with its own id scheme, ordering and atomic claim.
-- **Reading the merge queue in full through GitHub's GraphQL API.** Rejected: the refs show only the
-  entry GitHub is building, and the head is all the bench runs.
+- **Reading the merge queue from the `gh-readonly-queue` refs with `git ls-remote`.** Rejected: GitHub
+  makes a ref only for the entry it is building, so the Queue tab showed that entry alone.
 - **Keeping the fetch in `entries()`**, with `--no-optional-locks`. Rejected: a fetch from the watch
   can race the tick's own fetch on ref locks and fail the run, which writes `DISABLED`.
 - **Skipping the watch's reads while a run is live.** Rejected: the Queue tab would stay stale for the
@@ -80,17 +82,16 @@ run queued by hand, else the merge queue's head.**
 
 - **The hand queue is state between runs,** kept in `records/queue.db`.
 - **`bench test` shows no PASS or FAIL;** the verdict is in the record, read with `bench status --watch`.
-- **A waiting hand entry runs only when the merge-queue read succeeds:** a `git fetch` or `ls-remote`
-  fault, or more than one qualifying `gh-readonly-queue` ref, writes `DISABLED` as it does on any tick,
-  before the hand entry runs.
+- **A waiting hand entry runs only when the merge-queue read succeeds:** a `git fetch` fault or a
+  failed read of GitHub's API writes `DISABLED` as it does on any tick, before the hand entry runs.
 - **A hand entry is deleted when taken:** if its run ends in a bench fault, the record shows `run
   error`, `DISABLED` is written, and the entry is not re-queued.
 - **An unreadable `queue.db` is a bench fault** (`sqlite3.DatabaseError`); recovery removes the file,
   and the runs queued by hand in it are lost.
 - **An entry queued outside the bench checkout, or with another `BENCH_RESULT_DIR`, is never taken.**
 - **`take()` fetches and `entries()` does not,** so a view's read writes nothing into `.git` and cannot
-  collide with a run's git. `entries()` still reaches `origin` with `git ls-remote`, each call bounded by a
-  timeout, so a view reads it off its draw path.
+  collide with a run's git. `entries()` still reaches GitHub's API, bounded by PyGithub's own timeout,
+  so a view reads it off its draw path.
 
 **Premise that would reopen this:** hand runs needing to start within seconds; GitHub building more
 than one merge-queue entry at a time; organisation policy permitting a resident bench process.

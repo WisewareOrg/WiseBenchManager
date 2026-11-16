@@ -556,12 +556,7 @@ HAND_ENTRY = {
     "args": [],
 }
 HAND_ENTRY_2 = {**HAND_ENTRY, "id": 4, "added": "2026-11-10T03:40:00+00:00", "ref": "feature-b"}
-MERGE_ENTRY = {
-    "kind": "run",
-    "ref": "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
-    "sha": "9f8e7d6" + "0" * 33,
-    "pr": 14,
-}
+MERGE_ENTRY = {"kind": "run", "pr": 14, "title": "Fix slot", "sha": "9f8e7d6" + "0" * 33}
 CLEAN = {"sha": "1234567" + "0" * 33, "subject": "Fix the thing", "clean": True}
 
 
@@ -594,7 +589,7 @@ def test_the_queue_header_names_the_columns_in_dim_and_the_rows_follow_in_order(
     }
     first, _, _ = grid.find(r"^1 +by hand +feature-a +1111111 +06:15")
     second, _, _ = grid.find(r"^2 +by hand +feature-b +1111111 +06:40")
-    third, _, _ = grid.find(r"^3 +merge queue +PR #14 +9f8e7d6 *$")
+    third, _, _ = grid.find(r"^3 +merge queue +PR #14 Fix slot +9f8e7d6 *$")
     assert head < first and (second, third) == (first + 1, first + 2)
 
 
@@ -604,13 +599,37 @@ def test_by_hand_is_blue_and_the_cursor_row_is_on_the_selection():
     assert {cell[2] for cell in grid.span(r"by hand +feature-a +1111111 +06:15")} == {
         screen.SELECTION
     }
-    assert {cell[2] for cell in grid.span(r"merge queue +PR #14 +9f8e7d6")} == {None}
+    assert {cell[2] for cell in grid.span(r"merge queue +PR #14 Fix slot +9f8e7d6")} == {None}
 
 
 def test_moving_the_cursor_moves_the_selection_with_it():
     grid, _ = queue_drawn(queue=[HAND_ENTRY, MERGE_ENTRY], keys="j")
-    assert {cell[2] for cell in grid.span(r"merge queue +PR #14 +9f8e7d6")} == {screen.SELECTION}
+    assert {cell[2] for cell in grid.span(r"merge queue +PR #14 Fix slot +9f8e7d6")} == {
+        screen.SELECTION
+    }
     assert {cell[2] for cell in grid.span(r"by hand +feature-a +1111111 +06:15")} == {None}
+
+
+def test_a_merge_row_draws_the_canvas_what_uncut_and_a_long_title_cut():
+    entry = {**MERGE_ENTRY, "title": "Add slot check"}
+    long = {**MERGE_ENTRY, "pr": 15, "title": "A title much longer than the column"}
+    grid, _ = queue_drawn(queue=[entry, long])
+    grid.find(r"merge queue +PR #14 Add slot check +9f8e7d6")
+    grid.find(r"merge queue +PR #15 A title much long +9f8e7d6")
+
+
+def test_a_wide_screen_gives_the_what_column_the_room_it_leaves():
+    title = "chore(deps): update example-layer digest to e0b994c"
+    wide = {**MERGE_ENTRY, "pr": 326, "title": title}
+    grid, _ = queue_drawn(queue=[wide], size=(24, 130))
+    grid.find(rf"merge queue +PR #326 {re.escape(title)} +9f8e7d6")
+    grid.find(r"source +what {40,}sha +added")
+
+
+@pytest.mark.parametrize("stage", [*runlog.STAGES, runlog.POSTED])
+def test_the_longest_running_stage_still_fits_the_80_column_queue_row(stage):
+    grid, _ = queue_drawn([live(stage)], LIVE, queue=[])
+    grid.find(rf"running, {stage} *$")
 
 
 def test_the_running_row_is_a_marker_a_tint_and_the_amber_running_stage():
@@ -701,7 +720,7 @@ def test_the_help_lists_the_new_keys_and_no_longer_h_l():
 @pytest.mark.parametrize("size", [SIZE, (24, 120), (40, 80), (50, 200)])
 def test_the_queue_tab_draws_on_every_size_it_is_drawn_at_with_rows_a_preview_and_a_message(size):
     grid, _ = queue_drawn([live("build")], LIVE, [HAND_ENTRY, MERGE_ENTRY], size=size)
-    grid.find(r"merge queue +PR #14")
+    grid.find(r"merge queue +PR #14 Fix slot")
     grid, _ = queue_drawn(queue=None, size=size)
     grid.find(r"2 Queue")
     grid, _ = queue_drawn(

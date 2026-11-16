@@ -53,10 +53,11 @@ HAND2 = {
 }
 MERGE = {
     "kind": "run",
-    "ref": "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
-    "sha": "9f8e7d6" + "0" * 33,
     "pr": 14,
+    "title": "Add slot check",
+    "sha": "9f8e7d6" + "0" * 33,
 }
+WAITING = {"kind": "run", "pr": 15, "title": "Fix probe", "sha": None}
 NOT_REMOVABLE = "only hand-queued runs can be removed"
 
 
@@ -883,13 +884,13 @@ def test_a_pending_key_shifts_no_row_of_the_layout():
     assert waiting.layout == plain_frame.layout
 
 
-def test_the_queue_has_a_running_row_then_hand_entries_then_the_merge_head():
+def test_the_queue_has_a_running_row_then_hand_entries_then_the_merge_entry():
     frame = resolve(THREE, LIVE, queue_state(), queue=[HAND1, HAND2, MERGE])
     assert [(r.marker, r.source, r.what) for r in frame.queue_rows] == [
         ("▶", "merge queue", "PR #31"),
         ("2", "by hand", "feature-a"),
         ("3", "by hand", "feature-b"),
-        ("4", "merge queue", "PR #14"),
+        ("4", "merge queue", "PR #14 Add slot check"),
     ]
 
 
@@ -898,12 +899,55 @@ def test_with_no_running_run_the_markers_start_at_1():
     assert [r.marker for r in frame.queue_rows] == ["1", "2", "3"]
 
 
-def test_the_merge_head_is_hidden_when_its_sha_equals_the_running_sha():
+def test_a_merge_entry_is_hidden_when_its_sha_equals_the_running_sha():
     same = {**MERGE, "sha": SHA}
     frame = resolve([live("build")], LIVE, queue_state(), queue=[HAND1, same])
     assert [r.marker for r in frame.queue_rows] == ["▶", "2"]
     idle = resolve([live("build")], IDLE, queue_state(), queue=[HAND1, same])
     assert [r.marker for r in idle.queue_rows] == ["1", "2"]
+
+
+def test_a_merge_entry_with_no_sha_draws_an_empty_sha_and_is_not_the_running_one():
+    hand_run = live("checkout", kind="test", pr=None, ref="feature-a", sha=None)
+    rows = resolve([hand_run], LIVE, queue_state(), queue=[WAITING]).queue_rows
+    assert [(r.what, r.sha7) for r in rows] == [("feature-a", ""), ("PR #15 Fix probe", "")]
+
+
+def test_the_cursor_keeps_its_merge_queue_row_by_pr_when_rows_before_it_go_away():
+    state = view.State()
+    press(state, [run()], "2jj", queue=[HAND1, MERGE, WAITING])
+    after = resolve([run()], state=state, queue=[MERGE, WAITING])
+    assert (after.queue_cursor, after.queue_rows[after.queue_cursor].what) == (
+        1,
+        "PR #15 Fix probe",
+    )
+
+
+def test_the_cursor_follows_a_merge_queue_pr_that_moves_to_another_position():
+    state = view.State()
+    press(state, [run()], "2jk", queue=[MERGE, WAITING])
+    after = resolve([run()], state=state, queue=[WAITING, MERGE])
+    assert (after.queue_cursor, after.queue_rows[after.queue_cursor].what) == (
+        1,
+        "PR #14 Add slot check",
+    )
+
+
+def test_the_running_row_takes_its_title_from_the_merge_entry_with_its_pr():
+    same = {**MERGE, "pr": 31, "sha": SHA, "title": "Add slot check"}
+    (row, *_) = resolve([live("build")], LIVE, queue_state(), queue=[same]).queue_rows
+    assert row.what == "PR #31 Add slot check"
+
+
+def test_the_running_row_keeps_its_title_when_the_merge_group_is_rebuilt_mid_run():
+    rebuilt = {**MERGE, "pr": 31, "sha": "e" * 40, "title": "Add slot check"}
+    rows = resolve([live("build")], LIVE, queue_state(), queue=[rebuilt]).queue_rows
+    assert [r.what for r in rows] == ["PR #31 Add slot check", "PR #31 Add slot check"]
+
+
+def test_the_running_row_stays_pr_only_when_no_merge_entry_has_its_pr():
+    (row, *_) = resolve([live("build")], LIVE, queue_state(), queue=[MERGE]).queue_rows
+    assert row.what == "PR #31"
 
 
 def test_a_queue_not_read_yet_has_no_rows_and_no_cursor():
@@ -924,9 +968,14 @@ def test_a_hand_row_carries_its_ref_sha7_local_added_time_kind_and_id(local_zone
     assert (row.stage, row.kind, row.id) == ("", "test", 3)
 
 
-def test_the_merge_head_row_has_its_pr_sha7_no_added_time_and_no_id():
+def test_a_merge_entry_row_has_its_pr_sha7_no_added_time_and_no_id():
     (row,) = resolve([run()], IDLE, queue_state(), queue=[MERGE]).queue_rows
-    assert (row.source, row.what, row.sha7, row.added) == ("merge queue", "PR #14", "9f8e7d6", "")
+    assert (row.source, row.what, row.sha7, row.added) == (
+        "merge queue",
+        "PR #14 Add slot check",
+        "9f8e7d6",
+        "",
+    )
     assert (row.stage, row.kind, row.id) == ("", "run", None)
 
 
@@ -1005,7 +1054,7 @@ def test_after_dd_the_cursor_is_the_next_row_once_the_read_lands():
     assert after.queue_cursor == 0 and after.queue_rows[0].id == 4
 
 
-def test_after_dd_of_the_last_hand_row_the_cursor_is_the_merge_head():
+def test_after_dd_of_the_last_hand_row_the_cursor_is_the_merge_entry():
     state = view.State()
     press(state, [run()], "2jdd", queue=[HAND1, HAND2, MERGE])
     after = resolve([run()], state=state, queue=[HAND1, MERGE])
@@ -1025,7 +1074,7 @@ def test_the_cursor_keeps_its_hand_row_when_rows_before_it_go_away():
     assert (after.queue_cursor, after.queue_rows[after.queue_cursor].id) == (0, 4)
 
 
-def test_the_cursor_keeps_the_merge_head_when_a_hand_row_is_added_before_it():
+def test_the_cursor_keeps_a_merge_entry_when_a_hand_row_is_added_before_it():
     state = view.State()
     third = {**HAND1, "id": 5, "ref": "feature-c"}
     press(state, [run()], "2G", queue=[HAND1, HAND2, MERGE])

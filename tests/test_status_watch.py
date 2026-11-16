@@ -345,10 +345,10 @@ def test_while_the_queue_shows_it_is_read_every_30_seconds(monkeypatch, tmp_path
 def test_a_failed_read_shows_the_bench_failure_text_and_the_view_goes_on(monkeypatch, tmp_path):
     from wisebench.bench_test import BenchFailure
 
-    boom = BenchFailure("git ls-remote: fatal: boom")
+    boom = BenchFailure("merge queue read failed")
     stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(boom))
     fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
-    assert "git ls-remote: fatal: boom" in last_frame(fake)
+    assert "merge queue read failed" in last_frame(fake)
 
 
 def test_a_failed_read_keeps_the_last_good_rows(monkeypatch, tmp_path):
@@ -455,8 +455,8 @@ def test_dd_on_a_row_already_gone_says_there_is_no_such_run(monkeypatch, tmp_pat
     assert "no queued run 3" in last_frame(fake)
 
 
-def test_dd_on_the_merge_head_refuses_and_calls_remove_for_nothing(monkeypatch, tmp_path):
-    merge = {"kind": "run", "ref": "refs/heads/q/pr-14-cafef00d", "sha": "9" * 40, "pr": 14}
+def test_dd_on_a_merge_entry_refuses_and_calls_remove_for_nothing(monkeypatch, tmp_path):
+    merge = {"kind": "run", "pr": 14, "title": "Add slot check", "sha": "9" * 40}
     calls = stub_queue(monkeypatch, entries=lambda: [merge])
     keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, "q"]
     fake = watch_with(monkeypatch, tmp_path, keys)
