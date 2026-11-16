@@ -455,7 +455,7 @@ def test_dd_on_a_row_already_gone_says_there_is_no_such_run(monkeypatch, tmp_pat
     assert "no queued run 3" in last_frame(fake)
 
 
-def test_dd_on_the_merge_head_refuses_and_calls_remove_for_nothing(monkeypatch, tmp_path):
+def test_dd_on_a_merge_entry_refuses_and_calls_remove_for_nothing(monkeypatch, tmp_path):
     merge = {"kind": "run", "pr": 14, "title": "Add slot check", "sha": "9" * 40}
     calls = stub_queue(monkeypatch, entries=lambda: [merge])
     keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, "q"]

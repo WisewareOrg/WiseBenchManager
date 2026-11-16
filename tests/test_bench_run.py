@@ -475,7 +475,7 @@ def test_run_of_an_entry_queued_by_the_real_queue_reaches_bench_test_with_what_w
     assert systemctl.calls == []
 
 
-def test_run_routes_on_kind_so_a_merge_head_carrying_an_id_still_takes_the_merge_path(
+def test_run_routes_on_kind_so_a_merge_entry_carrying_an_id_still_takes_the_merge_path(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
     """A merge entry is run as kind=run with a Check even if it has an `id` key."""

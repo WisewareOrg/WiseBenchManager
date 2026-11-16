@@ -170,7 +170,8 @@ class Queue:
 
         Raises:
             OSError: `<checkout>/bench.toml` could not be read.
-            ValueError: `bench.toml` has no complete `[github]` table.
+            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+                merge queue on `main`.
             github.GithubException: PyGithub's own call failed.
             jwt.exceptions.InvalidKeyError: The App's private key is malformed.
             sqlite3.DatabaseError: `queue.db` is unreadable.
@@ -207,7 +208,8 @@ class Queue:
     def take(self):
         """Claim the first waiting entry: the oldest hand entry, else the first built merge entry.
 
-        Reads the queue, then fetches `origin`, which brings that commit.
+        Reads the queue, then fetches `origin`, which brings that commit; the read comes first so an
+        entry GitHub builds meanwhile is never read without its commit.
 
         A hand entry is deleted when claimed, so it is never returned again whatever its run's
         outcome; one removed in the meantime is skipped.
@@ -218,7 +220,8 @@ class Queue:
         Raises:
             BenchFailure: `git fetch` failed or timed out.
             OSError: `<checkout>/bench.toml` could not be read.
-            ValueError: `bench.toml` has no complete `[github]` table.
+            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+                merge queue on `main`.
             github.GithubException: PyGithub's own call failed.
             jwt.exceptions.InvalidKeyError: The App's private key is malformed.
             sqlite3.DatabaseError: `queue.db` is unreadable.
