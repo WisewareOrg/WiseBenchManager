@@ -149,17 +149,21 @@ def _request(queue, run, results, reads, state, now):
     elif ref != reads.asked and "preview" not in reads.pending:
         reads.asked = ref
         reads.pending.add("preview")
-        run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(ref)))))
+        source, name = view.split_run(ref)
+        where = () if source is None else (source,)
+        run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(name, *where)))))
 
 
 def _perform(queue, reads, state, directory, run_unit):
     """Carry out the `:run`, `dd`, `:disable` and `:enable` the view asked for."""
     if state.run_ref is not None:
         ref, state.run_ref = state.run_ref, None
+        source, name = view.split_run(ref)
+        where = () if source is None else (source,)
         try:
-            entry_id, sha, _ = queue.add(ref, None, False, [])
+            entry_id, sha, _ = queue.add(name, None, False, [], *where)
         except subprocess.CalledProcessError:
-            state.message = f"{ref} does not resolve to a commit"
+            state.message = f"{name} does not resolve to a commit"
         except Exception as exc:
             state.message = str(exc)
         else:

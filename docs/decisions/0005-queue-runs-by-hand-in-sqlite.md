@@ -7,8 +7,9 @@
 ## Revisions
 
 - **rev 2** — 2026-11-16 — the queue lives in the clone `bench` is installed from, and the ref
-  resolves in that clone's `checkout/`, from any directory (decisions 3, 6 and 10; the "never taken"
-  consequence removed; one alternative added; #74 one-bench defect).
+  resolves in that clone's `checkout/`, or in a directory named with `-C`, from any directory
+  (decisions 3, 6 and 10; the "never taken" consequence removed; two alternatives added; #74
+  one-bench defect).
 - **rev 1** — 2026-11-16 — first written (#60 Queue behaviour; #23 Queue view; #72 Queue tab shows
   the whole merge queue).
 
@@ -51,7 +52,9 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    the queue, then runs `git fetch origin`, which brings the commit of every entry still queued or
    merged when it runs, and takes the first entry that has one; `entries()` fetches nothing. No
    snapshot of the merge queue is kept, so none can go stale during a run.
-6. **The commit is resolved when the run is queued, in the bench's own checkout, `<clone>/checkout`, without a fetch.** The run
+6. **The commit is resolved when the run is queued, in the bench's own checkout, `<clone>/checkout`, without a fetch of `origin`.** The run
+   With `-C <dir>`, the ref resolves in `<dir>` instead and the commit is fetched from `<dir>` into
+   the checkout by `git fetch --no-write-fetch-head <dir> <sha>`, which writes objects only. The run
    builds that commit and refuses a dirty tree when it starts, and its record reads
    `kind=test ref=<as typed>`. A run queued by hand may carry `--skip-build`; a merge-queue run
    never skips the build.
@@ -82,6 +85,10 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
 - **State relative to the working directory.** Rejected: every directory `bench` was started in
   became its own bench, with its own queue, history and lock, so a second run could drive the board
   beside the timer's and a watch showed nothing of a run started elsewhere.
+- **Pinning each fetched commit with a ref per entry.** Rejected: a ref write brings back the race
+  on ref locks with the tick's `git fetch origin`.
+- **Fetching from `<dir>` when the entry is taken.** Rejected: the source tree would have to still
+  hold the commit when the entry runs.
 - **Accepting the collision risk.** Rejected: a watch could then disable the bench.
 
 ## Consequences
@@ -94,6 +101,8 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
   error`, `DISABLED` is written, and the entry is not re-queued.
 - **An unreadable `queue.db` is a bench fault** (`sqlite3.DatabaseError`); recovery removes the file,
   and the runs queued by hand in it are lost.
+- **A commit fetched from `-C <dir>` has no ref pinning it.** Git's default two-week prune grace is
+  what keeps it for a queued wait.
 - **`take()` fetches and `entries()` does not,** so a view's read writes nothing into `.git` and cannot
   collide with a run's git. `entries()` still reaches GitHub's API, bounded by PyGithub's own timeout,
   so a view reads it off its draw path.

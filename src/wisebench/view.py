@@ -435,6 +435,20 @@ def typed_ref(prompt):
     return (found.group(1).strip() or None) if found else None
 
 
+def split_run(text):
+    """Split what `:run ` was typed with into the directory after `-C` and the ref.
+
+    Args:
+        text (str): The text after `:run `, as `typed_ref` returns it.
+
+    Returns:
+        tuple[str | None, str]: The directory (no spaces in it) and the ref after `-C <dir> `; or
+        None and `text` as it is when it does not begin with `-C <dir> <ref>`.
+    """
+    found = re.fullmatch(r"-C\s+(\S+)\s+(\S.*)", text)
+    return (found.group(1), found.group(2)) if found else (None, text)
+
+
 def _preview_lines(prompt, preview, rows):
     """The preview box for the ref typed after `:run `, once its result is in; else None.
 

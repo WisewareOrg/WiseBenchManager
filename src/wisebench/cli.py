@@ -94,6 +94,7 @@ def main(argv=None):
     test_parser.add_argument("ref")
     test_parser.add_argument("--set", dest="set_name", default=None)
     test_parser.add_argument("--skip-build", action="store_true")
+    test_parser.add_argument("-C", dest="source", default=None)
     unqueue_parser = subparsers.add_parser("unqueue")
     unqueue_parser.add_argument("entry_id", type=int)
     subparsers.add_parser("run")
@@ -110,9 +111,10 @@ def main(argv=None):
         return status.watch(directory)
 
     if args.command == "test":
+        where = () if args.source is None else (args.source,)
         try:
             entry_id, sha, place = Queue(checkout, directory).add(
-                args.ref, args.set_name, args.skip_build, pytest_args
+                args.ref, args.set_name, args.skip_build, pytest_args, *where
             )
         except subprocess.CalledProcessError:
             print(f"BENCH ERROR: {args.ref} does not resolve to a commit", file=sys.stderr)

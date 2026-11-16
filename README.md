@@ -14,11 +14,12 @@ bench run                      # on a timer: take one entry -- the oldest run qu
                                # entry's pass or fail is reported to GitHub, a run queued by hand
                                # posts nothing; if the bench itself broke, post nothing and stop
                                # the timer
-bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
+bench test <ref> [-C <dir>] [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: queue a run of <ref> and return; the
                                # next `bench run` takes it; --set names a replay set for tests that
                                # use one; --skip-build tests the board as it already is, with no
-                               # build and no install
+                               # build and no install; -C resolves <ref> in <dir>, not the bench's
+                               # checkout and fetches its commit there
 bench unqueue <id>             # remove a run queued by hand that `bench run` has not taken yet
 bench status --watch           # the run in progress, what waits to run, and every run on disk
 ```
@@ -33,10 +34,15 @@ merge-queue entry GitHub has built, one entry per start; to run one now, start `
 A run queued by hand posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an
 entry cannot be removed (ADR 0005 rev 2).
 
-`bench test` does not fetch: it resolves the ref in the bench's layer checkout, which refreshes
-`origin/*` on every idle tick. For a branch pushed since, run `git fetch origin <branch>` in
-`checkout/` first. `BENCH_RESULT_DIR` in the caller's environment does not move the queue or the
-records.
+`bench test` does not fetch `origin`: it resolves the ref in the bench's layer checkout, which
+refreshes `origin/*` on every idle tick. For a branch pushed since, run `git fetch origin <branch>`
+in `checkout/` first. With `-C <dir>` the ref resolves in `<dir>` (`~` is expanded, a relative path
+is taken against the caller's directory) and the commit is fetched from it into `checkout/` as
+objects only, no ref and no `FETCH_HEAD`; an unpushed commit is queueable, and a ref or directory
+that does not resolve exits 2. Nothing checks that `<dir>` is the same project, and nothing pins the
+fetched commit but git's two-week prune grace, which covers a queued wait. In the watch, `:run -C
+<dir> <ref>` previews the commit in `<dir>` and fetches on `Enter`; `<dir>` holds no spaces.
+`BENCH_RESULT_DIR` in the caller's environment does not move the queue or the records.
 
 A queued run builds the commit resolved when it was queued -- unless `--skip-build`, which skips the
 build, `bundle` and the host suite entirely -- and refuses a dirty tree when it starts. A built run's
@@ -255,8 +261,8 @@ runs.
 curses screen refreshed once a second: Run shows the newest run's stages and the selected stage's
 log, headed by bitbake's task progress while a build runs, Queue lists what waits (the running run,
 the runs queued by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and
-`Shift-Tab` cycle the views and `1` to `3` jump to one; in Queue, `:run <ref>` previews the ref as
-you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
+`Shift-Tab` cycle the views and `1` to `3` jump to one; in Queue, `:run [-C <dir>] <ref>`
+previews the ref as you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
 the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes
 `DISABLED` and starts the timer. It reads `records/*/bench.log`, each suite's `report.jsonl`,
 whether `records/DISABLED` exists, the holder of the `lock` file from `/proc/locks`, the run timer's
