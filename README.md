@@ -18,8 +18,8 @@ bench test <ref> [-C <dir>] [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: queue a run of <ref> and return; the
                                # next `bench run` takes it; --set names a replay set for tests that
                                # use one; --skip-build tests the board as it already is, with no
-                               # build and no install; -C resolves <ref> in <dir> instead of the bench's
-                               # checkout and fetches that commit into it
+                               # build and no install; -C resolves <ref> in <dir> instead of the
+                               # bench's checkout and fetches that commit into it
 bench unqueue <id>             # remove a run queued by hand that `bench run` has not taken yet
 bench status --watch           # the run in progress, what waits to run, and every run on disk
 ```
