@@ -8,7 +8,7 @@
 
 - **rev 2** — 2026-11-16 — the queue lives in the clone `bench` is installed from, and the ref
   resolves in that clone's `checkout/`, or in a directory named with `-C`, from any directory
-  (decisions 3, 6 and 10; the "never taken" consequence removed; two alternatives added; #74
+  (decisions 3, 6 and 10; the "never taken" consequence removed; three alternatives added; #74
   one-bench defect).
 - **rev 1** — 2026-11-16 — first written (#60 Queue behaviour; #23 Queue view; #72 Queue tab shows
   the whole merge queue).
@@ -52,12 +52,12 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    the queue, then runs `git fetch origin`, which brings the commit of every entry still queued or
    merged when it runs, and takes the first entry that has one; `entries()` fetches nothing. No
    snapshot of the merge queue is kept, so none can go stale during a run.
-6. **The commit is resolved when the run is queued, in the bench's own checkout, `<clone>/checkout`, without a fetch of `origin`.** The run
-   With `-C <dir>`, the ref resolves in `<dir>` instead and the commit is fetched from `<dir>` into
-   the checkout by `git fetch --no-write-fetch-head <dir> <sha>`, which writes objects only. The run
-   builds that commit and refuses a dirty tree when it starts, and its record reads
-   `kind=test ref=<as typed>`. A run queued by hand may carry `--skip-build`; a merge-queue run
-   never skips the build.
+6. **The commit is resolved when the run is queued, in the bench's own checkout,
+   `<clone>/checkout`, without a fetch of `origin`.** The run builds that commit and refuses a dirty
+   tree when it starts, and its record reads `kind=test ref=<as typed>`. A run queued by hand may
+   carry `--skip-build`; a merge-queue run never skips the build. With `-C <dir>`, the ref resolves
+   in `<dir>` instead and the commit is fetched from `<dir>` into the checkout by
+   `git fetch --no-write-fetch-head <dir> <sha>`, which writes objects only.
 7. **A run queued by hand posts nothing and builds no check client.** A failing hook or test in it
    is recorded and is not the bench's fault; any other failure, including a checkout that fails, is
    the bench's and writes `DISABLED`.

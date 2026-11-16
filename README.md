@@ -18,8 +18,8 @@ bench test <ref> [-C <dir>] [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: queue a run of <ref> and return; the
                                # next `bench run` takes it; --set names a replay set for tests that
                                # use one; --skip-build tests the board as it already is, with no
-                               # build and no install; -C resolves <ref> in <dir>, not the bench's
-                               # checkout and fetches its commit there
+                               # build and no install; -C resolves <ref> in <dir> instead of the bench's
+                               # checkout and fetches that commit into it
 bench unqueue <id>             # remove a run queued by hand that `bench run` has not taken yet
 bench status --watch           # the run in progress, what waits to run, and every run on disk
 ```
@@ -41,7 +41,7 @@ is taken against the caller's directory) and the commit is fetched from it into 
 objects only, no ref and no `FETCH_HEAD`; an unpushed commit is queueable, and a ref or directory
 that does not resolve exits 2. Nothing checks that `<dir>` is the same project, and nothing pins the
 fetched commit but git's two-week prune grace, which covers a queued wait. In the watch, `:run -C
-<dir> <ref>` previews the commit in `<dir>` and fetches on `Enter`; `<dir>` holds no spaces.
+<dir> <ref>` previews the commit in `<dir>` and fetches on `Enter`, and `<dir>` holds no spaces.
 `BENCH_RESULT_DIR` in the caller's environment does not move the queue or the records.
 
 A queued run builds the commit resolved when it was queued -- unless `--skip-build`, which skips the
@@ -257,12 +257,12 @@ GitHub App (`Check.merge_queue`), whose verdict it posts as a GitHub check run (
 waiting run queued by hand starts only when that read of the merge queue succeeds: a `git fetch`
 fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before the hand entry
 runs.
-`bench status --watch` is the view of all of it, run from any directory. It is a
-curses screen refreshed once a second: Run shows the newest run's stages and the selected stage's
-log, headed by bitbake's task progress while a build runs, Queue lists what waits (the running run,
-the runs queued by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and
-`Shift-Tab` cycle the views and `1` to `3` jump to one; in Queue, `:run [-C <dir>] <ref>`
-previews the ref as you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
+`bench status --watch` is the view of all of it, run from any directory. It is a curses screen
+refreshed once a second: Run shows the newest run's stages and the selected stage's log, headed by
+bitbake's task progress while a build runs, Queue lists what waits (the running run, the runs queued
+by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and `Shift-Tab`
+cycle the views and `1` to `3` jump to one; in Queue, `:run [-C <dir>] <ref>` previews the ref as
+you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
 the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes
 `DISABLED` and starts the timer. It reads `records/*/bench.log`, each suite's `report.jsonl`,
 whether `records/DISABLED` exists, the holder of the `lock` file from `/proc/locks`, the run timer's
