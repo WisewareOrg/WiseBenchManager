@@ -207,14 +207,14 @@ ln -s "$PWD/WiseBenchManager/.venv/bin/bench" ~/.local/bin/bench
 git clone <the layer repository> WiseBenchManager/checkout
 ```
 
-The clone is the bench: `bench` finds it from where the package is installed, and refuses (exit 2) when
-it is not installed from a clone, or when `checkout/` is missing or is not a git repository of its own.
-The link puts `bench` on `PATH` without activating the venv. `checkout/` is the layer checkout the bench
-builds and tests, ignored by git; it is not a working tree to edit in. `bench run` reads
-`~/.config/wisebench/bench.env` (the owner's file, never written by `bench`) itself before anything
-else, so a run started by hand has the timer's environment, its values over the caller's. The file is
-`KEY=value` or `KEY="value"` lines, blank lines and `#` comments; any other line, a backslash, or text
-after a closing quote exits 2, and so does a missing file.
+The clone is the bench: `bench` finds it from where the package is installed, and refuses (exit 2)
+when it is not installed from a clone, or when `checkout/` is missing or is not a git repository of
+its own. The link puts `bench` on `PATH` without activating the venv. `checkout/` is the layer
+checkout the bench builds and tests, ignored by git; it is not a working tree to edit in. `bench
+run` reads `~/.config/wisebench/bench.env` (the owner's file, never written by `bench`) itself
+before anything else, so a run started by hand has the timer's environment, its values over the
+caller's. The file is `KEY=value` or `KEY="value"` lines, blank lines and `#` comments; any other
+line, a backslash, or text after a closing quote exits 2, and so does a missing file.
 
 `uv sync --frozen` installs exactly the versions in `uv.lock`. The package's version is derived from
 the checked-out tag by hatch-vcs when uv builds it; `run.json` carries that version.
