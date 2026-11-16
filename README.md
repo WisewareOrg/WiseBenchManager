@@ -273,8 +273,8 @@ which resolves holders by path through `/proc/<pid>/fd`.
 ### Installing `bench run`
 
 In this clone, edit `contrib/bench-run.service`'s `ExecStart` (this clone's own `.venv/bin/bench`)
-and `TimeoutStartSec` (comfortably longer than one build-and-test cycle -- `RuntimeMaxSec` has no effect on a `Type=oneshot` service;
-`TimeoutStartSec` is what bounds one); rename both `contrib/bench-run.service` and
+and `TimeoutStartSec` (comfortably longer than one build-and-test cycle -- `RuntimeMaxSec` has no
+effect on a `Type=oneshot` service; `TimeoutStartSec` is what bounds one); rename both `contrib/bench-run.service` and
 `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if `bench.toml`'s `[run] unit` is
 not `bench-run`. `WorkingDirectory` must exist, but `bench` ignores it. Write `LG_ENV` and
 `LG_BENCH_ADDRESS` into `~/.config/wisebench/bench.env`, and delete the template's `EnvironmentFile` line: systemd fails a
