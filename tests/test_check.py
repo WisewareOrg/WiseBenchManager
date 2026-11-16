@@ -183,10 +183,8 @@ def test_merge_queue_returns_each_entry_in_githubs_order_with_none_for_an_unbuil
     one = check.Check("acme/layer", 1, private_key_path, "bench")
     requester = None
 
-    def entry(position, number, title, oid):
+    def entry(number, title, oid):
         return {
-            "position": position,
-            "state": "QUEUED",
             "pullRequest": {"number": number, "title": title},
             "headCommit": {"oid": oid} if oid else None,
         }
@@ -196,7 +194,7 @@ def test_merge_queue_returns_each_entry_in_githubs_order_with_none_for_an_unbuil
     def capture(self, owner, name):
         installation = original(self, owner, name)
         installation.github.requester.data = _merge_queue_data(
-            entry(1, 324, "Add slot check", "deadbeef"), entry(2, 326, "Fix probe", None)
+            entry(324, "Add slot check", "deadbeef"), entry(326, "Fix probe", None)
         )
         return installation
 
@@ -220,19 +218,6 @@ def test_merge_queue_of_an_empty_queue_is_empty(monkeypatch, private_key_path):
     def capture(self, owner, name):
         installation = original(self, owner, name)
         installation.github.requester.data = _merge_queue_data()
-        return installation
-
-    monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
-    assert check.Check("acme/layer", 1, private_key_path, "bench").merge_queue() == []
-
-
-def test_merge_queue_of_a_repository_without_a_merge_queue_is_empty(monkeypatch, private_key_path):
-    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
-    original = FakeGithubIntegration.get_repo_installation
-
-    def capture(self, owner, name):
-        installation = original(self, owner, name)
-        installation.github.requester.data = {"data": {"repository": {"mergeQueue": None}}}
         return installation
 
     monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)

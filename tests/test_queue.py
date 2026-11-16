@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -281,12 +282,37 @@ def test_entries_runs_no_fetch_and_no_git(monkeypatch, tmp_path, github):
     assert calls == []
 
 
-def test_take_fetches_origin_then_reads_the_merge_queue(monkeypatch, tmp_path, github):
-    calls = []
-    _stub_git(monkeypatch, calls=calls)
-    github.result = [dict(_MERGE_HEAD)]
-    assert queue.Queue(tmp_path, tmp_path / "records").take()["pr"] == 14
-    assert calls == [["git", "fetch", "origin"]]
+def test_take_brings_the_commit_of_an_entry_built_after_the_queue_was_read_into_the_checkout(
+    monkeypatch, tmp_path, github
+):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", "-q", str(remote))
+    seed = tmp_path / "seed"
+    _git(tmp_path, "init", "-q", "-b", "main", str(seed))
+    _git(seed, "config", "user.email", "bench@example.invalid")
+    _git(seed, "config", "user.name", "bench")
+    (seed / "f.txt").write_text("one")
+    _git(seed, "add", "f.txt")
+    _git(seed, "commit", "-q", "-m", "first")
+    _git(seed, "remote", "add", "origin", str(remote))
+    _git(seed, "push", "-q", "origin", "main")
+    local = tmp_path / "local"
+    _git(tmp_path, "clone", "-q", str(remote), str(local))
+    shutil.copy(tmp_path / "bench.toml", local / "bench.toml")
+    (seed / "f.txt").write_text("two")
+    _git(seed, "commit", "-q", "-am", "queued")
+    built = _git(seed, "rev-parse", "HEAD")
+
+    def build_while_reading(_self):
+        _git(seed, "push", "-q", "origin", f"HEAD:refs/heads/gh-readonly-queue/main/pr-7-{built}")
+        return [{"pr": 7, "title": "Queued", "sha": built}]
+
+    monkeypatch.setattr(github, "merge_queue", build_while_reading)
+
+    taken = queue.Queue(local, local / "records").take()
+
+    assert taken["sha"] == built
+    _git(local, "cat-file", "-e", f"{built}^{{commit}}")
 
 
 def test_take_fetches_even_when_a_hand_entry_is_the_one_it_returns(hand, monkeypatch):
@@ -338,7 +364,9 @@ def _alive(pid):
         return False
 
 
-def test_a_timed_out_network_call_kills_git_and_every_process_it_started(monkeypatch, tmp_path):
+def test_a_timed_out_network_call_kills_git_and_every_process_it_started(
+    monkeypatch, tmp_path, github
+):
     bin_dir, pid_file = tmp_path / "bin", tmp_path / "grandchild.pid"
     bin_dir.mkdir()
     fake_git = bin_dir / "git"

@@ -206,7 +206,8 @@ class Queue:
     def take(self):
         """Claim the first waiting entry: the oldest hand entry, else the first built merge entry.
 
-        Fetches `origin` first, which brings the merge-queue commit.
+        Reads the queue, then fetches `origin`, which brings the merge-queue commit of any entry
+        GitHub built before the fetch; the read comes first so no entry read lacks its commit.
 
         A hand entry is deleted when claimed, so it is never returned again whatever its run's
         outcome; one removed in the meantime is skipped.
@@ -218,8 +219,9 @@ class Queue:
             BenchFailure: `git fetch` failed or timed out.
             Exception: Whatever `entries()` raises.
         """
+        entries = self.entries()
         self._git(["fetch", "origin"], network=True)
-        for entry in self.entries():
+        for entry in entries:
             if entry["kind"] == "run":
                 if entry["sha"] is not None:
                     return entry

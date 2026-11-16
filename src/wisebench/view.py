@@ -165,8 +165,9 @@ class QueueRow:
         marker (str): "▶" for the running run, else its place in the queue, the running run
             counting as 1.
         source (str): "by hand" or "merge queue".
-        what (str): A merge-queue entry reads "PR #<n> <title>"; the running run "PR #<n>" when
-            it has a PR, else its ref; a hand entry its ref.
+        what (str): A merge-queue entry reads "PR #<n> <title>"; the running run likewise when the
+            merge queue holds an entry with its sha, else "PR #<n>", or its ref when it has no
+            PR; a hand entry its ref.
         sha7 (str): The commit's first 7 characters; blank until known (a merge-queue entry
             GitHub has not built).
         added (str): A hand entry's local `HH:MM`; blank for the others.
@@ -344,11 +345,20 @@ def _queue_rows(snap):
         opened = next((s for s in run.stages if s.state == "open"), None)
         checkout = next((s for s in run.stages if s.name == "checkout"), None)
         running_sha = checkout.sha if checkout else None
+        same = next(
+            (
+                e
+                for e in snap.queue or []
+                if e["kind"] == "run" and running_sha and e["sha"] == running_sha
+            ),
+            None,
+        )
+        title = f" {same['title']}" if same else ""
         rows.append(
             QueueRow(
                 _RUNNING,
                 "by hand" if run.kind == "test" else "merge queue",
-                f"PR #{run.pr}" if run.pr else run.ref or "",
+                f"PR #{run.pr}{title}" if run.pr else run.ref or "",
                 (running_sha or "")[:7],
                 "",
                 opened.name if opened else "",

@@ -7,7 +7,7 @@ from github import Auth, GithubIntegration
 _CONCLUSIONS = ("success", "failure")
 _MERGE_QUEUE = (
     'query($o:String!,$n:String!){repository(owner:$o,name:$n){mergeQueue(branch:"main")'
-    "{entries(first:50){nodes{position state pullRequest{number title} headCommit{oid}}}}}}"
+    "{entries(first:50){nodes{pullRequest{number title} headCommit{oid}}}}}}"
 )
 
 
@@ -65,8 +65,7 @@ class Check:
 
         Returns:
             list[dict]: `{pr, title, sha}` per entry, in GitHub's order; `sha` is the merge
-            group's commit, None while GitHub has not built it. Empty when the repository has
-            no merge queue.
+            group's commit, None while GitHub has not built it.
 
         Raises:
             github.GithubException: PyGithub's own call failed.
@@ -75,8 +74,7 @@ class Check:
         _, data = self._github().requester.graphql_query(
             _MERGE_QUEUE, {"o": self._owner, "n": self._name}
         )
-        queue = data["data"]["repository"]["mergeQueue"]
-        nodes = queue["entries"]["nodes"] if queue else []
+        nodes = data["data"]["repository"]["mergeQueue"]["entries"]["nodes"]
         return [
             {
                 "pr": node["pullRequest"]["number"],

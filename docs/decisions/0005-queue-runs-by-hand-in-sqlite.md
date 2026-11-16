@@ -48,8 +48,8 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
 5. **The merge queue is read live and in full, from GitHub's GraphQL API.** `Queue` reads
    `repository.mergeQueue(branch: "main").entries` through PyGithub, as the bench's GitHub App of
    `bench.toml`'s `[github]` table, and lists every entry in GitHub's order with its PR number, title
-   and merge-group commit, which GitHub gives an entry only once it builds it. `take()` runs
-   `git fetch origin`, which brings that commit, and takes the first entry that has one;
+   and merge-group commit, which GitHub gives an entry only once it builds it. `take()` reads
+   the queue, then runs `git fetch origin`, which brings the commit of every entry read, and takes the first entry that has one;
    `entries()` fetches nothing. No snapshot of the merge queue is kept, so none can go stale
    during a run.
 6. **The commit is resolved when the run is queued, in the bench checkout, without a fetch.** The run
