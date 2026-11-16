@@ -258,13 +258,14 @@ def stub_queue(monkeypatch, clock=None, entries=None, preview=None, add=None, re
         record("entries")
         return entries() if entries else []
 
-    def show(self, ref):
+    def show(self, ref, source=None):
         record("preview", ref)
         if preview:
             return preview(ref)
         return {"sha": SHA, "subject": f"subject of {ref}", "clean": True}
 
-    def queue_up(self, *arguments):
+    def queue_up(self, ref, set_name, skip_build, pytest_args, source=None):
+        arguments = (ref, set_name, skip_build, pytest_args)
         record("add", *arguments)
         return add(*arguments) if add else (5, SHA, 1)
 
