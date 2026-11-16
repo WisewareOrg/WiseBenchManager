@@ -15,8 +15,8 @@ class BenchRun:
     Holds the checkout, the loaded `Config` and the result directory, where `DISABLED` sits and
     every run's folder goes. Knows nothing about the lock `bench run` holds -- the CLI holds that
     for this call's whole duration. A merge-queue entry's verdict is posted by `BenchTest`'s
-    `posted` stage, through a
-    callable this class passes to `BenchTest.run`; a run queued by hand posts nothing.
+    `posted` stage, through a callable this class passes to `BenchTest.run`; a run queued by hand posts
+    nothing.
     """
 
     def __init__(self, checkout, config, result_dir):
