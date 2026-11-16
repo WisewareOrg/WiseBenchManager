@@ -618,6 +618,14 @@ def test_a_merge_row_draws_the_canvas_what_uncut_and_a_long_title_cut():
     grid.find(r"merge queue +PR #15 A title much long +9f8e7d6")
 
 
+def test_a_wide_screen_gives_the_what_column_the_room_it_leaves():
+    title = "chore(deps): update meta-virtualization digest to e0b994c"
+    wide = {**MERGE_ENTRY, "pr": 326, "title": title}
+    grid, _ = queue_drawn(queue=[wide], size=(24, 130))
+    grid.find(rf"merge queue +PR #326 {re.escape(title)} +9f8e7d6")
+    grid.find(r"source +what {40,}sha +added")
+
+
 @pytest.mark.parametrize("stage", ["precondition", "target_suite"])
 def test_the_longest_running_stage_still_fits_the_80_column_queue_row(stage):
     grid, _ = queue_drawn([live(stage)], LIVE, queue=[])

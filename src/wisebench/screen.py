@@ -27,6 +27,7 @@ _BAR_CELLS = 33
 _NAME_MIN = 14
 _HELP_GAP = 2  # the three Help columns must fit 80 columns
 _MARKER_WIDTH, _SOURCE_WIDTH, _WHAT_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 26, 9, 7
+_RUNNING_STAGE_WIDTH = len("running, target_suite")
 _PROMPT_HINT = "Enter queue it  Esc cancel"
 _BODY_INDENT = " " * 6
 _HINT = "Enter into the log   za fold   Esc back to stages"
@@ -473,13 +474,22 @@ def _section_head(surface, y, row, running, now, bg):
     _put_parts(surface, y, _PANE, parts, bg)
 
 
+def _what_width(cols):
+    """The width of the Queue tab's `what` column at `cols` columns.
+
+    The room the other columns and the longest running stage leave, at least `_WHAT_WIDTH`.
+    """
+    others = _MARKER_WIDTH + _SOURCE_WIDTH + _SHA_WIDTH + _ADDED_WIDTH + _RUNNING_STAGE_WIDTH
+    return max(_WHAT_WIDTH, cols - others)
+
+
 def _queue(surface, frame):
     """The Queue tab: the column header, a row per run, then the preview box over the status bar."""
     lay = frame.layout
     columns = (
         ("", _MARKER_WIDTH),
         ("source", _SOURCE_WIDTH),
-        ("what", _WHAT_WIDTH),
+        ("what", _what_width(lay.cols)),
         ("sha", _SHA_WIDTH),
         ("added", _ADDED_WIDTH),
     )
@@ -520,6 +530,7 @@ def _queue_row(surface, y, row, selected, cols):
 
     The selected row is on the selection, else the running row on the running tint.
     """
+    what = _what_width(cols)
     running = row.marker == "▶"
     bg = SELECTION if selected else RUNNING_TINT if running else None
     if bg is not None:
@@ -527,7 +538,7 @@ def _queue_row(surface, y, row, selected, cols):
     parts = [
         (row.marker.ljust(_MARKER_WIDTH), AMBER if running else TEXT, False),
         (row.source.ljust(_SOURCE_WIDTH), BLUE if row.source == "by hand" else TEXT, False),
-        (row.what[: _WHAT_WIDTH - 2].ljust(_WHAT_WIDTH), TEXT, False),
+        (row.what[: what - 2].ljust(what), TEXT, False),
         (row.sha7.ljust(_SHA_WIDTH), TEXT, False),
         (row.added.ljust(_ADDED_WIDTH), TEXT, False),
     ]
