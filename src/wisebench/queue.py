@@ -206,8 +206,9 @@ class Queue:
     def take(self):
         """Claim the first waiting entry: the oldest hand entry, else the first built merge entry.
 
-        Reads the queue, then fetches `origin`, which brings the merge-queue commit of any entry
-        GitHub built before the fetch; the read comes first so no entry read lacks its commit.
+        Reads the queue, then fetches `origin`, which brings the commit of every entry still queued
+        or merged when the fetch runs; the read comes first so an entry GitHub builds meanwhile is
+        never read without its commit.
 
         A hand entry is deleted when claimed, so it is never returned again whatever its run's
         outcome; one removed in the meantime is skipped.

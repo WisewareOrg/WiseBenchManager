@@ -339,13 +339,13 @@ def _queue_rows(snap):
     The running run is the newest run while the bench is running it. A merge-queue entry is left
     out while its sha is the sha the running run checked out.
     """
-    rows, running_sha = [], None
+    rows, building = [], None
     if snap.bench.live and snap.runs:
         run = snap.runs[0]
         opened = next((s for s in run.stages if s.state == "open"), None)
         checkout = next((s for s in run.stages if s.name == "checkout"), None)
         running_sha = checkout.sha if checkout else None
-        same = next(
+        building = next(
             (
                 e
                 for e in snap.queue or []
@@ -353,7 +353,7 @@ def _queue_rows(snap):
             ),
             None,
         )
-        title = f" {same['title']}" if same else ""
+        title = f" {building['title']}" if building else ""
         rows.append(
             QueueRow(
                 _RUNNING,
@@ -368,7 +368,7 @@ def _queue_rows(snap):
             )
         )
     for entry in snap.queue or []:
-        if entry["kind"] == "run" and entry["sha"] is not None and entry["sha"] == running_sha:
+        if entry is building:
             continue
         hand = entry["kind"] == "test"
         added = (

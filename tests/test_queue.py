@@ -282,7 +282,7 @@ def test_entries_runs_no_fetch_and_no_git(monkeypatch, tmp_path, github):
     assert calls == []
 
 
-def test_take_brings_the_commit_of_an_entry_built_after_the_queue_was_read_into_the_checkout(
+def test_take_brings_the_commit_of_an_entry_built_while_the_queue_is_read_into_the_checkout(
     monkeypatch, tmp_path, github
 ):
     remote = tmp_path / "remote.git"
