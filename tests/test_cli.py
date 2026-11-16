@@ -31,7 +31,7 @@ def _spy_add(monkeypatch, result=(7, "deadbeef", 3)):
     """Replace `Queue.add` with a recorder returning `result`; return the recorded calls."""
     calls = []
 
-    def add(self, ref, set_name, skip_build, pytest_args):
+    def add(self, ref, set_name, skip_build, pytest_args, source=None):
         calls.append((ref, set_name, skip_build, pytest_args))
         return result
 

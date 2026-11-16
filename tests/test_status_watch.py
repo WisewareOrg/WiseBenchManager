@@ -398,7 +398,11 @@ def test_a_preview_of_a_ref_no_longer_typed_is_never_drawn(monkeypatch, tmp_path
     clock = Clock(monkeypatch)
     stub_queue(
         monkeypatch,
-        preview=lambda ref: {"sha": SHA, "subject": f"result for {ref}", "clean": True},
+        preview=lambda ref, source=None: {
+            "sha": SHA,
+            "subject": f"result for {ref}",
+            "clean": True,
+        },
     )
     settle = [clock.wait(1)] * 5
     fake_keys = ["2", TIMEOUT, *":run alpha", *settle]
@@ -758,7 +762,9 @@ def test_enable_that_cannot_remove_disabled_shows_why_and_does_not_start(
     assert "cannot remove DISABLED:" in last_frame(fake)
 
 
-def watch_source(monkeypatch, tmp_path, bench_clone, after_typing, dirty_checkout=False):
+def watch_source(
+    monkeypatch, tmp_path, bench_clone, after_typing, dirty_checkout=False, typed_dir=None
+):
     """Type `:run -C <src> HEAD` over a real `Queue`, then feed `after_typing` and a `q`.
 
     Returns:
@@ -775,7 +781,7 @@ def watch_source(monkeypatch, tmp_path, bench_clone, after_typing, dirty_checkou
         seen.append((last_frame(fake), has_commit(bench_clone.checkout, sha)))
 
     terminal(monkeypatch, tmp_path, 0)
-    typed = [*f":run -C {tmp_path / 'src'} HEAD", TIMEOUT, TIMEOUT, snap]
+    typed = [*f":run -C {typed_dir or tmp_path / 'src'} HEAD", TIMEOUT, TIMEOUT, snap]
     fake = FakeScreen(keys=["2", TIMEOUT, *typed, *after_typing(snap), "q"])
     directory = tmp_path / "records"
     directory.mkdir(exist_ok=True)
@@ -802,6 +808,23 @@ def test_the_preview_of_a_directory_reports_the_state_of_the_checkout_not_of_the
     frame, _ = seen[0]
     assert "uncommitted changes in the checkout" in frame
     assert "clean tree" not in frame
+
+
+def test_run_with_a_home_relative_directory_previews_and_queues_its_commit(
+    monkeypatch, tmp_path, bench_clone
+):
+    """`~/src` is typed, HOME is `tmp_path`: the preview resolves in `src` and Enter queues it."""
+    sha, seen = watch_source(
+        monkeypatch,
+        tmp_path,
+        bench_clone,
+        lambda snap: ["\n", TIMEOUT, TIMEOUT, snap],
+        typed_dir="~/src",
+    )
+    (preview, _), (queued, fetched) = seen
+    assert f'resolves to {sha[:7]} "unpushed work"' in preview
+    assert f"queued 1 {sha[:7]}" in queued
+    assert fetched
 
 
 def test_enter_on_run_with_a_directory_fetches_the_commit_and_queues_it(
