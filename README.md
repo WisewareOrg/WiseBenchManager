@@ -11,8 +11,9 @@ decisions are in [`docs/decisions/`](docs/decisions/README.md).
 bench run                      # on a timer: take one entry -- the oldest run queued by hand, else the
                                # first built merge-queue entry -- build it, run the suites (the
                                # layer's own fixture installs it on the board); a merge-queue
-                               # entry's pass or fail is reported to GitHub, a run queued by hand posts nothing; if
-                               # the bench itself broke, post nothing and stop the timer
+                               # entry's pass or fail is reported to GitHub, a run queued by hand
+                               # posts nothing; if the bench itself broke, post nothing and stop
+                               # the timer
 bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: queue a run of <ref> and return; the
                                # next `bench run` takes it; --set names a replay set for tests that
