@@ -34,7 +34,7 @@ def _raise_on_sigterm(signum, frame):
     raise BenchFailure("terminated: the job exceeded TimeoutStartSec")
 
 
-_ENV_LINE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\\]*)"|([^"\\\s]*))')
+_ENV_LINE = re.compile(r"""([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\\]*)"|((?:[^"'\\\s][^"\\\s]*)?))""")
 
 
 def _load_bench_env():

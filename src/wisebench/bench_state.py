@@ -142,17 +142,17 @@ def enable(directory, run_unit):
     return _change_timer("start", run_unit)
 
 
-def read_run_unit(cwd):
-    """The `[run] unit` of `cwd/bench.toml`, or None when it is absent or does not load.
+def read_run_unit(checkout):
+    """The `[run] unit` of `checkout/bench.toml`, or None when it is absent or does not load.
 
     Args:
-        cwd (pathlib.Path): The directory holding `bench.toml`.
+        checkout (pathlib.Path): The layer checkout holding `bench.toml`.
 
     Returns:
         str | None: The unit base name.
     """
     try:
-        return Config.load(Path(cwd) / "bench.toml").run_unit
+        return Config.load(Path(checkout) / "bench.toml").run_unit
     except (OSError, tomllib.TOMLDecodeError, KeyError):
         return None
 

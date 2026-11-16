@@ -82,7 +82,7 @@ class BenchTest:
         `precondition`; unless skipping the build, runs `build`, `bundle` and the host suite,
         and passes the commit to the target suite as `--bench-candidate`. Every hook's and
         suite's output, and a `bench:` marker line per stage, land in
-        `records/<stamp>/bench.log`; nothing prints to the terminal.
+        `<result_dir>/<stamp>/bench.log`; nothing prints to the terminal.
 
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`).
@@ -302,8 +302,6 @@ class BenchTest:
             "-m",
             "pytest",
             suite,
-            "--rootdir",
-            str(self.checkout),
             "-c",
             str(self.checkout / "pyproject.toml"),
             "-o",
