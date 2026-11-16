@@ -33,9 +33,10 @@ merge-queue entry GitHub has built, one entry per start; to run one now, start `
 A run queued by hand posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an
 entry cannot be removed (ADR 0005 rev 2).
 
-`bench test` does not fetch: it resolves the ref in the bench's layer checkout, which refreshes `origin/*`
-on every idle tick. For a branch pushed since, run `git fetch origin <branch>` in `checkout/` first.
-`BENCH_RESULT_DIR` in the caller's environment does not move the queue or the records.
+`bench test` does not fetch: it resolves the ref in the bench's layer checkout, which refreshes
+`origin/*` on every idle tick. For a branch pushed since, run `git fetch origin <branch>` in
+`checkout/` first. `BENCH_RESULT_DIR` in the caller's environment does not move the queue or the
+records.
 
 A queued run builds the commit resolved when it was queued -- unless `--skip-build`, which skips the
 build, `bundle` and the host suite entirely -- and refuses a dirty tree when it starts. A built run's
@@ -127,15 +128,13 @@ A one-time, by-hand step, before `[github]` can be filled in:
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_SET` and `BENCH_RESULT_DIR` (the clone's `records/`, absolute) in its environment, output
-appended to that run's `bench.log`;
-its exit status is pass or fail. The suites are ordinary pytest directories, run under the
-runner's own interpreter, so a layer's test helpers may import only labgrid, pytest,
-pytest-reportlog, tenacity, mitmproxy, the standard library and whatever the layer's own
-`pythonpath` adds.
-A suite runs under the checkout's own `pyproject.toml` alone, with the checkout as pytest's rootdir:
-its `addopts` never reach that run; its `testpaths`, `pythonpath` and markers still do. The
-WiseBenchManager clone's pytest configuration never applies, and a layer's `pytest.ini`, `tox.ini` or
-`setup.cfg` is not read.
+appended to that run's `bench.log`; its exit status is pass or fail. The suites are ordinary pytest
+directories, run under the runner's own interpreter, so a layer's test helpers may import only
+labgrid, pytest, pytest-reportlog, tenacity, mitmproxy, the standard library and whatever the
+layer's own `pythonpath` adds. A suite runs under the checkout's own `pyproject.toml` alone, with
+the checkout as pytest's rootdir: its `addopts` never reach that run; its `testpaths`, `pythonpath`
+and markers still do. The WiseBenchManager clone's pytest configuration never applies, and a layer's
+`pytest.ini`, `tox.ini` or `setup.cfg` is not read.
 
 The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
 `NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
@@ -274,13 +273,14 @@ which resolves holders by path through `/proc/<pid>/fd`.
 
 In this clone, edit `contrib/bench-run.service`'s `ExecStart` (this clone's own `.venv/bin/bench`)
 and `TimeoutStartSec` (comfortably longer than one build-and-test cycle -- `RuntimeMaxSec` has no
-effect on a `Type=oneshot` service; `TimeoutStartSec` is what bounds one); rename both `contrib/bench-run.service` and
-`contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if `bench.toml`'s `[run] unit` is
-not `bench-run`. `WorkingDirectory` must exist, but `bench` ignores it. Write `LG_ENV` and
-`LG_BENCH_ADDRESS` into `~/.config/wisebench/bench.env`, and delete the template's `EnvironmentFile` line: systemd fails a
-unit whose `EnvironmentFile` is missing, and `bench run` reads that file itself.
-Link and start both units straight from this checkout: `systemctl --user enable --now <this
-clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
+effect on a `Type=oneshot` service; `TimeoutStartSec` is what bounds one); rename both
+`contrib/bench-run.service` and `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if
+`bench.toml`'s `[run] unit` is not `bench-run`. `WorkingDirectory` must exist, but `bench` ignores
+it. Write `LG_ENV` and `LG_BENCH_ADDRESS` into `~/.config/wisebench/bench.env`, and delete the
+template's `EnvironmentFile` line: systemd fails a unit whose `EnvironmentFile` is missing, and
+`bench run` reads that file itself. Link and start both units straight from this checkout:
+`systemctl --user enable --now <this clone>/contrib/<unit>.service <this
+clone>/contrib/<unit>.timer`.
 
 A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`, writes
 `DISABLED` beside the records and stops that timer. Clearing it is not something `bench run` does
