@@ -66,8 +66,8 @@ host. What the choice is held to:
   Actions runner would have done it for free.
 - **The bench stops itself.** The timer is the unit the bench's own failure stops, so a broken
   bench does not keep failing on every tick; restarting it is `:enable` in `bench status --watch`.
-- **The clone is the one bench.** Its `records/` holds the lock, the `DISABLED` marker, the queue and
-  every run, so there is one history and one lock for the board.
+- **One history for the board.** Every run, whatever directory started it, is a folder in the clone's
+  `records/`.
 - **A hand stop does not persist.** A user-manager restart or a reboot re-arms the timer. After a
   fault the re-armed timer starts nothing, because every tick refuses on `DISABLED`.
 
