@@ -1275,3 +1275,26 @@ def test_y_with_no_enable_pending_requests_nothing():
     state = view.State()
     press(state, [run()], "y")
     assert requests(state) == (False, False, False)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("HEAD", (None, "HEAD")),
+        ("-C /x HEAD", ("/x", "HEAD")),
+        ("-C   /x    HEAD", ("/x", "HEAD")),
+        ("-C /x my branch", ("/x", "my branch")),
+        ("-C /x", (None, "-C /x")),
+        ("-C /x ", (None, "-C /x ")),
+    ],
+    ids=[
+        "no-directory",
+        "directory-and-ref",
+        "extra-spaces",
+        "multi-word-ref",
+        "no-ref",
+        "no-ref-trailing-space",
+    ],
+)
+def test_split_run_takes_the_directory_after_dash_c_and_leaves_any_other_text_whole(text, expected):
+    assert view.split_run(text) == expected

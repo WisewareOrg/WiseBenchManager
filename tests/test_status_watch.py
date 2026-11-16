@@ -758,7 +758,7 @@ def test_enable_that_cannot_remove_disabled_shows_why_and_does_not_start(
     assert "cannot remove DISABLED:" in last_frame(fake)
 
 
-def watch_source(monkeypatch, tmp_path, bench_clone, after_typing):
+def watch_source(monkeypatch, tmp_path, bench_clone, after_typing, dirty_checkout=False):
     """Type `:run -C <src> HEAD` over a real `Queue`, then feed `after_typing` and a `q`.
 
     Returns:
@@ -767,6 +767,8 @@ def watch_source(monkeypatch, tmp_path, bench_clone, after_typing):
     """
     stub_merge_queue(monkeypatch, bench_clone.checkout)
     sha = source_repo(tmp_path / "src")
+    if dirty_checkout:
+        (bench_clone.checkout / "tracked.txt").write_text("changed\n")
     seen = []
 
     def snap():
@@ -788,6 +790,18 @@ def test_run_with_a_directory_previews_its_commit_without_fetching_it(
     frame, fetched = seen[0]
     assert f'resolves to {sha[:7]} "unpushed work"' in frame
     assert not fetched
+
+
+def test_the_preview_of_a_directory_reports_the_state_of_the_checkout_not_of_the_directory(
+    monkeypatch, tmp_path, bench_clone
+):
+    """The run builds in the checkout, so its uncommitted change is the one to warn of."""
+    _, seen = watch_source(
+        monkeypatch, tmp_path, bench_clone, lambda snap: ["\x1b"], dirty_checkout=True
+    )
+    frame, _ = seen[0]
+    assert "uncommitted changes in the checkout" in frame
+    assert "clean tree" not in frame
 
 
 def test_enter_on_run_with_a_directory_fetches_the_commit_and_queues_it(
