@@ -59,7 +59,7 @@ def test_main_test_defaults_to_no_set_no_skip_build_and_no_pytest_args(made, mon
 def test_main_test_with_a_directory_that_does_not_exist_exits_2_naming_the_ref(
     monkeypatch, tmp_path, capsys, bench_clone
 ):
-    """`bench test HEAD -C <missing>` is refused as a ref that does not resolve, not as an OS error."""
+    """`bench test HEAD -C <missing>` is refused as a ref that does not resolve, not an OS error."""
     stub_merge_queue(monkeypatch, bench_clone.checkout)
 
     assert cli.main(["test", "HEAD", "-C", str(tmp_path / "no-such-dir")]) == 2
