@@ -111,10 +111,9 @@ def main(argv=None):
         return status.watch(directory)
 
     if args.command == "test":
-        where = () if args.source is None else (args.source,)
         try:
             entry_id, sha, place = Queue(checkout, directory).add(
-                args.ref, args.set_name, args.skip_build, pytest_args, *where
+                args.ref, args.set_name, args.skip_build, pytest_args, args.source
             )
         except subprocess.CalledProcessError:
             print(f"BENCH ERROR: {args.ref} does not resolve to a commit", file=sys.stderr)

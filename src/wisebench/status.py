@@ -150,8 +150,7 @@ def _request(queue, run, results, reads, state, now):
         reads.asked = ref
         reads.pending.add("preview")
         source, name = view.split_run(ref)
-        where = () if source is None else (source,)
-        run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(name, *where)))))
+        run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(name, source)))))
 
 
 def _perform(queue, reads, state, directory, run_unit):
@@ -159,9 +158,8 @@ def _perform(queue, reads, state, directory, run_unit):
     if state.run_ref is not None:
         ref, state.run_ref = state.run_ref, None
         source, name = view.split_run(ref)
-        where = () if source is None else (source,)
         try:
-            entry_id, sha, _ = queue.add(name, None, False, [], *where)
+            entry_id, sha, _ = queue.add(name, None, False, [], source)
         except subprocess.CalledProcessError:
             state.message = f"{name} does not resolve to a commit"
         except Exception as exc:
