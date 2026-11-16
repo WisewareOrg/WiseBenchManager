@@ -6,6 +6,7 @@ Nothing here decides where a log or History row sits: the frame says.
 """
 
 from wisebench.bench_state import DASH
+from wisebench.runlog import POSTED, STAGES
 
 GROUND = "#0c0c0c"
 TEXT = "#cccccc"
@@ -27,7 +28,8 @@ _BAR_CELLS = 33
 _NAME_MIN = 14
 _HELP_GAP = 2  # the three Help columns must fit 80 columns
 _MARKER_WIDTH, _SOURCE_WIDTH, _WHAT_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 26, 9, 7
-_RUNNING_STAGE_WIDTH = len("running, target_suite")
+_RUNNING_STAGE = "running, {}"
+_RUNNING_STAGE_WIDTH = max(len(_RUNNING_STAGE.format(name)) for name in (*STAGES, POSTED))
 _PROMPT_HINT = "Enter queue it  Esc cancel"
 _BODY_INDENT = " " * 6
 _HINT = "Enter into the log   za fold   Esc back to stages"
@@ -543,7 +545,7 @@ def _queue_row(surface, y, row, selected, cols):
         (row.added.ljust(_ADDED_WIDTH), TEXT, False),
     ]
     if running and row.stage:
-        parts.append((f"running, {row.stage}", AMBER, False))
+        parts.append((_RUNNING_STAGE.format(row.stage), AMBER, False))
     _put_parts(surface, y, 0, parts, bg)
 
 

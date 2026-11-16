@@ -626,10 +626,10 @@ def test_a_wide_screen_gives_the_what_column_the_room_it_leaves():
     grid.find(r"source +what {40,}sha +added")
 
 
-@pytest.mark.parametrize("stage", ["precondition", "target_suite"])
+@pytest.mark.parametrize("stage", [*runlog.STAGES, runlog.POSTED])
 def test_the_longest_running_stage_still_fits_the_80_column_queue_row(stage):
     grid, _ = queue_drawn([live(stage)], LIVE, queue=[])
-    grid.find(rf"running, {stage}$")
+    grid.find(rf"running, {stage} *$")
 
 
 def test_the_running_row_is_a_marker_a_tint_and_the_amber_running_stage():
