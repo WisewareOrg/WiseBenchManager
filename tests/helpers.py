@@ -27,6 +27,32 @@ def repo_with_one_commit(path):
     git(path, "commit", "-q", "-m", "first")
 
 
+def source_repo(path, subject="unpushed work"):
+    """A repo at `path` with a first commit and a tip commit `subject` that no other repo holds.
+
+    Returns:
+        str: The tip commit's sha.
+    """
+    path.mkdir(parents=True)
+    repo_with_one_commit(path)
+    (path / "unpushed.txt").write_text(f"{subject}\n")
+    git(path, "add", "unpushed.txt")
+    git(path, "commit", "-q", "-m", subject)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def has_commit(repo, sha):
+    """Whether `repo` holds the commit `sha`."""
+    return (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo, capture_output=True
+        ).returncode
+        == 0
+    )
+
+
 def write_bench_toml(
     repo,
     *,

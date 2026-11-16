@@ -19,8 +19,11 @@ from helpers import (
     ROWS,
     FakeScreen,
     clone_root,
+    has_commit,
+    source_repo,
     start_argv,
     stop_argv,
+    stub_merge_queue,
     terminal,
     write_bench_toml,
 )
@@ -753,3 +756,48 @@ def test_enable_that_cannot_remove_disabled_shows_why_and_does_not_start(
     fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
     assert changes(systemctl) == []
     assert "cannot remove DISABLED:" in last_frame(fake)
+
+
+def watch_source(monkeypatch, tmp_path, bench_clone, after_typing):
+    """Type `:run -C <src> HEAD` over a real `Queue`, then feed `after_typing` and a `q`.
+
+    Returns:
+        tuple: The source's tip commit, and one `(frame text, whether the checkout holds the
+        commit)` pair per snapshot key `after_typing` is given.
+    """
+    stub_merge_queue(monkeypatch, bench_clone.checkout)
+    sha = source_repo(tmp_path / "src")
+    seen = []
+
+    def snap():
+        seen.append((last_frame(fake), has_commit(bench_clone.checkout, sha)))
+
+    terminal(monkeypatch, tmp_path, 0)
+    typed = [*f":run -C {tmp_path / 'src'} HEAD", TIMEOUT, TIMEOUT, snap]
+    fake = FakeScreen(keys=["2", TIMEOUT, *typed, *after_typing(snap), "q"])
+    directory = tmp_path / "records"
+    directory.mkdir(exist_ok=True)
+    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    return sha, seen
+
+
+def test_run_with_a_directory_previews_its_commit_without_fetching_it(
+    monkeypatch, tmp_path, bench_clone
+):
+    sha, seen = watch_source(monkeypatch, tmp_path, bench_clone, lambda snap: ["\x1b"])
+    frame, fetched = seen[0]
+    assert f'resolves to {sha[:7]} "unpushed work"' in frame
+    assert not fetched
+
+
+def test_enter_on_run_with_a_directory_fetches_the_commit_and_queues_it(
+    monkeypatch, tmp_path, bench_clone
+):
+    sha, seen = watch_source(
+        monkeypatch, tmp_path, bench_clone, lambda snap: ["\n", TIMEOUT, TIMEOUT, snap]
+    )
+    frame, fetched = seen[1]
+    assert f"queued 1 {sha[:7]}" in frame
+    assert fetched
+    held = queue.Queue(bench_clone.checkout, tmp_path / "records").entries()
+    assert [(e["ref"], e["sha"]) for e in held] == [("HEAD", sha)]
