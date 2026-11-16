@@ -206,9 +206,7 @@ class Queue:
     def take(self):
         """Claim the first waiting entry: the oldest hand entry, else the first built merge entry.
 
-        Reads the queue, then fetches `origin`, which brings the commit of every entry still queued
-        or merged when the fetch runs; the read comes first so an entry GitHub builds meanwhile is
-        never read without its commit.
+        Reads the queue, then fetches `origin`, which brings that commit.
 
         A hand entry is deleted when claimed, so it is never returned again whatever its run's
         outcome; one removed in the meantime is skipped.
@@ -218,7 +216,10 @@ class Queue:
 
         Raises:
             BenchFailure: `git fetch` failed or timed out.
-            Exception: Whatever `entries()` raises.
+            OSError: `<checkout>/bench.toml` could not be read.
+            ValueError: `bench.toml` has no complete `[github]` table.
+            github.GithubException: PyGithub's own call failed.
+            sqlite3.DatabaseError: `queue.db` is unreadable.
         """
         entries = self.entries()
         self._git(["fetch", "origin"], network=True)

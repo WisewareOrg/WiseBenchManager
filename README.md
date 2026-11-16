@@ -9,9 +9,9 @@ decisions are in [`docs/decisions/`](docs/decisions/README.md).
 
 ```sh
 bench run                      # on a timer: take one entry -- the oldest run queued by hand, else the
-                               # merge queue's head -- build it, run the suites (the layer's own
-                               # fixture installs it on the board); a merge-queue entry's pass or
-                               # fail is reported to GitHub, a run queued by hand posts nothing; if
+                               # first built merge-queue entry -- build it, run the suites (the
+                               # layer's own fixture installs it on the board); a merge-queue
+                               # entry's pass or fail is reported to GitHub, a run queued by hand posts nothing; if
                                # the bench itself broke, post nothing and stop the timer
 bench test <ref> [--set <name>] [--skip-build] [-- <pytest args>]
                                # by hand, for investigations: queue a run of <ref> and return; the
@@ -94,9 +94,10 @@ unit        = "bench-run"  # bench run stops bench-run.timer on the bench's own 
 `[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
 layer's own repository, `app_id` the App's id, `private_key` a filesystem path to the App's
 PEM-encoded private key outside any tree (`~` is expanded), `check` the check run's name,
-exactly as the layer's ruleset lists it as a required check. A run queued by hand does not read
-`[github]`; a `bench.toml` without the table is fine for it. `Check`, built only for a merge-queue
-entry, raises if any of the four is missing.
+exactly as the layer's ruleset lists it as a required check. `Queue` builds a `Check` from the
+table whenever it reads the merge queue -- `bench run` on every tick and `bench status --watch` --
+so a `bench.toml` without the table fails those reads, a run queued by hand included; `bench test`
+and `bench unqueue` never read it. `Check` raises if any of the four is missing.
 
 For a merge-queue entry, `bench run` calls:
 
@@ -231,10 +232,11 @@ The runner is cloned on the pipeline host and run from its checkout at a tag; th
 tag. `bench run` is started by a systemd user timer and holds a `fcntl.flock` on a `lock` file
 beside the records for the whole of a run; it backs off with exit 0 if the lock is already held. It
 asks `Queue.take()` for one entry: the oldest run queued by hand, else the first merge-queue entry
-GitHub has built, read from GitHub's GraphQL API as the bench's GitHub App (`Check.merge_queue`),
-whose verdict it posts as a GitHub check run (`Check.post`). A waiting run queued by hand starts only
-when that read of the merge queue succeeds: a `git fetch` fault or a failed read of GitHub's API
-writes `DISABLED` as on any tick, before the hand entry runs.
+GitHub has built, read from the first 50 entries of GitHub's GraphQL merge queue as the bench's
+GitHub App (`Check.merge_queue`), whose verdict it posts as a GitHub check run (`Check.post`). A
+waiting run queued by hand starts only when that read of the merge queue succeeds: a `git fetch`
+fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before the hand entry
+runs.
 `bench status --watch` is the view of all of it, run from the directory `bench run` runs in. It is a
 curses screen refreshed once a second: Run shows the newest run's stages and the selected stage's
 log, headed by bitbake's task progress while a build runs, Queue lists what waits (the running run,

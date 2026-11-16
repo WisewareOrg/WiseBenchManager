@@ -1,4 +1,4 @@
-"""`BenchRun.run`: `DISABLED`, the queue head, and the posted verdict."""
+"""`BenchRun.run`: `DISABLED`, the merge-queue entry taken, and the posted verdict."""
 
 import inspect
 import subprocess
@@ -166,10 +166,10 @@ def test_run_refuses_while_disabled_exists(
     bench_test_class.assert_not_called()
 
 
-def test_run_tests_the_queue_heads_sha_then_posts_success(
+def test_run_tests_the_merge_entrys_sha_then_posts_success(
     made, bench_test_class, systemctl, monkeypatch, tmp_path
 ):
-    """run tests the queue head's sha, then posts success; kind=run; it fetches nothing itself."""
+    """run tests the merge entry's sha, then posts success; kind=run; it fetches nothing itself."""
     _FakeQueue.result = _QUEUE_HEAD
     run = _make_run(tmp_path)
     run.run("env.yaml")

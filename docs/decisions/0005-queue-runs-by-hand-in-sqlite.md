@@ -71,7 +71,7 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
 - **A hand-written spool directory** (one file per entry). Rejected: it is our code doing what SQLite
   does, with its own id scheme, ordering and atomic claim.
 - **Reading the merge queue from the `gh-readonly-queue` refs with `git ls-remote`.** Rejected: GitHub
-  makes a ref only for the entry it is building, so the Queue tab showed one PR of a queue of five.
+  makes a ref only for the entry it is building, so the Queue tab showed that entry alone.
 - **Keeping the fetch in `entries()`**, with `--no-optional-locks`. Rejected: a fetch from the watch
   can race the tick's own fetch on ref locks and fail the run, which writes `DISABLED`.
 - **Skipping the watch's reads while a run is live.** Rejected: the Queue tab would stay stale for the
