@@ -3,6 +3,7 @@
 import pytest
 from github import Auth, Github, GithubIntegration, Repository
 from github.Installation import Installation
+from github.Requester import Requester
 
 from wisebench import check
 
@@ -17,12 +18,25 @@ class FakeRepository:
         self.calls.append(kwargs)
 
 
+class FakeRequester:
+    """Records every `graphql_query` call and answers `(headers, data)` with `data`."""
+
+    def __init__(self):
+        self.data = {}
+        self.calls = []
+
+    def graphql_query(self, query, variables):
+        self.calls.append((query, variables))
+        return {}, self.data
+
+
 class FakeGithub:
     """Records every `get_repo` call; `get_repo` returns the one `FakeRepository`."""
 
     def __init__(self, repository):
         self._repository = repository
         self.get_repo_calls = []
+        self.requester = FakeRequester()
 
     def get_repo(self, full_name_or_id):
         self.get_repo_calls.append(full_name_or_id)
@@ -70,6 +84,8 @@ def test_pygithub_app_auth_chain_exists_on_the_installed_version():
     assert hasattr(Installation, "get_github_for_installation")
     assert hasattr(Github, "get_repo")
     assert hasattr(Repository.Repository, "create_check_run")
+    assert hasattr(Github, "requester")
+    assert hasattr(Requester, "graphql_query")
 
 
 def test_init_raises_oserror_when_the_private_key_path_is_missing(tmp_path):
@@ -150,3 +166,58 @@ def test_post_never_calls_github_integration_on_an_invalid_conclusion(
     one = check.Check("acme/layer", 1, private_key_path, "bench")
     with pytest.raises(ValueError):
         one.post("deadbeef", conclusion, "title", "summary")
+
+
+def _merge_queue_data(*nodes):
+    return {"repository": {"mergeQueue": {"entries": {"nodes": list(nodes)}}}}
+
+
+def test_merge_queue_returns_each_entry_in_githubs_order_with_none_for_an_unbuilt_one(
+    monkeypatch, private_key_path
+):
+    FakeGithubIntegration.instances = []
+    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
+    one = check.Check("acme/layer", 1, private_key_path, "bench")
+    requester = None
+
+    def entry(position, number, title, oid):
+        return {
+            "position": position,
+            "state": "QUEUED",
+            "pullRequest": {"number": number, "title": title},
+            "headCommit": {"oid": oid} if oid else None,
+        }
+
+    original = FakeGithubIntegration.get_repo_installation
+
+    def capture(self, owner, name):
+        installation = original(self, owner, name)
+        installation.github.requester.data = _merge_queue_data(
+            entry(1, 324, "Add slot check", "deadbeef"), entry(2, 326, "Fix probe", None)
+        )
+        return installation
+
+    monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
+
+    assert one.merge_queue() == [
+        {"pr": 324, "title": "Add slot check", "sha": "deadbeef"},
+        {"pr": 326, "title": "Fix probe", "sha": None},
+    ]
+    requester = FakeGithubIntegration.instances[0].installation.github.requester
+    ((query, variables),) = requester.calls
+    assert variables == {"o": "acme", "n": "layer"}
+    assert 'mergeQueue(branch:"main")' in query
+    assert "entries(first:50)" in query
+
+
+def test_merge_queue_of_an_empty_queue_is_empty(monkeypatch, private_key_path):
+    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
+    original = FakeGithubIntegration.get_repo_installation
+
+    def capture(self, owner, name):
+        installation = original(self, owner, name)
+        installation.github.requester.data = _merge_queue_data()
+        return installation
+
+    monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
+    assert check.Check("acme/layer", 1, private_key_path, "bench").merge_queue() == []

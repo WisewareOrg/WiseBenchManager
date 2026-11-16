@@ -28,7 +28,7 @@ the run will build, and its place among the runs queued by hand. A ref that does
 commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the merge
 queue's head, one entry per start; to run one now, start `bench run` by hand. A run queued by hand
 posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an entry cannot be removed
-(ADR 0005 rev 2).
+(ADR 0005 rev 3).
 
 `bench test` does not fetch: it resolves the ref in the bench checkout, which refreshes `origin/*` on
 every idle tick. For a branch pushed since, run `git fetch origin <branch>` there first. Queue from
@@ -230,15 +230,15 @@ That env file, and everything else naming this board, lives in the layer, not he
 The runner is cloned on the pipeline host and run from its checkout at a tag; the record names the
 tag. `bench run` is started by a systemd user timer and holds a `fcntl.flock` on a `lock` file
 beside the records for the whole of a run; it backs off with exit 0 if the lock is already held. It
-asks `Queue.take()` for one entry: the oldest run queued by hand, else `Queue.head()`'s merge queue
-head entry -- the `gh-readonly-queue` ref whose own base is `origin/main`'s current tip, read with
-`git ls-remote` -- whose verdict it posts as a GitHub check run (`Check.post`). A waiting run queued
-by hand starts only when that read of the merge queue succeeds: a `git fetch` or `ls-remote` fault,
-or more than one qualifying ref, writes `DISABLED` as on any tick, before the hand entry runs.
+asks `Queue.take()` for one entry: the oldest run queued by hand, else the first merge-queue entry
+GitHub has built, read from GitHub's GraphQL API as the bench's GitHub App (`Check.merge_queue`),
+whose verdict it posts as a GitHub check run (`Check.post`). A waiting run queued by hand starts only
+when that read of the merge queue succeeds: a `git fetch` fault or a failed read of GitHub's API
+writes `DISABLED` as on any tick, before the hand entry runs.
 `bench status --watch` is the view of all of it, run from the directory `bench run` runs in. It is a
 curses screen refreshed once a second: Run shows the newest run's stages and the selected stage's
 log, headed by bitbake's task progress while a build runs, Queue lists what waits (the running run,
-the runs queued by hand, then the merge queue's head) and History lists every run on disk. `Tab` and
+the runs queued by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and
 `Shift-Tab` cycle the views and `1` to `3` jump to one; in Queue, `:run <ref>` previews the ref as
 you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
 the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes

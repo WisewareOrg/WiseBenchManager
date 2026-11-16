@@ -8,7 +8,7 @@ import signal
 import subprocess
 
 import pytest
-from helpers import repo_with_one_commit, stop_argv, stub_fetch
+from helpers import repo_with_one_commit, stop_argv, stub_fetch, stub_merge_queue
 
 from wisebench import bench_run, bench_test, cli, queue
 from wisebench.lock import Lock
@@ -65,7 +65,7 @@ def test_main_test_needs_neither_lg_env_nor_the_lock(monkeypatch, tmp_path, caps
     repo_with_one_commit(tmp_path)
     monkeypatch.delenv("LG_ENV", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    stub_merge_queue(monkeypatch, tmp_path)
     sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -84,7 +84,7 @@ def test_main_test_refuses_a_ref_that_is_not_a_commit(monkeypatch, tmp_path, cap
     """An unresolvable ref exits 2 with the named error and queues nothing."""
     repo_with_one_commit(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    stub_merge_queue(monkeypatch, tmp_path)
 
     assert cli.main(["test", "no-such-ref"]) == 2
 
@@ -99,7 +99,7 @@ def test_main_unqueue_removes_a_queued_run(monkeypatch, tmp_path, capsys):
     repo_with_one_commit(tmp_path)
     monkeypatch.delenv("LG_ENV", raising=False)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    stub_merge_queue(monkeypatch, tmp_path)
     store = queue.Queue(tmp_path, tmp_path / "records")
 
     with _hold_lock(tmp_path):
@@ -115,7 +115,7 @@ def test_main_unqueue_of_an_id_not_queued_exits_2(monkeypatch, tmp_path, capsys)
     """`bench unqueue <id>` of a run that is not queued exits 2 with the named error."""
     repo_with_one_commit(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    stub_merge_queue(monkeypatch, tmp_path)
 
     assert cli.main(["unqueue", "99"]) == 2
 
@@ -129,7 +129,7 @@ def test_main_unqueue_of_a_run_already_taken_exits_2(monkeypatch, tmp_path, caps
     repo_with_one_commit(tmp_path)
     monkeypatch.chdir(tmp_path)
     stub_fetch(monkeypatch)
-    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    stub_merge_queue(monkeypatch, tmp_path)
     store = queue.Queue(tmp_path, tmp_path / "records")
     entry_id, _, _ = store.add("HEAD", None, False, [])
     assert store.take()["id"] == entry_id
@@ -300,26 +300,12 @@ def test_main_run_on_sigterm_writes_disabled_and_stops_the_timer(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LG_ENV", "unused.yaml")
 
-    disable_run = bench_run.subprocess.run
-
-    def fake_subprocess_run(command, **kwargs):
-        if command[0] == "systemctl":
-            return disable_run(command, **kwargs)
-
-        class _Result:
-            returncode = 0
-            stderr = ""
-
-        return _Result()
-
-    monkeypatch.setattr(bench_run.subprocess, "run", fake_subprocess_run)
-
     class _StubQueue:
         def __init__(self, checkout, directory):
             pass
 
         def take(self):
-            return {"kind": "run", "ref": "main", "sha": "deadbeef", "pr": 1}
+            return {"kind": "run", "pr": 1, "title": "t", "sha": "deadbeef"}
 
     class _StubCheck:
         def __init__(self, *a, **kw):
@@ -401,7 +387,7 @@ def test_main_queue_commands_on_an_unreadable_queue_db_exit_2_with_a_bench_error
     """A fault other than a bad ref ends `bench test`/`unqueue` as BENCH ERROR and exit 2."""
     _corrupt_queue_db(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(queue.Queue, "head", lambda self: None)
+    stub_merge_queue(monkeypatch, tmp_path)
 
     assert cli.main(argv) == 2
 

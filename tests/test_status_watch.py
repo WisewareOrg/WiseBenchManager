@@ -456,7 +456,7 @@ def test_dd_on_a_row_already_gone_says_there_is_no_such_run(monkeypatch, tmp_pat
 
 
 def test_dd_on_the_merge_head_refuses_and_calls_remove_for_nothing(monkeypatch, tmp_path):
-    merge = {"kind": "run", "ref": "refs/heads/q/pr-14-cafef00d", "sha": "9" * 40, "pr": 14}
+    merge = {"kind": "run", "pr": 14, "title": "Add slot check", "sha": "9" * 40}
     calls = stub_queue(monkeypatch, entries=lambda: [merge])
     keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, "q"]
     fake = watch_with(monkeypatch, tmp_path, keys)

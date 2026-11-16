@@ -263,3 +263,49 @@ def terminal(monkeypatch, tmp_path, colours, redefinable=False):
     monkeypatch.setattr(curses, "init_color", lambda *args: touched.append(args))
     monkeypatch.setattr(curses, "can_change_color", lambda: redefinable)
     return pairs, touched
+
+
+class FakeMergeQueueCheck:
+    """Stand-in for `wisebench.check.Check` as `Queue` builds it.
+
+    Serves `result` as the merge queue.
+
+    `result` is a list of `{pr, title, sha}` or an exception to raise; `constructed` holds the
+    arguments of every instance built.
+    """
+
+    constructed = []
+    result = []
+
+    def __init__(self, repo, app_id, private_key, check):
+        FakeMergeQueueCheck.constructed.append((repo, app_id, private_key, check))
+
+    def merge_queue(self):
+        if isinstance(FakeMergeQueueCheck.result, Exception):
+            raise FakeMergeQueueCheck.result
+        return [dict(entry) for entry in FakeMergeQueueCheck.result]
+
+
+def stub_merge_queue(monkeypatch, checkout, entries=()):
+    """Give `checkout` a `bench.toml` with a `[github]` table and put `FakeMergeQueueCheck` in.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores `wisebench.queue.Check` at teardown.
+        checkout (pathlib.Path): The directory the `bench.toml` is written in.
+        entries (list[dict]): The merge queue to serve, `{pr, title, sha}` each.
+
+    Returns:
+        type: `FakeMergeQueueCheck`, reset; set its `result` to change what is served.
+    """
+    from wisebench import queue
+
+    write_bench_toml(checkout)
+    with (checkout / "bench.toml").open("a") as toml:
+        toml.write(
+            '\n[github]\nrepo = "acme/layer"\napp_id = 7\n'
+            'private_key = "/outside/app.pem"\ncheck = "bench"\n'
+        )
+    monkeypatch.setattr(queue, "Check", FakeMergeQueueCheck)
+    FakeMergeQueueCheck.constructed = []
+    FakeMergeQueueCheck.result = list(entries)
+    return FakeMergeQueueCheck

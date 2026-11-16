@@ -53,10 +53,11 @@ HAND2 = {
 }
 MERGE = {
     "kind": "run",
-    "ref": "refs/heads/gh-readonly-queue/main/pr-14-cafef00d",
-    "sha": "9f8e7d6" + "0" * 33,
     "pr": 14,
+    "title": "Add slot check",
+    "sha": "9f8e7d6" + "0" * 33,
 }
+WAITING = {"kind": "run", "pr": 15, "title": "Fix probe", "sha": None}
 NOT_REMOVABLE = "only hand-queued runs can be removed"
 
 
@@ -889,7 +890,7 @@ def test_the_queue_has_a_running_row_then_hand_entries_then_the_merge_head():
         ("▶", "merge queue", "PR #31"),
         ("2", "by hand", "feature-a"),
         ("3", "by hand", "feature-b"),
-        ("4", "merge queue", "PR #14"),
+        ("4", "merge queue", "PR #14 Add slot check"),
     ]
 
 
@@ -904,6 +905,32 @@ def test_the_merge_head_is_hidden_when_its_sha_equals_the_running_sha():
     assert [r.marker for r in frame.queue_rows] == ["▶", "2"]
     idle = resolve([live("build")], IDLE, queue_state(), queue=[HAND1, same])
     assert [r.marker for r in idle.queue_rows] == ["1", "2"]
+
+
+def test_a_merge_entry_with_no_sha_draws_an_empty_sha_and_is_not_the_running_one():
+    hand_run = live("checkout", kind="test", pr=None, ref="feature-a", sha=None)
+    rows = resolve([hand_run], LIVE, queue_state(), queue=[WAITING]).queue_rows
+    assert [(r.what, r.sha7) for r in rows] == [("feature-a", ""), ("PR #15 Fix probe", "")]
+
+
+def test_the_cursor_keeps_its_merge_queue_row_by_pr_when_rows_before_it_go_away():
+    state = view.State()
+    press(state, [run()], "2jj", queue=[HAND1, MERGE, WAITING])
+    after = resolve([run()], state=state, queue=[MERGE, WAITING])
+    assert (after.queue_cursor, after.queue_rows[after.queue_cursor].what) == (
+        1,
+        "PR #15 Fix probe",
+    )
+
+
+def test_the_cursor_follows_a_merge_queue_pr_that_moves_to_another_position():
+    state = view.State()
+    press(state, [run()], "2jk", queue=[MERGE, WAITING])
+    after = resolve([run()], state=state, queue=[WAITING, MERGE])
+    assert (after.queue_cursor, after.queue_rows[after.queue_cursor].what) == (
+        1,
+        "PR #14 Add slot check",
+    )
 
 
 def test_a_queue_not_read_yet_has_no_rows_and_no_cursor():
@@ -926,7 +953,12 @@ def test_a_hand_row_carries_its_ref_sha7_local_added_time_kind_and_id(local_zone
 
 def test_the_merge_head_row_has_its_pr_sha7_no_added_time_and_no_id():
     (row,) = resolve([run()], IDLE, queue_state(), queue=[MERGE]).queue_rows
-    assert (row.source, row.what, row.sha7, row.added) == ("merge queue", "PR #14", "9f8e7d6", "")
+    assert (row.source, row.what, row.sha7, row.added) == (
+        "merge queue",
+        "PR #14 Add slot check",
+        "9f8e7d6",
+        "",
+    )
     assert (row.stage, row.kind, row.id) == ("", "run", None)
 
 
