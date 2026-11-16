@@ -175,7 +175,9 @@ def test_run_tests_the_merge_entrys_sha_then_posts_success(
     run.run("env.yaml")
 
     assert systemctl.calls == []
-    bench_test_class.assert_called_once_with(tmp_path, "cafef00d", None, kind="run", pr=14)
+    bench_test_class.assert_called_once_with(
+        tmp_path, "cafef00d", None, kind="run", pr=14, result_dir=tmp_path / "records"
+    )
     _run_of(bench_test_class).assert_called_once_with("env.yaml", [], post=ANY)
     assert _FakeCheck.posts == []
     _post_of(bench_test_class)(None)
@@ -392,6 +394,7 @@ def test_run_of_a_hand_entry_reaches_bench_test_as_kind_test_with_the_queued_opt
     assert ctor["set_name"] == "s1"
     assert ctor["skip_build"] is True
     assert ctor["kind"] == "test" == _HAND_ENTRY["kind"]
+    assert ctor["result_dir"] == tmp_path / "records"
     _run_of(bench_test_class).assert_called_once()
     run_args = _run_args(bench_test_class)
     assert run_args["lg_env"] == "env.yaml"

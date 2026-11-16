@@ -7,6 +7,11 @@ import re
 import subprocess
 
 
+def clone_root(tmp_path):
+    """The fake WiseBenchManager clone the `bench_clone` fixture makes under `tmp_path`."""
+    return tmp_path / "bench"
+
+
 def git(repo, *args):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
@@ -51,6 +56,9 @@ def write_lg_env(repo):
 def write_suite(repo, name, *, passing=True):
     suite = repo / name
     suite.mkdir(parents=True)
+    pyproject = repo / "pyproject.toml"
+    if not pyproject.exists():
+        pyproject.write_text('[project]\nname = "layer"\nversion = "0"\n')
     body = "assert True" if passing else "assert False"
     (suite / "test_one.py").write_text(f"def test_one():\n    {body}\n")
 
@@ -248,12 +256,11 @@ class FakeScreen:
 
 
 def terminal(monkeypatch, tmp_path, colours, redefinable=False):
-    """Fake a terminal of `colours` colours (0: none) with no `bench.toml` in the working directory.
+    """Fake a terminal of `colours` colours (0: none).
 
     Returns the colour pairs initialised, number to (fg, bg), and the `init_color` calls.
     """
     pairs, touched = {}, []
-    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(curses, "has_colors", lambda: colours > 0)
     monkeypatch.setattr(curses, "COLORS", colours, raising=False)
     monkeypatch.setattr(curses, "start_color", lambda: None)

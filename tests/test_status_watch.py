@@ -14,7 +14,16 @@ import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import COLS, ROWS, FakeScreen, start_argv, stop_argv, terminal, write_bench_toml
+from helpers import (
+    COLS,
+    ROWS,
+    FakeScreen,
+    clone_root,
+    start_argv,
+    stop_argv,
+    terminal,
+    write_bench_toml,
+)
 
 from wisebench import queue, screen, status
 
@@ -126,7 +135,7 @@ def test_a_surface_write_is_clipped_at_the_right_edge_and_dropped_past_it():
     assert fake.writes == [(0, COLS - 10, "x" * 10, 7)]
 
 
-def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_path):
+def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_path, bench_clone):
     """Real curses on a pty: the corner-cell behaviour the fake window imitates."""
     if (
         shutil.which("infocmp") is None
@@ -135,7 +144,11 @@ def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_pa
         pytest.skip("no xterm-256color terminfo entry")
     import pty
 
-    code = f"import sys; from wisebench import status; sys.exit(status.watch({str(tmp_path)!r}))"
+    code = (
+        "import sys, wisebench; from wisebench import status; "
+        f"wisebench.__file__ = {str(bench_clone.root / 'src' / 'wisebench' / '__init__.py')!r}; "
+        f"sys.exit(status.watch({str(tmp_path)!r}))"
+    )
     pid, fd = pty.fork()
     if pid == 0:
         try:
@@ -283,8 +296,8 @@ def last_frame(fake):
     return "\n".join(fake.frames[-1])
 
 
-def test_entering_the_queue_reads_it_once_through_a_queue_over_the_cwd_and_the_directory(
-    monkeypatch, tmp_path
+def test_entering_the_queue_reads_it_once_through_a_queue_over_the_clones_checkout(
+    monkeypatch, tmp_path, bench_clone
 ):
     owners = []
     calls = stub_queue(monkeypatch, entries=lambda: [HAND])
@@ -296,7 +309,7 @@ def test_entering_the_queue_reads_it_once_through_a_queue_over_the_cwd_and_the_d
     )
     fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
     assert calls == [("entries",)]
-    assert owners == [(tmp_path, tmp_path / "records")]
+    assert owners == [(bench_clone.checkout, tmp_path / "records")]
     assert "feature-a" in last_frame(fake)
 
 
@@ -589,8 +602,9 @@ def bench_command(monkeypatch, tmp_path, keys, *, unit=True, disabled=True):
     directory = tmp_path / "records"
     directory.mkdir(exist_ok=True)
     if unit:
-        write_bench_toml(tmp_path)
-        with open(tmp_path / "bench.toml", "a") as f:
+        checkout = clone_root(tmp_path) / "checkout"
+        write_bench_toml(checkout)
+        with open(checkout / "bench.toml", "a") as f:
             f.write(UNIT_TABLE)
     if disabled:
         (directory / "DISABLED").write_text("2026-11-13T00:00:00+00:00\nboom\n")
@@ -651,8 +665,9 @@ def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_show
 ):
     stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(RuntimeError("remote is down")))
     held, release = held_work()
-    write_bench_toml(tmp_path)
-    with open(tmp_path / "bench.toml", "a") as f:
+    checkout = clone_root(tmp_path) / "checkout"
+    write_bench_toml(checkout)
+    with open(checkout / "bench.toml", "a") as f:
         f.write(UNIT_TABLE)
     terminal(monkeypatch, tmp_path, 0)
     seen = []

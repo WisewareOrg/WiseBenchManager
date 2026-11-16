@@ -639,7 +639,7 @@ def snapshot(root):
 
 @pytest.mark.skipif(ROOT, reason="root ignores read-only modes")
 def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_reads_and_writes(
-    tmp_path, monkeypatch, systemctl
+    tmp_path, monkeypatch, systemctl, bench_clone
 ):
     """`_loop` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes and mtimes
     unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the timer query
@@ -659,8 +659,8 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
             "host_suite": [rep("t.py::h", "call", "passed")],
         },
     )
-    write_bench_toml(tmp_path)
-    with open(tmp_path / "bench.toml", "a") as f:
+    write_bench_toml(bench_clone.checkout)
+    with open(bench_clone.checkout / "bench.toml", "a") as f:
         f.write('\n[run]\nunit = "bench-run"\n')
     (records / "DISABLED").write_text("reason\n")
     (records / "lock").touch()
@@ -826,7 +826,13 @@ def test_a_log_written_by_a_real_bench_test_run_parses_into_the_model(
     write_bench_toml(tmp_path, precondition=options.get("precondition", "true"))
     setup(tmp_path)
     runner = bench_test.BenchTest(
-        tmp_path, "HEAD", None, skip_build=options.get("skip_build", False), kind="run", pr=7
+        tmp_path,
+        "HEAD",
+        None,
+        result_dir=tmp_path / "records",
+        skip_build=options.get("skip_build", False),
+        kind="run",
+        pr=7,
     )
     post = None if options.get("post") is False else (lambda failure: None)
     try:

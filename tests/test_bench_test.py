@@ -25,7 +25,7 @@ def test_a_dirty_tree_raises_runtime_error(monkeypatch, tmp_path):
     repo_with_one_commit(tmp_path)
     write_bench_toml(tmp_path)
     (tmp_path / "tracked.txt").write_text("changed\n")
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with pytest.raises(RuntimeError, match=r"tree is dirty: \["):
         bench.run("env.yaml", [])
 
@@ -35,7 +35,7 @@ def test_a_failing_precondition_hook_is_a_bench_failure(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     repo_with_one_commit(tmp_path)
     write_bench_toml(tmp_path, precondition="exit 9")
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with pytest.raises(bench_test.BenchFailure, match="precondition exited 9"):
         bench.run("env.yaml", [])
 
@@ -48,7 +48,7 @@ def test_a_failing_build_hook_is_a_candidate_failure(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     repo_with_one_commit(tmp_path)
     write_bench_toml(tmp_path, build="exit 3")
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with pytest.raises(bench_test.CandidateFailure, match="build exited 3"):
         bench.run("env.yaml", [])
 
@@ -63,7 +63,7 @@ def test_a_failing_host_suite_is_a_candidate_failure(monkeypatch, tmp_path):
     repo_with_one_commit(tmp_path)
     write_bench_toml(tmp_path)
     write_suite(tmp_path, "host_suite", passing=False)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with pytest.raises(bench_test.CandidateFailure, match="host_suite failed"):
         bench.run("env.yaml", [])
 
@@ -76,7 +76,7 @@ def test_a_failing_target_suite_is_a_candidate_failure(monkeypatch, tmp_path):
     write_suite(tmp_path, "host_suite", passing=True)
     write_suite(tmp_path, "target_suite", passing=False)
     lg_env = write_lg_env(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with pytest.raises(bench_test.CandidateFailure, match="target_suite failed"):
         bench.run(lg_env, [])
 
@@ -114,7 +114,7 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
     write_bench_toml(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
 
     bench.run("env.yaml", ["-k", "x"])
 
@@ -137,7 +137,7 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     assert commands[7].index("--capture=tee-sys") < commands[7].index("-k")
 
     precondition_env = calls[3][1]
-    assert precondition_env["BENCH_RESULT_DIR"] == "records"
+    assert precondition_env["BENCH_RESULT_DIR"] == str(tmp_path / "records")
     assert "BENCH_SKIP_BUILD" not in precondition_env
 
     target_env = calls[7][1]
@@ -153,7 +153,9 @@ def test_each_suite_gets_its_own_record_dir_inside_the_run_folder(monkeypatch, t
     calls = _stub_subprocess(monkeypatch)
     write_bench_toml(tmp_path)
 
-    bench_test.BenchTest(tmp_path, "HEAD", None).run("env.yaml", [])
+    bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records").run(
+        "env.yaml", []
+    )
 
     run_dir = next((tmp_path / "records").rglob("bench.log")).parent.resolve()
     assert calls[3][1].get("BENCH_RECORD_DIR") is None  # precondition
@@ -167,7 +169,9 @@ def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
     write_bench_toml(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None, skip_build=True)
+    bench = bench_test.BenchTest(
+        tmp_path, "HEAD", None, result_dir=tmp_path / "records", skip_build=True
+    )
 
     bench.run("env.yaml", ["-k", "x"])
 
@@ -197,7 +201,7 @@ def test_a_real_pytest_subprocess_clears_addopts(tmp_path, monkeypatch):
     ini = '[tool.pytest.ini_options]\naddopts = "--no-such-option"\n'
     (tmp_path / "pyproject.toml").write_text(ini)
     write_suite(tmp_path, "suite", passing=True)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with open(tmp_path / "bench.log", "ab+") as log:
         bench._run_suite(
             "suite_stage", tmp_path / "run", "suite", {**os.environ}, [], log
@@ -208,7 +212,7 @@ def test_run_suite_raises_bench_failure_when_pytest_itself_faults(tmp_path, monk
     """pytest exiting nonzero for a usage error is BenchFailure, not CandidateFailure."""
     monkeypatch.setattr(bench_test.subprocess, "run", functools.partial(subprocess.run, timeout=30))
     write_suite(tmp_path, "suite", passing=True)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with (
         open(tmp_path / "bench.log", "w") as log,
         pytest.raises(bench_test.BenchFailure, match="pytest exited"),
@@ -231,7 +235,7 @@ def test_a_fixture_setup_error_is_a_bench_failure_not_a_candidate_failure(tmp_pa
         "def test_one(broken):\n"
         "    pass\n"
     )
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
     with (
         open(tmp_path / "bench.log", "w") as log,
         pytest.raises(bench_test.BenchFailure, match="pytest exited"),
@@ -248,7 +252,7 @@ def test_hook_output_and_every_marker_land_in_bench_log_in_order(monkeypatch, tm
     write_suite(tmp_path, "host_suite", passing=True)
     write_suite(tmp_path, "target_suite", passing=True)
     lg_env = write_lg_env(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
 
     bench.run(lg_env, [])
 
@@ -295,7 +299,9 @@ def test_run_started_line_carries_the_pr_number_when_one_is_given(monkeypatch, t
     write_suite(tmp_path, "host_suite", passing=True)
     write_suite(tmp_path, "target_suite", passing=True)
     lg_env = write_lg_env(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None, kind="run", pr=7)
+    bench = bench_test.BenchTest(
+        tmp_path, "HEAD", None, result_dir=tmp_path / "records", kind="run", pr=7
+    )
 
     bench.run(lg_env, [])
 
@@ -322,7 +328,9 @@ def test_a_pinned_sha_is_built_though_the_ref_now_names_another_commit(monkeypat
     write_suite(tmp_path, "host_suite", passing=True)
     write_suite(tmp_path, "target_suite", passing=True)
     lg_env = write_lg_env(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None, sha=pinned)
+    bench = bench_test.BenchTest(
+        tmp_path, "HEAD", None, result_dir=tmp_path / "records", sha=pinned
+    )
 
     bench.run(lg_env, [])
 
@@ -355,7 +363,9 @@ def test_a_passing_run_posts_none_in_a_posted_stage_before_run_passed(monkeypatc
     lg_env = write_lg_env(tmp_path)
     post, calls = _recording_post(tmp_path)
 
-    bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [], post=post)
+    bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records").run(
+        lg_env, [], post=post
+    )
 
     assert len(calls) == 1
     assert calls[0][0] is None
@@ -382,7 +392,9 @@ def test_a_target_suite_failure_posts_the_failure_then_reraises_after_run_failed
     post, calls = _recording_post(tmp_path)
 
     with pytest.raises(bench_test.CandidateFailure, match="target_suite failed") as raised:
-        bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [], post=post)
+        bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records").run(
+            lg_env, [], post=post
+        )
 
     assert len(calls) == 1
     assert calls[0][0] is raised.value
@@ -402,7 +414,7 @@ def test_stage_names_are_fixed_regardless_of_the_configured_suite_paths(monkeypa
     write_suite(tmp_path, "suites/host", passing=True)
     write_suite(tmp_path, "suites/target", passing=True)
     lg_env = write_lg_env(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
 
     bench.run(lg_env, [])
 
@@ -428,7 +440,7 @@ def test_a_keyboardinterrupt_during_a_hook_is_an_error_and_reraises(monkeypatch,
         return real_run(command, **kwargs, timeout=30)
 
     monkeypatch.setattr(bench_test.subprocess, "run", fake_run)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records")
 
     with pytest.raises(KeyboardInterrupt):
         bench.run("env.yaml", [])
@@ -448,7 +460,7 @@ def test_suite_records_land_in_the_run_folder_and_nowhere_else(monkeypatch, tmp_
     write_suite(tmp_path, "target_suite", passing=True)
     lg_env = write_lg_env(tmp_path)
 
-    bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [])
+    bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records").run(lg_env, [])
 
     run_dir = next((tmp_path / "records").rglob("bench.log")).parent
     for stage in ("host_suite", "target_suite"):
@@ -489,7 +501,7 @@ def test_a_suite_writes_queued_setup_and_started_markers_around_its_live_output(
     )
     lg_env = write_lg_env(tmp_path)
 
-    bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [])
+    bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records").run(lg_env, [])
 
     lines = next((tmp_path / "records").rglob("bench.log")).read_text().splitlines()
     begin = next(i for i, line in enumerate(lines) if line.endswith("stage target_suite started"))
@@ -531,7 +543,9 @@ def test_a_post_that_raises_ends_the_log_with_posted_error_then_run_error_and_pr
         raise OSError("github unreachable")
 
     with pytest.raises(OSError, match="github unreachable"):
-        bench_test.BenchTest(tmp_path, "HEAD", None).run(lg_env, [], post=post)
+        bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records").run(
+            lg_env, [], post=post
+        )
 
     lines = marker_lines(tmp_path)
     assert lines[-3] == "stage posted started"
@@ -548,7 +562,9 @@ def test_a_bench_failure_is_never_posted_and_ends_the_log_with_run_error(monkeyp
     post, calls = _recording_post(tmp_path)
 
     with pytest.raises(bench_test.BenchFailure, match="precondition exited 9"):
-        bench_test.BenchTest(tmp_path, "HEAD", None).run("env.yaml", [], post=post)
+        bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=tmp_path / "records").run(
+            "env.yaml", [], post=post
+        )
 
     assert calls == []
     lines = marker_lines(tmp_path)

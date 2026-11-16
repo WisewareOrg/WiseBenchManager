@@ -3,10 +3,13 @@
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import create_autospec
 
 import pytest
+from helpers import clone_root, repo_with_one_commit
 
+import wisebench
 from wisebench import bench_run
 from wisebench.bench_test import BenchTest
 
@@ -20,6 +23,50 @@ def _isolated_home(monkeypatch, tmp_path):
         tmp_path (pathlib.Path): The test's own temporary directory.
     """
     monkeypatch.setenv("HOME", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
+def bench_clone(monkeypatch, tmp_path, _isolated_home):
+    """Make a fake WiseBenchManager clone and put the package in it, for every test.
+
+    `wisebench.__file__` points into the fake, so the clone locator finds it and no test can reach
+    the live clone. The clone is a git repo with `pyproject.toml`, `records/` and `checkout/`,
+    which is its own git repo holding one commit. HOME is `tmp_path`, with an empty
+    `~/.config/wisebench/bench.env`. The working directory is an unrelated empty directory.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores `wisebench.__file__` and the working directory.
+        tmp_path (pathlib.Path): The test's own temporary directory.
+        _isolated_home (None): Orders this fixture after HOME is set.
+
+    Returns:
+        types.SimpleNamespace: `root`, `records`, `checkout`, `elsewhere` (the working
+        directory) and `bench_env` (the path of the fake `bench.env`).
+    """
+    root = clone_root(tmp_path)
+    package = root / "src" / "wisebench"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (root / "pyproject.toml").write_text('[project]\nname = "wisebench"\nversion = "0"\n')
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+    (root / "records").mkdir()
+    checkout = root / "checkout"
+    checkout.mkdir()
+    repo_with_one_commit(checkout)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    bench_env = tmp_path / ".config" / "wisebench" / "bench.env"
+    bench_env.parent.mkdir(parents=True)
+    bench_env.write_text("# the fake bench.env\n")
+    monkeypatch.setattr(wisebench, "__file__", str(package / "__init__.py"))
+    monkeypatch.chdir(elsewhere)
+    return SimpleNamespace(
+        root=root,
+        records=root / "records",
+        checkout=checkout,
+        elsewhere=elsewhere,
+        bench_env=bench_env,
+    )
 
 
 @pytest.fixture
