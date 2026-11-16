@@ -166,7 +166,7 @@ class QueueRow:
             counting as 1.
         source (str): "by hand" or "merge queue".
         what (str): A merge-queue entry reads "PR #<n> <title>"; the running run likewise when the
-            merge queue holds an entry with its sha, else "PR #<n>", or its ref when it has no
+            merge queue holds an entry with its PR, else "PR #<n>", or its ref when it has no
             PR; a hand entry its ref.
         sha7 (str): The commit's first 7 characters; blank until known (a merge-queue entry
             GitHub has not built).
@@ -337,23 +337,20 @@ def _queue_rows(snap):
     """The Queue tab's rows: the running run, the hand entries, then the merge-queue entries.
 
     The running run is the newest run while the bench is running it. A merge-queue entry is left
-    out while its sha is the sha the running run checked out.
+    out while its sha is the sha the running run checked out; the running run takes its title
+    from the entry with its PR number.
     """
-    rows, building = [], None
+    rows, running_sha = [], None
     if snap.bench.live and snap.runs:
         run = snap.runs[0]
         opened = next((s for s in run.stages if s.state == "open"), None)
         checkout = next((s for s in run.stages if s.name == "checkout"), None)
         running_sha = checkout.sha if checkout else None
-        building = next(
-            (
-                e
-                for e in snap.queue or []
-                if e["kind"] == "run" and running_sha and e["sha"] == running_sha
-            ),
+        titled = next(
+            (e for e in snap.queue or [] if e["kind"] == "run" and run.pr and e["pr"] == run.pr),
             None,
         )
-        title = f" {building['title']}" if building else ""
+        title = f" {titled['title']}" if titled else ""
         rows.append(
             QueueRow(
                 _RUNNING,
@@ -368,7 +365,7 @@ def _queue_rows(snap):
             )
         )
     for entry in snap.queue or []:
-        if entry is building:
+        if entry["kind"] == "run" and entry["sha"] is not None and entry["sha"] == running_sha:
             continue
         hand = entry["kind"] == "test"
         added = (

@@ -933,13 +933,19 @@ def test_the_cursor_follows_a_merge_queue_pr_that_moves_to_another_position():
     )
 
 
-def test_the_running_row_takes_its_title_from_the_merge_entry_with_the_running_sha():
-    same = {**MERGE, "sha": SHA, "title": "Add slot check"}
+def test_the_running_row_takes_its_title_from_the_merge_entry_with_its_pr():
+    same = {**MERGE, "pr": 31, "sha": SHA, "title": "Add slot check"}
     (row, *_) = resolve([live("build")], LIVE, queue_state(), queue=[same]).queue_rows
     assert row.what == "PR #31 Add slot check"
 
 
-def test_the_running_row_stays_pr_only_when_no_merge_entry_has_its_sha():
+def test_the_running_row_keeps_its_title_when_the_merge_group_is_rebuilt_mid_run():
+    rebuilt = {**MERGE, "pr": 31, "sha": "e" * 40, "title": "Add slot check"}
+    rows = resolve([live("build")], LIVE, queue_state(), queue=[rebuilt]).queue_rows
+    assert [r.what for r in rows] == ["PR #31 Add slot check", "PR #31 Add slot check"]
+
+
+def test_the_running_row_stays_pr_only_when_no_merge_entry_has_its_pr():
     (row, *_) = resolve([live("build")], LIVE, queue_state(), queue=[MERGE]).queue_rows
     assert row.what == "PR #31"
 
