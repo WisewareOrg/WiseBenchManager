@@ -2,15 +2,12 @@
 
 **Status:** accepted
 **Decided:** 2026-11-16 (WisewareOrg/WiseBenchManager #72 Queue tab shows the whole merge queue)
-**Rev:** 2
+**Rev:** 1
 
 ## Revisions
 
-- **rev 2** — 2026-11-16 — decision 5 restated: the merge queue is read in full from GitHub's
-  GraphQL API in place of the head from its refs, `take()` takes the first entry GitHub has built,
-  and the watch view's read writes nothing into `.git` (#23 Queue view; #72 Queue tab shows the
-  whole merge queue).
-- **rev 1** — 2026-11-12 — first written (#60 Queue behaviour).
+- **rev 1** — 2026-11-16 — first written (#60 Queue behaviour; #23 Queue view; #72 Queue tab shows
+  the whole merge queue).
 
 ## Context
 
@@ -21,7 +18,7 @@ until the board was free, and the merge queue's runs and the hand runs had no co
 
 What the choice is held to:
 
-- Runs on the board stay one at a time, started by the timer of ADR 0003 rev 3, with the lock and
+- Runs on the board stay one at a time, started by the timer of ADR 0003 rev 2, with the lock and
   the `DISABLED` marker unchanged.
 - A maintained tool before code of our own, for the store and the exclusion both.
 - A run that is taken is never taken twice.
