@@ -610,6 +610,20 @@ def test_moving_the_cursor_moves_the_selection_with_it():
     assert {cell[2] for cell in grid.span(r"by hand +feature-a +1111111 +06:15")} == {None}
 
 
+def test_a_merge_row_draws_the_canvas_what_uncut_and_a_long_title_cut():
+    entry = {**MERGE_ENTRY, "title": "Add slot check"}
+    long = {**MERGE_ENTRY, "pr": 15, "title": "A title much longer than the column"}
+    grid, _ = queue_drawn(queue=[entry, long])
+    grid.find(r"merge queue +PR #14 Add slot check +9f8e7d6")
+    grid.find(r"merge queue +PR #15 A title much long +9f8e7d6")
+
+
+@pytest.mark.parametrize("stage", ["precondition", "target_suite"])
+def test_the_longest_running_stage_still_fits_the_80_column_queue_row(stage):
+    grid, _ = queue_drawn([live(stage)], LIVE, queue=[])
+    grid.find(rf"running, {stage}$")
+
+
 def test_the_running_row_is_a_marker_a_tint_and_the_amber_running_stage():
     grid, _ = queue_drawn([live("build")], LIVE, queue=[HAND_ENTRY], keys="j")
     assert grid.span(r"▶")[0][1] == screen.AMBER

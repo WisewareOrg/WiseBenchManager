@@ -73,7 +73,7 @@ class Check:
         _, data = self._github().requester.graphql_query(
             _MERGE_QUEUE, {"o": self._owner, "n": self._name}
         )
-        queue = data["repository"]["mergeQueue"]
+        queue = data["data"]["repository"]["mergeQueue"]
         nodes = queue["entries"]["nodes"] if queue else []
         return [
             {
