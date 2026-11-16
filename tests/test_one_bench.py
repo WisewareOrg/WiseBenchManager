@@ -1,16 +1,15 @@
 """The WiseBenchManager clone is the bench: every command acts on its state from any directory."""
 
-import contextlib
 import curses
-import fcntl
 import json
-import shutil
 import subprocess
 
 import helpers
 import pytest
 from helpers import (
+    FakeBenchRun,
     FakeScreen,
+    holding,
     repo_with_one_commit,
     stub_merge_queue,
     terminal,
@@ -26,38 +25,14 @@ from wisebench.records import Records
 LAYER_TOML_TABLES = '\n[run]\nunit = "bench-run"\n'
 
 
-class FakeBenchRun:
-    """Stand-in for `wisebench.bench_run.BenchRun` that records what `main` built and ran."""
-
-    instances = []
-
-    def __init__(self, checkout, config, result_dir):
-        self.checkout, self.config, self.result_dir = checkout, config, result_dir
-        self.lg_envs = []
-        FakeBenchRun.instances.append(self)
-
-    def run(self, lg_env):
-        self.lg_envs.append(lg_env)
-
-
 @pytest.fixture
 def fake_run(monkeypatch):
     """Put `FakeBenchRun` into `cli`, with `LG_ENV` set; yield its instances."""
     FakeBenchRun.instances = []
+    FakeBenchRun.outcome = None
     monkeypatch.setenv("LG_ENV", "caller.yaml")
     monkeypatch.setattr(cli, "BenchRun", FakeBenchRun)
     return FakeBenchRun.instances
-
-
-@contextlib.contextmanager
-def holding(directory):
-    """Hold `directory/lock` on a second fd."""
-    with open(directory / "lock", "w") as held:
-        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            yield
-        finally:
-            fcntl.flock(held, fcntl.LOCK_UN)
 
 
 def layer_checkout_with_unit(checkout, unit="bench-run"):
@@ -103,7 +78,7 @@ def test_bench_test_from_another_directory_queues_into_the_clones_queue(
 
 
 def test_bench_result_dir_in_the_environment_does_not_move_the_queue(monkeypatch, bench_clone):
-    """The variable hooks receive no longer chooses where `bench test` keeps state."""
+    """The variable hooks receive does not choose where `bench test` keeps state."""
     stub_merge_queue(monkeypatch, bench_clone.checkout)
     monkeypatch.setenv("BENCH_RESULT_DIR", "somewhere-else")
 
@@ -248,7 +223,26 @@ def test_bench_run_exits_2_when_bench_env_is_missing(fake_run, bench_clone, caps
     assert fake_run == []
 
 
-# -- refusing when the bench cannot be found --------------------------------------------------
+@pytest.mark.parametrize(
+    "line",
+    ["K='v'", "K=a\\b", 'K="a"b', "export K=v", "not a variable"],
+    ids=["single-quoted", "backslash", "text-after-the-closing-quote", "export", "no-equals"],
+)
+def test_bench_run_refuses_a_bench_env_line_it_could_read_differently_from_systemd(
+    line, fake_run, bench_clone, capsys
+):
+    layer_checkout_with_unit(bench_clone.checkout)
+    bench_clone.bench_env.write_text(f"{line}\n")
+
+    assert cli.main(["run"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("BENCH ERROR")
+    assert "line 1" in captured.err
+    assert fake_run == []
+
+
+# -- refusing when the bench cannot be found (`locate`'s own cases are in test_clone.py) -------
 
 COMMANDS = {
     "test": ["test", "HEAD"],
@@ -281,58 +275,12 @@ def decoy(monkeypatch, fake_run, bench_clone):
 
 
 @pytest.mark.parametrize("command", COMMANDS)
-def test_not_installed_from_a_clone_is_refused_with_exit_2(
+def test_each_command_locates_the_clone_before_acting_and_refuses_with_exit_2(
     command, decoy, fake_run, monkeypatch, tmp_path, capsys
 ):
     stray = tmp_path / "stray"
     (stray / "src" / "wisebench").mkdir(parents=True)
     monkeypatch.setattr(wisebench, "__file__", str(stray / "src" / "wisebench" / "__init__.py"))
-
-    assert cli.main(COMMANDS[command]) == 2
-
-    captured = capsys.readouterr()
-    assert captured.err.startswith("BENCH ERROR")
-    assert captured.out == ""
-    assert fake_run == []
-
-
-@pytest.mark.parametrize("missing", ["pyproject.toml", ".git"])
-@pytest.mark.parametrize("command", COMMANDS)
-def test_a_tree_that_lacks_pyproject_or_git_is_not_a_clone(
-    command, missing, decoy, fake_run, bench_clone, capsys
-):
-    target = bench_clone.root / missing
-    shutil.rmtree(target) if target.is_dir() else target.unlink()
-
-    assert cli.main(COMMANDS[command]) == 2
-
-    captured = capsys.readouterr()
-    assert captured.err.startswith("BENCH ERROR")
-    assert captured.out == ""
-    assert fake_run == []
-
-
-@pytest.mark.parametrize("command", COMMANDS)
-def test_a_clone_with_no_checkout_is_refused_with_exit_2(
-    command, decoy, fake_run, bench_clone, capsys
-):
-    shutil.rmtree(bench_clone.checkout)
-
-    assert cli.main(COMMANDS[command]) == 2
-
-    captured = capsys.readouterr()
-    assert captured.err.startswith("BENCH ERROR")
-    assert captured.out == ""
-    assert fake_run == []
-
-
-@pytest.mark.parametrize("command", COMMANDS)
-def test_a_checkout_that_is_not_its_own_git_repo_is_refused_with_exit_2(
-    command, decoy, fake_run, bench_clone, capsys
-):
-    """A plain directory inside the clone's repo is not a checkout: its top level is the clone."""
-    shutil.rmtree(bench_clone.checkout)
-    bench_clone.checkout.mkdir()
 
     assert cli.main(COMMANDS[command]) == 2
 

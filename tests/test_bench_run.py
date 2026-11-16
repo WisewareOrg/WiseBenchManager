@@ -39,6 +39,11 @@ def _make_run(tmp_path, *, run_unit="bench-run"):
     return bench_run.BenchRun(tmp_path, _config(run_unit=run_unit), tmp_path / "records")
 
 
+def _make_clone_run(bench_clone):
+    """A `BenchRun` in the clone's geometry: the records directory is beside the checkout."""
+    return bench_run.BenchRun(bench_clone.checkout, _config(), bench_clone.records)
+
+
 class _FakeQueue:
     """Scripted stand-in for `wisebench.queue.Queue`; `take()` returns or raises."""
 
@@ -167,16 +172,20 @@ def test_run_refuses_while_disabled_exists(
 
 
 def test_run_tests_the_merge_entrys_sha_then_posts_success(
-    made, bench_test_class, systemctl, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, bench_clone
 ):
-    """run tests the merge entry's sha, then posts success; kind=run; it fetches nothing itself."""
+    """run tests the merge entry's sha, then posts success naming the records directory.
+
+    The records sit beside the checkout, as in the clone, so the posted summary is the directory's
+    own name and not a path relative to the checkout.
+    """
     _FakeQueue.result = _QUEUE_HEAD
-    run = _make_run(tmp_path)
+    run = _make_clone_run(bench_clone)
     run.run("env.yaml")
 
     assert systemctl.calls == []
     bench_test_class.assert_called_once_with(
-        tmp_path, "cafef00d", None, kind="run", pr=14, result_dir=tmp_path / "records"
+        bench_clone.checkout, "cafef00d", None, kind="run", pr=14, result_dir=bench_clone.records
     )
     _run_of(bench_test_class).assert_called_once_with("env.yaml", [], post=ANY)
     assert _FakeCheck.posts == []
@@ -185,14 +194,14 @@ def test_run_tests_the_merge_entrys_sha_then_posts_success(
 
 
 def test_run_posts_failure_on_a_candidate_failure_and_does_not_raise(
-    made, bench_test_class, systemctl, monkeypatch, tmp_path
+    made, bench_test_class, systemctl, monkeypatch, bench_clone
 ):
     """run posts failure on a candidate failure, without raising or disabling the timer."""
     _FakeQueue.result = _QUEUE_HEAD
     _run_of(bench_test_class).side_effect = bench_test.CandidateFailure(
         "target_suite failed\nextra detail"
     )
-    run = _make_run(tmp_path)
+    run = _make_clone_run(bench_clone)
     run.run("env.yaml")
     _post_of(bench_test_class)(bench_test.CandidateFailure("target_suite failed\nextra detail"))
 

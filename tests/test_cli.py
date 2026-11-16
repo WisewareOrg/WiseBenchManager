@@ -1,14 +1,12 @@
 """`main`'s exit-code mapping, against an autospec `BenchTest` and a scripted fake `BenchRun`."""
 
-import contextlib
-import fcntl
 import os
 import re
 import signal
 import subprocess
 
 import pytest
-from helpers import stop_argv, stub_fetch, stub_merge_queue
+from helpers import FakeBenchRun, holding, stop_argv, stub_fetch, stub_merge_queue
 
 from wisebench import bench_run, bench_test, cli, queue
 from wisebench.lock import Lock
@@ -70,7 +68,7 @@ def test_main_test_needs_neither_lg_env_nor_the_lock(monkeypatch, tmp_path, caps
         text=True,
     ).stdout.strip()
 
-    with _hold_lock(bench_clone.records):
+    with holding(bench_clone.records):
         assert cli.main(["test", "HEAD"]) == 0
 
     out = capsys.readouterr().out
@@ -98,7 +96,7 @@ def test_main_unqueue_removes_a_queued_run(monkeypatch, tmp_path, capsys, bench_
     stub_merge_queue(monkeypatch, bench_clone.checkout)
     store = queue.Queue(bench_clone.checkout, bench_clone.records)
 
-    with _hold_lock(bench_clone.records):
+    with holding(bench_clone.records):
         entry_id, _, _ = store.add("HEAD", None, False, [])
         other_id, _, _ = store.add("HEAD", None, False, [])
         assert cli.main(["unqueue", str(entry_id)]) == 0
@@ -130,17 +128,6 @@ def test_main_unqueue_of_a_run_already_taken_exits_2(monkeypatch, tmp_path, caps
     assert capsys.readouterr().err.strip() == f"BENCH ERROR: no queued run {entry_id}"
 
 
-@contextlib.contextmanager
-def _hold_lock(directory):
-    """Hold the lock `main` will try to take at `directory/lock`, on a second fd."""
-    with open(directory / "lock", "w") as held:
-        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            yield
-        finally:
-            fcntl.flock(held, fcntl.LOCK_UN)
-
-
 def _write_bench_toml(repo):
     (repo / "bench.toml").write_text("""
 [hooks]
@@ -163,54 +150,35 @@ unit = "bench-run"
 """)
 
 
-class _FakeBenchRun:
-    """Scripted stand-in for `wisebench.bench_run.BenchRun`."""
-
-    instances = []
-    outcome = None
-
-    def __init__(self, checkout, config, result_dir):
-        self.checkout = checkout
-        self.config = config
-        self.result_dir = result_dir
-        self.run_calls = []
-        _FakeBenchRun.instances.append(self)
-
-    def run(self, lg_env):
-        self.run_calls.append(lg_env)
-        if isinstance(_FakeBenchRun.outcome, Exception):
-            raise _FakeBenchRun.outcome
-
-
 @pytest.fixture
 def made_run(monkeypatch):
-    """Sets a harmless `LG_ENV` and resets `_FakeBenchRun`'s instances and outcome.
+    """Sets a harmless `LG_ENV` and resets `FakeBenchRun`'s instances and outcome.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): pytest's own monkeypatch fixture.
 
     Yields:
-        list[_FakeBenchRun]: Each `BenchRun` this test constructs, in order.
+        list[FakeBenchRun]: Each `BenchRun` this test constructs, in order.
     """
     monkeypatch.setenv("LG_ENV", "unused.yaml")
-    _FakeBenchRun.instances = []
-    _FakeBenchRun.outcome = None
-    yield _FakeBenchRun.instances
+    FakeBenchRun.instances = []
+    FakeBenchRun.outcome = None
+    yield FakeBenchRun.instances
 
 
 def test_main_run_returns_0_on_a_clean_cycle(made_run, monkeypatch, tmp_path, bench_clone):
     """main returns 0 on a clean bench run cycle."""
     _write_bench_toml(bench_clone.checkout)
-    monkeypatch.setattr(cli, "BenchRun", _FakeBenchRun)
+    monkeypatch.setattr(cli, "BenchRun", FakeBenchRun)
     assert cli.main(["run"]) == 0
-    assert made_run[0].run_calls == ["unused.yaml"]
+    assert made_run[0].lg_envs == ["unused.yaml"]
 
 
 def test_main_run_returns_2_on_any_exception(made_run, monkeypatch, tmp_path, bench_clone):
     """main returns 2 when a bench run cycle raises."""
     _write_bench_toml(bench_clone.checkout)
-    monkeypatch.setattr(cli, "BenchRun", _FakeBenchRun)
-    _FakeBenchRun.outcome = bench_test.BenchFailure("precondition exited 9")
+    monkeypatch.setattr(cli, "BenchRun", FakeBenchRun)
+    FakeBenchRun.outcome = bench_test.BenchFailure("precondition exited 9")
     assert cli.main(["run"]) == 2
 
 
@@ -253,17 +221,17 @@ def test_main_run_returns_0_when_the_lock_is_already_held(
 ):
     """main returns 0 for bench run when the lock is already held."""
     _write_bench_toml(bench_clone.checkout)
-    monkeypatch.setattr(cli, "BenchRun", _FakeBenchRun)
-    with _hold_lock(bench_clone.records):
+    monkeypatch.setattr(cli, "BenchRun", FakeBenchRun)
+    with holding(bench_clone.records):
         assert cli.main(["run"]) == 0
-    assert made_run[0].run_calls == []
+    assert made_run[0].lg_envs == []
 
 
 def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_path, bench_clone):
     """main holds its own lock for the whole bench run call, not just its acquisition."""
     _write_bench_toml(bench_clone.checkout)
 
-    class _ContendingBenchRun(_FakeBenchRun):
+    class _ContendingBenchRun(FakeBenchRun):
         def run(self, lg_env):
             super().run(lg_env)
             with (
@@ -274,7 +242,7 @@ def test_main_run_holds_the_lock_for_the_whole_job(made_run, monkeypatch, tmp_pa
 
     monkeypatch.setattr(cli, "BenchRun", _ContendingBenchRun)
     assert cli.main(["run"]) == 0
-    assert made_run[0].run_calls == ["unused.yaml"]
+    assert made_run[0].lg_envs == ["unused.yaml"]
 
 
 def test_main_run_on_sigterm_writes_disabled_and_stops_the_timer(
@@ -330,10 +298,10 @@ def watched(monkeypatch):
     return calls
 
 
-def test_main_status_watch_reaches_the_watch_loop_without_lg_env(watched):
-    """`bench status --watch` runs before the `LG_ENV` check and returns the loop's code."""
+def test_main_status_watch_reaches_the_watch_loop_without_lg_env(watched, bench_clone):
+    """`bench status --watch` skips `LG_ENV`, watches the clone's records and returns its code."""
     assert cli.main(["status", "--watch"]) == 7
-    assert len(watched) == 1
+    assert watched == [((bench_clone.records,), {})]
 
 
 def test_main_status_without_watch_exits_2_asking_for_it(watched, capsys):

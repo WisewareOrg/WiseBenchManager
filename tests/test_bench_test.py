@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from helpers import (
@@ -105,6 +106,22 @@ def _stub_subprocess(monkeypatch):
 
     monkeypatch.setattr(bench_test.subprocess, "run", fake_run)
     return calls
+
+
+def test_the_result_dir_hooks_receive_is_absolute_when_the_given_one_is_relative(
+    monkeypatch, tmp_path
+):
+    """`BENCH_RESULT_DIR` is exported resolved, so a hook that changes directory still finds it."""
+    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    calls = _stub_subprocess(monkeypatch)
+    write_bench_toml(tmp_path)
+    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=Path("records"))
+
+    bench.run("env.yaml", [])
+
+    precondition_env = next(env for command, env in calls if command == "true")
+    assert precondition_env["BENCH_RESULT_DIR"] == str(tmp_path.resolve() / "records")
 
 
 def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):

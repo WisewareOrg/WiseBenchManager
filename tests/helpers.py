@@ -1,7 +1,9 @@
 """Helpers shared by the runner tests: a throwaway git repo, a bench.toml, suites
 and the run's bench.log markers."""
 
+import contextlib
 import curses
+import fcntl
 import os
 import re
 import subprocess
@@ -316,3 +318,35 @@ def stub_merge_queue(monkeypatch, checkout, entries=()):
     FakeMergeQueueCheck.constructed = []
     FakeMergeQueueCheck.result = list(entries)
     return FakeMergeQueueCheck
+
+
+@contextlib.contextmanager
+def holding(directory):
+    """Hold the lock `main` tries to take at `directory/lock`, on a second fd."""
+    with open(directory / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+
+
+class FakeBenchRun:
+    """Stand-in for `wisebench.bench_run.BenchRun` that records what `main` built and ran.
+
+    `outcome`, when an exception, is raised by every `run`. A test resets `instances` and
+    `outcome` before use.
+    """
+
+    instances = []
+    outcome = None
+
+    def __init__(self, checkout, config, result_dir):
+        self.checkout, self.config, self.result_dir = checkout, config, result_dir
+        self.lg_envs = []
+        FakeBenchRun.instances.append(self)
+
+    def run(self, lg_env):
+        self.lg_envs.append(lg_env)
+        if isinstance(FakeBenchRun.outcome, Exception):
+            raise FakeBenchRun.outcome
