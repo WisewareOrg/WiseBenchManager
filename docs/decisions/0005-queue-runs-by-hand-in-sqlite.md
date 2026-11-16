@@ -50,8 +50,8 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    `bench.toml`'s `[github]` table, and lists every entry in GitHub's order with its PR number, title
    and merge-group commit, which GitHub gives an entry only once it builds it. `take()` reads
    the queue, then runs `git fetch origin`, which brings the commit of every entry still queued or
-   merged when it runs, and takes the first entry that has one; `entries()` fetches nothing. No snapshot of the merge queue is kept,
-   so none can go stale during a run.
+   merged when it runs, and takes the first entry that has one; `entries()` fetches nothing. No
+   snapshot of the merge queue is kept, so none can go stale during a run.
 6. **The commit is resolved when the run is queued, in the bench checkout, without a fetch.** The run
    builds that commit and refuses a dirty tree when it starts, and its record reads
    `kind=test ref=<as typed>`. A run queued by hand may carry `--skip-build`; a merge-queue run
