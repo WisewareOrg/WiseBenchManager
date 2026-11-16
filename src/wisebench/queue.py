@@ -124,10 +124,11 @@ class Queue:
             subprocess.CalledProcessError: `ref` does not resolve to a commit there, or `source`
                 is not a directory.
         """
-        try:
-            return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=source).strip()
-        except OSError as exc:
-            raise subprocess.CalledProcessError(128, ["git", "rev-parse"], "", str(exc)) from exc
+        if source is not None and not source.is_dir():
+            raise subprocess.CalledProcessError(
+                128, ["git", "rev-parse"], "", f"{source} is not a directory"
+            )
+        return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=source).strip()
 
     def preview(self, ref, source=None):
         """Describe what queueing `ref` would run, without queueing it.
