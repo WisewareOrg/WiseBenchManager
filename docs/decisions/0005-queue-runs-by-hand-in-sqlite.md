@@ -2,10 +2,13 @@
 
 **Status:** accepted
 **Decided:** 2026-11-16 (WisewareOrg/WiseBenchManager #72 Queue tab shows the whole merge queue)
-**Rev:** 1
+**Rev:** 2
 
 ## Revisions
 
+- **rev 2** — 2026-11-16 — the queue lives in the clone `bench` is installed from, and the ref
+  resolves in that clone's `checkout/`, from any directory (decisions 3, 6 and 10; the "never taken"
+  consequence removed; one alternative added; #74 one-bench defect).
 - **rev 1** — 2026-11-16 — first written (#60 Queue behaviour; #23 Queue view; #72 Queue tab shows
   the whole merge queue).
 
@@ -32,7 +35,7 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    resident process would need the queue on disk anyway.
 2. **Hand entries come first, oldest first.** A merge-queue entry waiting on GitHub's timeout behind
    a hand run is accepted.
-3. **The hand queue is one SQLite table in `records/queue.db`, through Python's `sqlite3`.** Ids
+3. **The hand queue is one SQLite table in the clone's `records/queue.db`, through Python's `sqlite3`.** Ids
    come from AUTOINCREMENT, so an id `bench test` printed never names another run. Removing an entry
    and taking one are each a single `DELETE … WHERE id = ?`, which exactly one caller wins. The
    queue libraries built on it either took the same entry twice across processes (persist-queue,
@@ -48,7 +51,7 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    the queue, then runs `git fetch origin`, which brings the commit of every entry still queued or
    merged when it runs, and takes the first entry that has one; `entries()` fetches nothing. No
    snapshot of the merge queue is kept, so none can go stale during a run.
-6. **The commit is resolved when the run is queued, in the bench checkout, without a fetch.** The run
+6. **The commit is resolved when the run is queued, in the bench's own checkout, `<clone>/checkout`, without a fetch.** The run
    builds that commit and refuses a dirty tree when it starts, and its record reads
    `kind=test ref=<as typed>`. A run queued by hand may carry `--skip-build`; a merge-queue run
    never skips the build.
@@ -59,7 +62,7 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    bench's failure is not queued again.
 9. **While `DISABLED` is present, entries wait and queueing still works.** The way to run one now is
    `bench run` by hand.
-10. **Queueing needs neither `LG_ENV` nor the board lock,** and is done from the bench checkout.
+10. **Queueing needs neither `LG_ENV` nor the board lock,** and is done from any directory: `bench` acts on the clone it is installed from.
 
 ## Alternatives considered
 
@@ -76,11 +79,14 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
   can race the tick's own fetch on ref locks and fail the run, which writes `DISABLED`.
 - **Skipping the watch's reads while a run is live.** Rejected: the Queue tab would stay stale for the
   whole run.
+- **State relative to the working directory.** Rejected: every directory `bench` was started in
+  became its own bench, with its own queue, history and lock, so a second run could drive the board
+  beside the timer's and a watch showed nothing of a run started elsewhere.
 - **Accepting the collision risk.** Rejected: a watch could then disable the bench.
 
 ## Consequences
 
-- **The hand queue is state between runs,** kept in `records/queue.db`.
+- **The hand queue is state between runs,** kept in the clone's `records/queue.db`.
 - **`bench test` shows no PASS or FAIL;** the verdict is in the record, read with `bench status --watch`.
 - **A waiting hand entry runs only when the merge-queue read succeeds:** a `git fetch` fault or a
   failed read of GitHub's API writes `DISABLED` as it does on any tick, before the hand entry runs.
@@ -88,7 +94,6 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
   error`, `DISABLED` is written, and the entry is not re-queued.
 - **An unreadable `queue.db` is a bench fault** (`sqlite3.DatabaseError`); recovery removes the file,
   and the runs queued by hand in it are lost.
-- **An entry queued outside the bench checkout, or with another `BENCH_RESULT_DIR`, is never taken.**
 - **`take()` fetches and `entries()` does not,** so a view's read writes nothing into `.git` and cannot
   collide with a run's git. `entries()` still reaches GitHub's API, bounded by PyGithub's own timeout,
   so a view reads it off its draw path.

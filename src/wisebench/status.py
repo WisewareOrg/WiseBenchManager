@@ -9,7 +9,6 @@ the Queue tab reads `Queue.entries` and `Queue.preview` on a background thread, 
 import curses
 import functools
 import math
-import os
 import subprocess
 import sys
 import threading
@@ -20,6 +19,7 @@ from queue import SimpleQueue
 
 from wisebench import screen, view
 from wisebench.bench_state import enable, read_bench, read_run_unit, stop_timer
+from wisebench.clone import locate
 from wisebench.queue import Queue
 from wisebench.records import Records
 
@@ -199,10 +199,11 @@ def _loop(window, directory, run=_background):
     attributes = _attributes()
     window.bkgd(" ", attributes(screen.TEXT, None, False))
     records = Records(directory)
-    run_unit = read_run_unit(Path.cwd())
+    checkout, _ = locate()
+    run_unit = read_run_unit(checkout)
     state = view.State()
-    shown_directory = os.path.relpath(directory)
-    queue, results, reads = Queue(Path.cwd(), directory), SimpleQueue(), _Reads()
+    shown_directory = str(directory.resolve())
+    queue, results, reads = Queue(checkout, directory), SimpleQueue(), _Reads()
     while True:
         _collect(results, reads, state)
         runs = records.runs()

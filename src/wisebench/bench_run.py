@@ -88,9 +88,14 @@ class BenchRun:
                     check.post(sha, "failure", str(failure).splitlines()[0], summary)
 
             try:
-                BenchTest(self.checkout, sha, None, kind=entry["kind"], pr=pr).run(
-                    lg_env, [], post=post
-                )
+                BenchTest(
+                    self.checkout,
+                    sha,
+                    None,
+                    result_dir=self._result_dir,
+                    kind=entry["kind"],
+                    pr=pr,
+                ).run(lg_env, [], post=post)
             except CandidateFailure:
                 return
         except Exception as exc:
@@ -111,6 +116,7 @@ class BenchRun:
             self.checkout,
             entry["ref"],
             entry["set"],
+            result_dir=self._result_dir,
             skip_build=entry["skip_build"],
             kind=entry["kind"],
             sha=entry["sha"],

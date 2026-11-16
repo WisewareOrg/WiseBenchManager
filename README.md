@@ -23,19 +23,19 @@ bench unqueue <id>             # remove a run queued by hand that `bench run` ha
 bench status --watch           # the run in progress, what waits to run, and every run on disk
 ```
 
-`bench test` runs nothing. It resolves the ref to a commit in the bench checkout, queues the run in
+`bench` acts on the clone of this repository it is installed from, from whatever directory it is
+started in: one queue, one history, one lock. `bench test` runs nothing. It resolves the ref to a
+commit in the bench's layer checkout (`checkout/` in the clone), queues the run in the clone's
 `records/queue.db`, and prints `queued <id> <sha> place <n>`: the id for `bench unqueue`, the commit
 the run will build, and its place among the runs queued by hand. A ref that does not resolve to a
 commit exits 2 and queues nothing. `bench run` takes the oldest run queued by hand before the first
 merge-queue entry GitHub has built, one entry per start; to run one now, start `bench run` by hand.
 A run queued by hand posts nothing, and its record reads `kind=test ref=<as typed>`. Once taken, an
-entry cannot be removed (ADR 0005 rev 1).
+entry cannot be removed (ADR 0005 rev 2).
 
-`bench test` does not fetch: it resolves the ref in the bench checkout, which refreshes `origin/*` on
-every idle tick. For a branch pushed since, run `git fetch origin <branch>` there first. Queue from
-the bench checkout -- the directory `bench run`'s service runs in -- with the service's own
-`BENCH_RESULT_DIR` if its environment file sets one: the entry is written to that directory's
-`records/queue.db`, and an entry queued anywhere else is never taken.
+`bench test` does not fetch: it resolves the ref in the bench's checkout, which refreshes `origin/*`
+on every idle tick. For a branch pushed since, run `git fetch origin <branch>` in `checkout/` first.
+`BENCH_RESULT_DIR` in the caller's environment does not move the queue or the records.
 
 A queued run builds the commit resolved when it was queued -- unless `--skip-build`, which skips the
 build, `bundle` and the host suite entirely -- and refuses a dirty tree when it starts. A built run's
@@ -126,13 +126,15 @@ A one-time, by-hand step, before `[github]` can be filled in:
 7. Write `[github]` `repo`, `app_id`, `private_key` and `check` into `bench.toml`.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
-`BENCH_SET` and `BENCH_RESULT_DIR` in its environment, output appended to that run's `bench.log`;
+`BENCH_SET` and `BENCH_RESULT_DIR` (the clone's `records/`, absolute) in its environment, output appended to that run's `bench.log`;
 its exit status is pass or fail. The suites are ordinary pytest directories, run under the
 runner's own interpreter, so a layer's test helpers may import only labgrid, pytest,
 pytest-reportlog, tenacity, mitmproxy, the standard library and whatever the layer's own
 `pythonpath` adds.
-The checkout's own `pyproject.toml` `addopts` never reach that run; its `testpaths`, `pythonpath`
-and markers still do.
+A suite runs under the checkout's own `pyproject.toml` alone, with the checkout as pytest's rootdir:
+its `addopts` never reach that run; its `testpaths`, `pythonpath` and markers still do. The
+WiseBenchManager clone's pytest configuration never applies, and a layer's `pytest.ini`, `tox.ini` or
+`setup.cfg` is not read.
 
 The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
 `NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
@@ -201,7 +203,18 @@ teardown it attaches `served_count` and `killed_count` through `record_property`
 git clone https://github.com/WisewareOrg/WiseBenchManager.git
 git -C WiseBenchManager checkout <tag>
 uv sync --project WiseBenchManager --frozen
+ln -s "$PWD/WiseBenchManager/.venv/bin/bench" ~/.local/bin/bench
+git clone <the layer repository> WiseBenchManager/checkout
 ```
+
+The clone is the bench: `bench` finds it from where the package is installed, and refuses (exit 2) when
+it is not installed from a clone, or when `checkout/` is missing or is not a git repository of its own.
+The link puts `bench` on `PATH` without activating the venv. `checkout/` is the layer checkout the bench
+builds and tests, ignored by git; it is not a working tree to edit in. `bench run` reads
+`~/.config/wisebench/bench.env` (the owner's file, never written by `bench`) itself before anything
+else, so a run started by hand has the timer's environment, its values over the caller's. The file is
+`KEY=value` or `KEY="value"` lines, blank lines and `#` comments; any other line, a backslash, or text
+after a closing quote exits 2, and so does a missing file.
 
 `uv sync --frozen` installs exactly the versions in `uv.lock`. The package's version is derived from
 the checked-out tag by hatch-vcs when uv builds it; `run.json` carries that version.
@@ -238,7 +251,7 @@ GitHub App (`Check.merge_queue`), whose verdict it posts as a GitHub check run (
 waiting run queued by hand starts only when that read of the merge queue succeeds: a `git fetch`
 fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before the hand entry
 runs.
-`bench status --watch` is the view of all of it, run from the directory `bench run` runs in. It is a
+`bench status --watch` is the view of all of it, run from any directory. It is a
 curses screen refreshed once a second: Run shows the newest run's stages and the selected stage's
 log, headed by bitbake's task progress while a build runs, Queue lists what waits (the running run,
 the runs queued by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and
@@ -258,12 +271,13 @@ which resolves holders by path through `/proc/<pid>/fd`.
 
 ### Installing `bench run`
 
-In this clone, edit `contrib/bench-run.service`'s `WorkingDirectory` (the layer checkout),
-`ExecStart` (this clone's own `.venv/bin/bench`) and `TimeoutStartSec` (comfortably longer than
+In this clone, edit `contrib/bench-run.service`'s `ExecStart` (this clone's own `.venv/bin/bench`) and `TimeoutStartSec` (comfortably longer than
 one build-and-test cycle -- `RuntimeMaxSec` has no effect on a `Type=oneshot` service;
 `TimeoutStartSec` is what bounds one); rename both `contrib/bench-run.service` and
 `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if `bench.toml`'s `[run] unit` is
-not `bench-run`. Write `LG_ENV` and `LG_BENCH_ADDRESS` into the path `EnvironmentFile` names.
+not `bench-run`. `WorkingDirectory` must exist, but `bench` ignores it. Write `LG_ENV` and `LG_BENCH_ADDRESS` into
+`~/.config/wisebench/bench.env`, and delete the template's `EnvironmentFile` line: systemd fails a
+unit whose `EnvironmentFile` is missing, and `bench run` reads that file itself.
 Link and start both units straight from this checkout: `systemctl --user enable --now <this
 clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
 

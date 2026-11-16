@@ -6,6 +6,7 @@ Argument parsing for `bench test`/`bench unqueue`/`bench run`/`bench status` and
 import argparse
 import contextlib
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -14,9 +15,9 @@ from pathlib import Path
 from wisebench import status
 from wisebench.bench_run import BenchRun
 from wisebench.bench_test import BenchFailure
+from wisebench.clone import locate
 from wisebench.config import Config
 from wisebench.lock import Lock
-from wisebench.plugin import BENCH_RESULT_DIR, DEFAULT_RESULT_DIR
 from wisebench.queue import Queue
 
 
@@ -31,6 +32,36 @@ def _raise_on_sigterm(signum, frame):
         BenchFailure: Always.
     """
     raise BenchFailure("terminated: the job exceeded TimeoutStartSec")
+
+
+_ENV_LINE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\\]*)"|([^"\\\s]*))')
+
+
+def _load_bench_env():
+    """Read `~/.config/wisebench/bench.env` into `os.environ`, its values over the caller's.
+
+    Only the form systemd's `EnvironmentFile` reads the same everywhere is accepted: `KEY=value`
+    or `KEY="value"` lines, blank lines and `#` comment lines.
+
+    Raises:
+        BenchFailure: The file is missing or unreadable, or a line is any other form, holds a
+            backslash, or has text after a closing quote.
+    """
+    path = Path.home() / ".config" / "wisebench" / "bench.env"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as exc:
+        raise BenchFailure(f"cannot read {path}: {exc}") from exc
+    values = {}
+    for number, line in enumerate(lines, 1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        match = _ENV_LINE.fullmatch(text)
+        if match is None:
+            raise BenchFailure(f'{path} line {number} is not KEY=value or KEY="value"')
+        values[match[1]] = match[2] if match[2] is not None else match[3]
+    os.environ.update(values)
 
 
 def main(argv=None):
@@ -70,13 +101,17 @@ def main(argv=None):
     status_parser.add_argument("--watch", action="store_true", required=True)
     args = parser.parse_args(own_args)
 
-    directory = Path.cwd() / os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
+    try:
+        checkout, directory = locate()
+    except BenchFailure as exc:
+        print(f"BENCH ERROR: {exc}", file=sys.stderr)
+        return 2
     if args.command == "status":
         return status.watch(directory)
 
     if args.command == "test":
         try:
-            entry_id, sha, place = Queue(Path.cwd(), directory).add(
+            entry_id, sha, place = Queue(checkout, directory).add(
                 args.ref, args.set_name, args.skip_build, pytest_args
             )
         except subprocess.CalledProcessError:
@@ -90,7 +125,7 @@ def main(argv=None):
 
     if args.command == "unqueue":
         try:
-            removed = Queue(Path.cwd(), directory).remove(args.entry_id)
+            removed = Queue(checkout, directory).remove(args.entry_id)
         except Exception as exc:
             print(f"BENCH ERROR: {exc}", file=sys.stderr)
             return 2
@@ -100,14 +135,19 @@ def main(argv=None):
         print(f"removed {args.entry_id}")
         return 0
 
+    try:
+        _load_bench_env()
+    except BenchFailure as exc:
+        print(f"BENCH ERROR: {exc}", file=sys.stderr)
+        return 2
     lg_env = os.environ.get("LG_ENV")
     if not lg_env:
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
         return 2
 
     try:
-        config = Config.load(Path.cwd() / "bench.toml")
-        bench_run = BenchRun(Path.cwd(), config, directory)
+        config = Config.load(checkout / "bench.toml")
+        bench_run = BenchRun(checkout, config, directory)
     except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2

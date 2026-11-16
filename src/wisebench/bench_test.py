@@ -17,7 +17,6 @@ from wisebench.plugin import (
     BENCH_SHA,
     BENCH_SKIP_BUILD,
     BENCH_TREE,
-    DEFAULT_RESULT_DIR,
     write_mark,
 )
 
@@ -36,7 +35,18 @@ class CandidateFailure(Exception):
 class BenchTest:
     """One run of a ref: the checkout, ref, replay set name and skip-build flag."""
 
-    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test", pr=None, sha=None):
+    def __init__(
+        self,
+        checkout,
+        ref,
+        set_name,
+        *,
+        result_dir,
+        skip_build=False,
+        kind="test",
+        pr=None,
+        sha=None,
+    ):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
         Args:
@@ -44,6 +54,8 @@ class BenchTest:
             ref (str): The git ref to resolve, check out and test; with `sha` given, only the name
                 the record shows.
             set_name (str | None): The replay set name from `--set`, or None.
+            result_dir (pathlib.Path): The records directory the run's folder goes in; hooks and
+                suites receive it, made absolute, as `BENCH_RESULT_DIR`.
             skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
                 with `bench_candidate` `None`, against the board as it is.
             kind (str): `"test"` or `"run"`, for the run-started line only; set by `BenchRun`.
@@ -53,6 +65,7 @@ class BenchTest:
                 name the record shows. None resolves `ref` at run time.
         """
         self.checkout = checkout
+        self.result_dir = Path(result_dir)
         self.ref = ref
         self.set_name = set_name or ""
         self.skip_build = skip_build
@@ -87,8 +100,7 @@ class BenchTest:
             Exception: Any other step raised (a dirty tree, git itself), or `post` raised (the
                 run ends as `run error`), propagated unwrapped.
         """
-        result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
-        run_dir, log = self._open_log(result_dir)
+        run_dir, log = self._open_log(self.result_dir)
         outcome = "error"
         try:
             try:
@@ -103,7 +115,7 @@ class BenchTest:
                     BENCH_SHA: commit,
                     BENCH_TREE: str(self.checkout),
                     BENCH_SET: self.set_name,
-                    BENCH_RESULT_DIR: result_dir,
+                    BENCH_RESULT_DIR: str(self.result_dir.resolve()),
                 }
                 if self.skip_build:
                     env[BENCH_SKIP_BUILD] = "true"
@@ -290,6 +302,10 @@ class BenchTest:
             "-m",
             "pytest",
             suite,
+            "--rootdir",
+            str(self.checkout),
+            "-c",
+            str(self.checkout / "pyproject.toml"),
             "-o",
             "addopts=",
             "--capture=tee-sys",

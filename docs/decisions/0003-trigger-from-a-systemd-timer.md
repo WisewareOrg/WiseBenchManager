@@ -2,10 +2,13 @@
 
 **Status:** accepted
 **Decided:** 2026-10-11 (the runner survey that founded this repository; built in WisewareOrg/WiseBenchManager#6 `bench run`)
-**Rev:** 2
+**Rev:** 3
 
 ## Revisions
 
+- **rev 3** — 2026-11-16 — the lock, the records and `DISABLED` live in the WiseBenchManager clone
+  that `bench` is installed from, whatever directory it starts in (ADR 0005 rev 2); the decision is
+  unchanged.
 - **rev 2** — 2026-11-16 — a tick takes a run queued by hand before the merge queue's entries, read
   from GitHub's GraphQL API, and the lock is the tick's alone; the timer is turned off with
   `systemctl --user stop`, never `disable` (ADR 0005 rev 1; #60 Queue behaviour; #24 `:enable` and
@@ -34,7 +37,8 @@ host. What the choice is held to:
 
 - Each tick takes the first entry of the queue of ADR 0005 rev 1: the oldest run queued by hand, else
   the first merge-queue entry GitHub has built, read from GitHub's GraphQL API. With none, it exits.
-- `bench run` holds one lock file beside the records for the whole of a run. A tick that finds it
+- `bench run` holds one lock file in the clone's `records/` for the whole of a run, whatever directory
+  it starts in, so a run started by hand and the timer's run exclude each other. A tick that finds it
   held backs off.
 - Reading the merge queue is one call inside the one `Queue` class, so a different merge queue is a
   different read there.
@@ -62,6 +66,8 @@ host. What the choice is held to:
   Actions runner would have done it for free.
 - **The bench stops itself.** The timer is the unit the bench's own failure stops, so a broken
   bench does not keep failing on every tick; restarting it is `:enable` in `bench status --watch`.
+- **The clone is the one bench.** Its `records/` holds the lock, the `DISABLED` marker, the queue and
+  every run, so there is one history and one lock for the board.
 - **A hand stop does not persist.** A user-manager restart or a reboot re-arms the timer. After a
   fault the re-armed timer starts nothing, because every tick refuses on `DISABLED`.
 
