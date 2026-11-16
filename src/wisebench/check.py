@@ -63,7 +63,8 @@ class Check:
 
         Returns:
             list[dict]: `{pr, title, sha}` per entry, in GitHub's order; `sha` is the merge
-            group's commit, None while GitHub has not built it.
+            group's commit, None while GitHub has not built it. Empty when the repository has
+            no merge queue.
 
         Raises:
             github.GithubException: PyGithub's own call failed.
@@ -72,7 +73,8 @@ class Check:
         _, data = self._github().requester.graphql_query(
             _MERGE_QUEUE, {"o": self._owner, "n": self._name}
         )
-        nodes = data["repository"]["mergeQueue"]["entries"]["nodes"]
+        queue = data["repository"]["mergeQueue"]
+        nodes = queue["entries"]["nodes"] if queue else []
         return [
             {
                 "pr": node["pullRequest"]["number"],

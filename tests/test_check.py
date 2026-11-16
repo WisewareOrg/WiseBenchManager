@@ -221,3 +221,16 @@ def test_merge_queue_of_an_empty_queue_is_empty(monkeypatch, private_key_path):
 
     monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
     assert check.Check("acme/layer", 1, private_key_path, "bench").merge_queue() == []
+
+
+def test_merge_queue_of_a_repository_without_a_merge_queue_is_empty(monkeypatch, private_key_path):
+    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
+    original = FakeGithubIntegration.get_repo_installation
+
+    def capture(self, owner, name):
+        installation = original(self, owner, name)
+        installation.github.requester.data = {"repository": {"mergeQueue": None}}
+        return installation
+
+    monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
+    assert check.Check("acme/layer", 1, private_key_path, "bench").merge_queue() == []
