@@ -57,10 +57,11 @@ class Queue:
 
         Args:
             args (list[str]): The command line after `git`.
-            cwd (pathlib.Path | None): Where to run it; None runs it in the checkout.
-            network (bool): Whether the command reaches `origin`. A network call is bounded by
+            network (bool): Whether the command reaches another repository (`origin`, or the
+                directory `bench test -C` names). A network call is bounded by
                 `_NETWORK_TIMEOUT`; a timeout kills git and every process it started. Its failure
                 or timeout is raised as `BenchFailure("git <command>: <first stderr line>")`.
+            cwd (pathlib.Path | None): Where to run it; None runs it in the checkout.
 
         Returns:
             str: The command's standard output.
@@ -120,9 +121,13 @@ class Queue:
             str: The commit sha.
 
         Raises:
-            subprocess.CalledProcessError: `ref` does not resolve to a commit there.
+            subprocess.CalledProcessError: `ref` does not resolve to a commit there, or `source`
+                is not a directory.
         """
-        return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=source).strip()
+        try:
+            return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=source).strip()
+        except OSError as exc:
+            raise subprocess.CalledProcessError(128, ["git", "rev-parse"], "", str(exc)) from exc
 
     def preview(self, ref, source=None):
         """Describe what queueing `ref` would run, without queueing it.
@@ -173,7 +178,10 @@ class Queue:
         directory = self._source_dir(source)
         sha = self._resolve(ref, directory)
         if directory is not None:
-            self._git(["fetch", "--no-write-fetch-head", str(directory), sha], network=True)
+            self._git(
+                ["fetch", "--no-write-fetch-head", "--no-auto-maintenance", str(directory), sha],
+                network=True,
+            )
         entry = {
             "ref": ref,
             "sha": sha,
