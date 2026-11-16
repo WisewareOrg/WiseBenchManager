@@ -68,13 +68,17 @@ class Check:
             group's commit, None while GitHub has not built it.
 
         Raises:
+            ValueError: The repository has no merge queue on `main`.
             github.GithubException: PyGithub's own call failed.
             jwt.exceptions.InvalidKeyError: the App's private key is malformed.
         """
         _, data = self._github().requester.graphql_query(
             _MERGE_QUEUE, {"o": self._owner, "n": self._name}
         )
-        nodes = data["data"]["repository"]["mergeQueue"]["entries"]["nodes"]
+        queue = data["data"]["repository"]["mergeQueue"]
+        if queue is None:
+            raise ValueError(f"{self._owner}/{self._name} has no merge queue on main")
+        nodes = queue["entries"]["nodes"]
         return [
             {
                 "pr": node["pullRequest"]["number"],

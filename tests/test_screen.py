@@ -619,7 +619,7 @@ def test_a_merge_row_draws_the_canvas_what_uncut_and_a_long_title_cut():
 
 
 def test_a_wide_screen_gives_the_what_column_the_room_it_leaves():
-    title = "chore(deps): update meta-virtualization digest to e0b994c"
+    title = "chore(deps): update example-layer digest to e0b994c"
     wide = {**MERGE_ENTRY, "pr": 326, "title": title}
     grid, _ = queue_drawn(queue=[wide], size=(24, 130))
     grid.find(rf"merge queue +PR #326 {re.escape(title)} +9f8e7d6")

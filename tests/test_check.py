@@ -1,11 +1,16 @@
 """`Check.post`: one completed check run through PyGithub's app authentication."""
 
+import json
+from pathlib import Path
+
 import pytest
 from github import Auth, Github, GithubIntegration, Repository
 from github.Installation import Installation
 from github.Requester import Requester
 
 from wisebench import check
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeRepository:
@@ -171,54 +176,59 @@ def test_post_never_calls_github_integration_on_an_invalid_conclusion(
         one.post("deadbeef", conclusion, "title", "summary")
 
 
-def _merge_queue_data(*nodes):
-    return {"data": {"repository": {"mergeQueue": {"entries": {"nodes": list(nodes)}}}}}
-
-
-def test_merge_queue_returns_each_entry_in_githubs_order_with_none_for_an_unbuilt_one(
-    monkeypatch, private_key_path
-):
-    FakeGithubIntegration.instances = []
-    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
-    one = check.Check("acme/layer", 1, private_key_path, "bench")
-    requester = None
-
-    def entry(number, title, oid):
-        return {
-            "pullRequest": {"number": number, "title": title},
-            "headCommit": {"oid": oid} if oid else None,
-        }
-
+def _serve(monkeypatch, response):
+    """Make every `GithubIntegration` the check builds answer `graphql_query` with `response`."""
     original = FakeGithubIntegration.get_repo_installation
 
     def capture(self, owner, name):
         installation = original(self, owner, name)
-        installation.github.requester.data = _merge_queue_data(
-            entry(324, "Add slot check", "deadbeef"), entry(326, "Fix probe", None)
-        )
+        installation.github.requester.data = response
         return installation
 
+    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
     monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
 
-    assert one.merge_queue() == [
-        {"pr": 324, "title": "Add slot check", "sha": "deadbeef"},
-        {"pr": 326, "title": "Fix probe", "sha": None},
+
+def test_merge_queue_parses_a_recorded_response_into_entries_in_githubs_order(
+    monkeypatch, private_key_path
+):
+    FakeGithubIntegration.instances = []
+    _serve(monkeypatch, json.loads((FIXTURES / "merge_queue_response.json").read_text()))
+
+    entries = check.Check("acme/layer", 1, private_key_path, "bench").merge_queue()
+
+    assert entries == [
+        {
+            "pr": 327,
+            "title": "chore(deps): lock file maintenance",
+            "sha": "8d534d9120f0859443d92cfa05a88b02d1dc786e",
+        },
+        {
+            "pr": 323,
+            "title": "chore(deps): update example-layer digest to f071746",
+            "sha": None,
+        },
+        {
+            "pr": 325,
+            "title": "chore(deps): update dependency astral-sh/uv to v0.13.8",
+            "sha": None,
+        },
     ]
-    requester = FakeGithubIntegration.instances[0].installation.github.requester
-    ((query, variables),) = requester.calls
+    ((query, variables),) = FakeGithubIntegration.instances[0].installation.github.requester.calls
     assert variables == {"o": "acme", "n": "layer"}
     assert 'mergeQueue(branch:"main")' in query
     assert "entries(first:50)" in query
 
 
 def test_merge_queue_of_an_empty_queue_is_empty(monkeypatch, private_key_path):
-    monkeypatch.setattr(check, "GithubIntegration", FakeGithubIntegration)
-    original = FakeGithubIntegration.get_repo_installation
-
-    def capture(self, owner, name):
-        installation = original(self, owner, name)
-        installation.github.requester.data = _merge_queue_data()
-        return installation
-
-    monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
+    nodes = {"entries": {"nodes": []}}
+    _serve(monkeypatch, {"data": {"repository": {"mergeQueue": nodes}}})
     assert check.Check("acme/layer", 1, private_key_path, "bench").merge_queue() == []
+
+
+def test_merge_queue_of_a_repository_without_a_merge_queue_raises_naming_the_repository(
+    monkeypatch, private_key_path
+):
+    _serve(monkeypatch, {"data": {"repository": {"mergeQueue": None}}})
+    with pytest.raises(ValueError, match="acme/layer has no merge queue on main"):
+        check.Check("acme/layer", 1, private_key_path, "bench").merge_queue()

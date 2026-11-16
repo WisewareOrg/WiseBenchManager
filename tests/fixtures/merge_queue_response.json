@@ -1,0 +1,35 @@
+{
+  "data": {
+    "repository": {
+      "mergeQueue": {
+        "entries": {
+          "nodes": [
+            {
+              "pullRequest": {
+                "number": 327,
+                "title": "chore(deps): lock file maintenance"
+              },
+              "headCommit": {
+                "oid": "8d534d9120f0859443d92cfa05a88b02d1dc786e"
+              }
+            },
+            {
+              "pullRequest": {
+                "number": 323,
+                "title": "chore(deps): update example-layer digest to f071746"
+              },
+              "headCommit": null
+            },
+            {
+              "pullRequest": {
+                "number": 325,
+                "title": "chore(deps): update dependency astral-sh/uv to v0.13.8"
+              },
+              "headCommit": null
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -345,10 +345,10 @@ def test_while_the_queue_shows_it_is_read_every_30_seconds(monkeypatch, tmp_path
 def test_a_failed_read_shows_the_bench_failure_text_and_the_view_goes_on(monkeypatch, tmp_path):
     from wisebench.bench_test import BenchFailure
 
-    boom = BenchFailure("git ls-remote: fatal: boom")
+    boom = BenchFailure("merge queue read failed")
     stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(boom))
     fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
-    assert "git ls-remote: fatal: boom" in last_frame(fake)
+    assert "merge queue read failed" in last_frame(fake)
 
 
 def test_a_failed_read_keeps_the_last_good_rows(monkeypatch, tmp_path):

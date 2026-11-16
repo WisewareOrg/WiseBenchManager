@@ -1,6 +1,7 @@
 """`Queue`: the merge queue from GitHub's API; hand entries in `records/queue.db`."""
 
 import contextlib
+import inspect
 import json
 import os
 import shutil
@@ -13,9 +14,17 @@ from datetime import datetime, timedelta
 
 import pytest
 from helpers import TIMES_OUT as stub_timeout
-from helpers import repo_with_one_commit, stub_fetch, stub_merge_queue, stub_popen, write_bench_toml
+from helpers import (
+    FakeMergeQueueCheck,
+    repo_with_one_commit,
+    stub_fetch,
+    stub_merge_queue,
+    stub_popen,
+    write_bench_toml,
+)
 
 from wisebench import bench_test, queue
+from wisebench.check import Check
 
 
 @pytest.fixture
@@ -60,7 +69,7 @@ def _git(repo, *args):
 
 # -- hand entries: records/queue.db ------------------------------------------------------
 
-_MERGE_HEAD = {"pr": 14, "title": "Add slot check", "sha": "cafef00d"}
+_BUILT = {"pr": 14, "title": "Add slot check", "sha": "cafef00d"}
 
 
 @pytest.fixture
@@ -80,8 +89,8 @@ def hand(monkeypatch, tmp_path, github):
     return queue.Queue(tmp_path, tmp_path / "records")
 
 
-def _with_merge_head(github):
-    github.result = [dict(_MERGE_HEAD)]
+def _with_built_entry(github):
+    github.result = [dict(_BUILT)]
 
 
 def test_add_returns_the_id_the_resolved_sha_and_place_1(hand, tmp_path):
@@ -100,7 +109,7 @@ def test_add_resolves_an_annotated_tag_to_the_commit_it_points_at(hand, tmp_path
 
 
 def test_place_counts_the_hand_entries_up_to_and_including_the_new_one(hand, github):
-    _with_merge_head(github)
+    _with_built_entry(github)
     assert hand.add("HEAD", None, False, [])[2] == 1
     assert hand.add("HEAD", None, False, [])[2] == 2
     assert hand.add("HEAD", None, False, [])[2] == 3
@@ -136,24 +145,24 @@ def test_add_creates_the_records_directory_and_stores_the_entry_in_queue_db(hand
     }
 
 
-def test_entries_is_empty_with_no_hand_entry_and_no_merge_head(hand):
+def test_entries_is_empty_with_no_hand_entry_and_no_merge_entry(hand):
     assert hand.entries() == []
 
 
-def test_entries_lists_the_merge_head_alone_as_its_dict_without_an_id(hand, github):
-    _with_merge_head(github)
-    assert hand.entries() == [{**_MERGE_HEAD, "kind": "run"}]
+def test_entries_lists_a_merge_entry_alone_as_its_dict_without_an_id(hand, github):
+    _with_built_entry(github)
+    assert hand.entries() == [{**_BUILT, "kind": "run"}]
 
 
-def test_entries_lists_hand_entries_oldest_first_then_the_merge_head(hand, github):
-    _with_merge_head(github)
+def test_entries_lists_hand_entries_oldest_first_then_the_merge_entries(hand, github):
+    _with_built_entry(github)
     first, sha, _ = hand.add("HEAD", "s1", True, ["-k", "x"])
     second, _, _ = hand.add("HEAD", None, False, [])
 
     entries = hand.entries()
 
     assert [entry.get("id") for entry in entries] == [first, second, None]
-    assert entries[2] == {**_MERGE_HEAD, "kind": "run"}
+    assert entries[2] == {**_BUILT, "kind": "run"}
     assert [entry["kind"] for entry in entries] == ["test", "test", "run"]
     one = entries[0]
     assert {key: one[key] for key in ("ref", "sha", "set", "skip_build", "args")} == {
@@ -185,8 +194,8 @@ def test_remove_of_an_id_never_queued_is_false(hand):
     assert len(hand.entries()) == 1
 
 
-def test_take_returns_the_oldest_hand_entry_before_the_merge_head(hand, github):
-    _with_merge_head(github)
+def test_take_returns_the_oldest_hand_entry_before_the_merge_entry(hand, github):
+    _with_built_entry(github)
     first, sha, _ = hand.add("HEAD", "s1", False, ["-x"])
     hand.add("HEAD", None, False, [])
 
@@ -203,20 +212,20 @@ def test_take_returns_the_oldest_hand_entry_before_the_merge_head(hand, github):
 
 
 def test_a_taken_entry_is_deleted_and_never_returned_again(hand, github, tmp_path):
-    _with_merge_head(github)
+    _with_built_entry(github)
     first, _, _ = hand.add("HEAD", None, False, [])
     second, _, _ = hand.add("HEAD", None, False, [])
 
     assert hand.take()["id"] == first
     assert [entry.get("id") for entry in hand.entries()] == [second, None]
     assert queue.Queue(tmp_path, tmp_path / "records").take()["id"] == second
-    assert hand.take() == {**_MERGE_HEAD, "kind": "run"}
+    assert hand.take() == {**_BUILT, "kind": "run"}
     assert [entry["id"] for entry in hand.entries() if "id" in entry] == []
 
 
-def test_take_returns_the_merge_head_when_no_hand_entry_waits(hand, github):
-    _with_merge_head(github)
-    assert hand.take() == {**_MERGE_HEAD, "kind": "run"}
+def test_take_returns_the_merge_entry_when_no_hand_entry_waits(hand, github):
+    _with_built_entry(github)
+    assert hand.take() == {**_BUILT, "kind": "run"}
 
 
 def test_take_returns_none_when_nothing_is_queued(hand):
@@ -237,14 +246,14 @@ def test_take_skips_an_entry_removed_before_it_ran(hand):
 
 
 def test_take_skips_an_entry_removed_between_listing_and_claiming(hand, github, monkeypatch):
-    _with_merge_head(github)
+    _with_built_entry(github)
     first, _, _ = hand.add("HEAD", None, False, [])
     listed = hand.entries()
     assert [entry.get("id") for entry in listed] == [first, None]
     assert hand.remove(first) is True
     monkeypatch.setattr(queue.Queue, "entries", lambda self: listed)
 
-    assert hand.take() == {**_MERGE_HEAD, "kind": "run"}
+    assert hand.take() == {**_BUILT, "kind": "run"}
 
 
 def test_a_hand_entrys_added_is_an_iso_timestamp_in_utc(hand):
@@ -276,7 +285,7 @@ def _real_run_spy(monkeypatch):
 def test_entries_runs_no_fetch_and_no_git(monkeypatch, tmp_path, github):
     calls = []
     _stub_git(monkeypatch, calls=calls)
-    github.result = [dict(_MERGE_HEAD)]
+    github.result = [dict(_BUILT)]
     entries = queue.Queue(tmp_path, tmp_path / "records").entries()
     assert [entry["kind"] for entry in entries] == ["run"]
     assert calls == []
@@ -484,7 +493,7 @@ _BUILT_TWO = {"pr": 16, "title": "Tidy logs", "sha": "0badf00d"}
 def test_entries_lists_every_merge_queue_entry_in_githubs_order_after_the_hand_entries(
     hand, github
 ):
-    github.result = [dict(_MERGE_HEAD), dict(_WAITING), dict(_BUILT_TWO)]
+    github.result = [dict(_BUILT), dict(_WAITING), dict(_BUILT_TWO)]
     entry_id, _, _ = hand.add("HEAD", None, False, [])
 
     entries = hand.entries()
@@ -492,7 +501,7 @@ def test_entries_lists_every_merge_queue_entry_in_githubs_order_after_the_hand_e
     assert [entry["kind"] for entry in entries] == ["test", "run", "run", "run"]
     assert entries[0]["id"] == entry_id
     assert entries[1:] == [
-        {"kind": "run", **_MERGE_HEAD},
+        {"kind": "run", **_BUILT},
         {"kind": "run", **_WAITING},
         {"kind": "run", **_BUILT_TWO},
     ]
@@ -500,8 +509,8 @@ def test_entries_lists_every_merge_queue_entry_in_githubs_order_after_the_hand_e
 
 
 def test_take_returns_the_first_merge_queue_entry_that_has_a_sha(hand, github):
-    github.result = [dict(_WAITING), dict(_MERGE_HEAD), dict(_BUILT_TWO)]
-    assert hand.take() == {"kind": "run", **_MERGE_HEAD}
+    github.result = [dict(_WAITING), dict(_BUILT), dict(_BUILT_TWO)]
+    assert hand.take() == {"kind": "run", **_BUILT}
 
 
 def test_take_returns_none_when_no_merge_queue_entry_has_a_sha(hand, github):
@@ -514,6 +523,22 @@ def test_the_merge_queue_is_read_through_a_check_built_from_the_checkouts_github
 ):
     hand.entries()
     assert github.constructed == [("acme/layer", 7, "/outside/app.pem", "bench")]
+
+
+def test_take_with_a_failed_merge_queue_read_raises_and_leaves_the_hand_entry_queued(hand, github):
+    entry_id, _, _ = hand.add("HEAD", None, False, [])
+    github.result = RuntimeError("graphql down")
+    with pytest.raises(RuntimeError, match="graphql down"):
+        hand.take()
+    github.result = []
+    assert [entry["id"] for entry in hand.entries()] == [entry_id]
+
+
+def test_the_merge_queue_fake_has_the_signatures_of_check():
+    for name in ("__init__", "merge_queue"):
+        assert inspect.signature(getattr(FakeMergeQueueCheck, name)) == inspect.signature(
+            getattr(Check, name)
+        )
 
 
 def test_hand_operations_never_build_a_check(hand, github):
