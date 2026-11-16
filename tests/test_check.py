@@ -19,7 +19,10 @@ class FakeRepository:
 
 
 class FakeRequester:
-    """Records every `graphql_query` call and answers `(headers, data)` with `data`."""
+    """Records every `graphql_query` call and answers `(headers, response)`.
+
+    `data` is the whole GraphQL response, `{"data": {...}}`, as PyGithub returns it.
+    """
 
     def __init__(self):
         self.data = {}
@@ -169,7 +172,7 @@ def test_post_never_calls_github_integration_on_an_invalid_conclusion(
 
 
 def _merge_queue_data(*nodes):
-    return {"repository": {"mergeQueue": {"entries": {"nodes": list(nodes)}}}}
+    return {"data": {"repository": {"mergeQueue": {"entries": {"nodes": list(nodes)}}}}}
 
 
 def test_merge_queue_returns_each_entry_in_githubs_order_with_none_for_an_unbuilt_one(
@@ -229,7 +232,7 @@ def test_merge_queue_of_a_repository_without_a_merge_queue_is_empty(monkeypatch,
 
     def capture(self, owner, name):
         installation = original(self, owner, name)
-        installation.github.requester.data = {"repository": {"mergeQueue": None}}
+        installation.github.requester.data = {"data": {"repository": {"mergeQueue": None}}}
         return installation
 
     monkeypatch.setattr(FakeGithubIntegration, "get_repo_installation", capture)
