@@ -253,7 +253,7 @@ class Watch(App):
             )
 
     def on_landed(self, message):
-        """Take a finished read; a failed `entries()` is the message unless a question is up."""
+        """Take a finished read; a failed `entries()` becomes the message."""
         reads, outcome = self._reads, message.outcome
         reads.pending.discard(message.kind)
         if message.kind == "preview":
@@ -262,8 +262,7 @@ class Watch(App):
                 str(outcome) if isinstance(outcome, Exception) else outcome,
             )
         elif isinstance(outcome, Exception):
-            if self.prompt is None and not isinstance(self.screen, Confirm):
-                self.message = str(outcome)
+            self.message = str(outcome)
         else:
             reads.entries = outcome
         self._refresh()
@@ -486,8 +485,6 @@ class Watch(App):
         self._record, self._stage = record, None
         self._q("#log").chosen = False
         self._switch("run")
-        self._q("#stages").focus()
-        self._refresh()
 
     def on_data_table_row_highlighted(self, event):
         """The user moved a list's selection: remember the stage, the Queue row or the run."""
@@ -528,7 +525,6 @@ class Watch(App):
         section = log.cursor_node.data.section if log.cursor_node else None
         if section is not None:
             self._folds[section.id] = not view.is_open(self._folds, section)
-            log.land(log.cursor_node.data.anchor[:2] + (0,))
 
     def action_search(self, direction):
         """`n` and `N`: the next or previous line holding the pattern, unfolding it; Run only."""

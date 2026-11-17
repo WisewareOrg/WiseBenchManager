@@ -45,8 +45,6 @@ MIN_ROWS, MIN_COLS = 24, 80
 THEME = Theme(
     name="bench",
     primary=BLUE,
-    secondary=BLUE,
-    accent=BLUE,
     warning=AMBER,
     error=RED,
     success=GREEN,
@@ -58,10 +56,6 @@ THEME = Theme(
         "block-cursor-background": SELECTION,
         "block-cursor-foreground": TEXT,
         "block-cursor-blurred-background": SELECTION,
-        "footer-key-foreground": GROUND,
-        "footer-key-background": TEXT,
-        "input-cursor-background": TEXT,
-        "input-cursor-foreground": GROUND,
     },
 )
 
@@ -79,7 +73,6 @@ DataTable:focus, Tree:focus, Input:focus, DataTable:focus > .datatable--header {
 Tab {{ color: {DIM}; }}
 Tab.-active {{ background: {TEXT}; color: {GROUND}; }}
 Underline > .underline--bar {{ color: {RULE}; background: {GROUND}; }}
-DataTable {{ background: {GROUND}; }}
 #tabs, TabPane, TabPane > Horizontal {{ height: 1fr; }}
 TabPane {{ padding: 0; }}
 .keys {{ width: auto; margin-right: 2; }}

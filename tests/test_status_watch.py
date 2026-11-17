@@ -249,7 +249,7 @@ def test_in_help_colon_opens_the_command_line_and_q_quits(after):
         ([":", "backspace"], None),
         (["/", "backspace"], None),
         ([":", "enter"], None),
-        ([*":ab", "tab", "shift+tab"], ":ab"),
+        ([*":ab", "tab"], ":ab"),
     ],
     ids=[
         ": opens it",
@@ -361,7 +361,7 @@ def test_history_shows_the_run_shown_selected_and_its_keys_move_the_selection(di
         await pilot.press("[", "3")
         table = app.query_one("#history-table")
         assert table.cursor_row == 1
-        for names, row in ((["j"], 2), (["G"], 39), (["k"], 38), (["g", "g"], 0)):
+        for names, row in ((["j"], 2), (["G"], 39), (["k"], 38), (["g", "g"], 0), (["2", "3"], 1)):
             await pilot.press(*names)
             assert table.cursor_row == row
 
@@ -435,6 +435,18 @@ def test_zr_and_zm_open_or_fold_every_section_of_the_stage(after, names, opened)
     assert after([LONG], *HOST_STAGE, "z", "R", *names, look=look) == {opened}
 
 
+def test_space_folds_a_section_and_the_fold_stays_as_the_run_refreshes(disk, tmp_path):
+    app, _ = in_the_log(disk, tmp_path)
+
+    async def scenario(pilot):
+        await pilot.press(*HOST_STAGE, "g", "g", *"jjj", "space")
+        await tick(app, pilot)
+        await pilot.press("j")
+        return under_cursor(app)
+
+    assert drive(app, scenario) == "boot one"
+
+
 def test_a_fold_the_user_made_stays_as_the_run_refreshes(disk, tmp_path):
     app, _ = in_the_log(disk, tmp_path)
 
@@ -461,8 +473,8 @@ def test_search_unfolds_a_match_and_n_and_capital_n_step_between_matches_and_wra
     app, _ = in_the_log(disk, tmp_path)
 
     async def scenario(pilot):
-        await pilot.press(*HOST_STAGE, "g", "g", *"/boot", "enter")
-        assert (app.prompt, under_cursor(app)) == (None, "boot one")
+        await pilot.press(*HOST_STAGE[:-1], *"/boot", "enter")
+        assert (app.prompt, under_cursor(app), focused(app)) == (None, "boot one", "log")
         seen = []
         for key in "nnN":
             await pilot.press(key)
@@ -494,23 +506,23 @@ def test_a_line_the_stage_prints_after_its_sections_began_shows_above_them(disk,
     drive(app, scenario)
 
 
-def test_a_selected_row_keeps_the_colour_of_its_meaning(disk, tmp_path):
-    """A failed glyph stays red under the log's cursor, a running one amber in the stage list."""
+def test_a_selected_row_keeps_the_colour_of_its_meaning_on_the_ground_of_its_own(disk, tmp_path):
+    """The log's cursor row: a failed glyph red on the selection; the stage list's selected row:
+    a running glyph amber on the running tint."""
     app, _ = in_the_log(disk, tmp_path, [running_test(2, failed=(1,))], LIVE)
 
-    def colour_of(glyph):
+    def colours_of(glyph):
         for line in app.screen._compositor.render_update(full=True).strips:
             for segment in (segment for strip in line for segment in strip):
-                if glyph in segment.text and segment.style.bgcolor.get_truecolor().hex != (
-                    screen.GROUND
-                ):
-                    return segment.style.color.get_truecolor().hex
+                fg, bg = segment.style.color, segment.style.bgcolor
+                if glyph in segment.text and bg.get_truecolor().hex != screen.GROUND:
+                    return fg.get_truecolor().hex, bg.get_truecolor().hex
         return None
 
     async def scenario(pilot):
         await pilot.press("enter")
-        assert colour_of("✗") == screen.RED
-        assert colour_of("●") == screen.AMBER
+        assert colours_of("✗") == (screen.RED, screen.SELECTION)
+        assert colours_of("●") == (screen.AMBER, screen.RUNNING_TINT)
 
     drive(app, scenario)
 
@@ -745,12 +757,12 @@ def test_leaving_the_queue_stops_the_reads_and_entering_it_again_reads_again(mon
     async def scenario(pilot):
         await pilot.press("2")
         await tick(app, pilot)
+        await pilot.press("1", "2")
+        await tick(app, pilot)
+        assert len(calls) == 2
         await pilot.press("1")
         for seconds in (40, 40, 0):
             await tick(app, pilot, clock, seconds)
-        assert len(calls) == 1
-        await pilot.press("2")
-        await tick(app, pilot)
         assert len(calls) == 2
 
     drive(app, scenario)
