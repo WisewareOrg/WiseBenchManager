@@ -2,19 +2,21 @@
 
 import hashlib
 import json
+import os
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
-from mitmproxy import exceptions
-from mitmproxy.io import FlowWriter
-from mitmproxy.test import tflow, tutils
 
 from wisebench import proxy
+
+_TOOLS_ENV = Path(__file__).resolve().parents[1] / "tools" / "mitmproxy"
 
 _HIT_URL = "http://example.invalid/hello"
 _HIT_BODY = b"hello-body"
@@ -26,15 +28,26 @@ _HTTPS_MISS_URL = "https://wisebench-proxy-test.invalid/missing"
 
 _TCP_GARBAGE = b"not-http-or-tls\n"
 
-_POST_URL = "http://example.invalid/submit"
-_POST_BODY = "field=value"
+_BOTH_METHODS_URL = "http://example.invalid/submit"
+_GET_RESPONSE = "from-get"
+_POST_RESPONSE = "from-post"
 
 
-def _har_entry(url, body):
+@pytest.fixture(autouse=True)
+def _tools_env(bench_clone):
+    """Give the fake clone this repository's `tools/mitmproxy`, synced, as its own."""
+    (bench_clone.root / "tools").mkdir()
+    (bench_clone.root / "tools" / "mitmproxy").symlink_to(_TOOLS_ENV, target_is_directory=True)
+
+
+def _har_entry(url, body, method="GET", request_body=None):
+    request = {"method": method, "url": url, "httpVersion": "HTTP/1.1", "headers": []}
+    if request_body is not None:
+        request["postData"] = {"text": request_body}
     return {
         "startedDateTime": datetime.now(UTC).isoformat(),
         "time": 0,
-        "request": {"method": "GET", "url": url, "httpVersion": "HTTP/1.1", "headers": []},
+        "request": request,
         "response": {
             "status": 200,
             "httpVersion": "HTTP/1.1",
@@ -61,26 +74,14 @@ def https_har(tmp_path):
 
 
 @pytest.fixture
-def post_har(tmp_path):
-    path = tmp_path / "post_recording.har"
-    entry = {
-        "startedDateTime": datetime.now(UTC).isoformat(),
-        "time": 0,
-        "request": {
-            "method": "POST",
-            "url": _POST_URL,
-            "httpVersion": "HTTP/1.1",
-            "headers": [],
-            "postData": {"text": _POST_BODY},
-        },
-        "response": {
-            "status": 200,
-            "httpVersion": "HTTP/1.1",
-            "headers": [{"name": "Content-Type", "value": "text/plain"}],
-            "content": {"text": "ok"},
-        },
-    }
-    path.write_text(json.dumps({"log": {"version": "1.2", "entries": [entry]}}))
+def get_and_post_har(tmp_path):
+    """One URL recorded twice: as a GET with one response and as a POST with another."""
+    path = tmp_path / "get_and_post_recording.har"
+    entries = [
+        _har_entry(_BOTH_METHODS_URL, _GET_RESPONSE),
+        _har_entry(_BOTH_METHODS_URL, _POST_RESPONSE, method="POST", request_body="field=value"),
+    ]
+    path.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}))
     return path
 
 
@@ -89,6 +90,26 @@ def _fetch(port, url):
         urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{port}"})
     )
     return opener.open(url, timeout=5)
+
+
+def _recorded_hit_then_miss(har, tmp_path):
+    """A real flow file from mitmdump: one replayed hit, then one killed miss, in that order."""
+    flows_path = tmp_path / "recorded.flows"
+    server = proxy.Proxy(har, tmp_path / "recorded.log", flows_path)
+    server.start()
+    try:
+        assert _fetch(server.port, _HIT_URL).read() == _HIT_BODY
+        with pytest.raises((urllib.error.URLError, ConnectionError)):
+            _fetch(server.port, _MISS_URL)
+    finally:
+        server.stop()
+    return flows_path.read_bytes()
+
+
+def _end_of_first_record(data):
+    """The offset just past the first tnetstring record (`<length>:<payload><type>`)."""
+    length, _, _ = data.partition(b":")
+    return len(length) + 1 + int(length) + 1
 
 
 def test_start_serves_the_recorded_response(har, tmp_path):
@@ -378,25 +399,9 @@ def test_a_proxy_nothing_reaches_reports_zero_for_every_recorded_request(har, tm
 
 def test_a_cut_trailing_flow_record_yields_the_complete_flows_before_it(har, tmp_path):
     """A record cut by mitmdump mid-write is tolerated; served()/killed() use what precedes it."""
-    flows_path = tmp_path / "proxy.flows"
-    with open(flows_path, "wb") as fo:
-        writer = FlowWriter(fo)
-
-        served_req = tutils.treq(
-            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/hello"
-        )
-        served_flow = tflow.tflow(req=served_req, resp=True)
-        served_flow.is_replay = "response"
-        writer.add(served_flow)
-
-        cut_req = tutils.treq(
-            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/mid-write"
-        )
-        cut_flow = tflow.tflow(req=cut_req, resp=False)
-        cut_flow.is_replay = None
-        writer.add(cut_flow)
-
-    flows_path.write_bytes(flows_path.read_bytes()[:-5])
+    recorded = _recorded_hit_then_miss(har, tmp_path)
+    flows_path = tmp_path / "cut.flows"
+    flows_path.write_bytes(recorded[:-5])
 
     server = proxy.Proxy(har, tmp_path / "proxy.log", flows_path)
     assert server.served() == {("GET", _HIT_URL): 1}
@@ -404,59 +409,48 @@ def test_a_cut_trailing_flow_record_yields_the_complete_flows_before_it(har, tmp
 
 
 def test_a_flow_record_corrupted_before_the_trailing_record_raises(har, tmp_path):
-    """Only a cut trailing record is tolerated; a `FlowReadException` anywhere else propagates."""
-    flows_path = tmp_path / "proxy.flows"
-    with open(flows_path, "wb") as fo:
-        writer = FlowWriter(fo)
-
-        served_req = tutils.treq(
-            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/hello"
-        )
-        served_flow = tflow.tflow(req=served_req, resp=True)
-        served_flow.is_replay = "response"
-        writer.add(served_flow)
-        end_of_served = fo.tell()
-
-        trailing_req = tutils.treq(
-            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/after"
-        )
-        trailing_flow = tflow.tflow(req=trailing_req, resp=True)
-        trailing_flow.is_replay = None
-        writer.add(trailing_flow)
-
-    corrupted = flows_path.read_bytes()
-    corrupted = corrupted[:end_of_served] + b"\xff" + corrupted[end_of_served:]
-    flows_path.write_bytes(corrupted)
+    """Only a cut trailing record is tolerated; a read failure anywhere else propagates."""
+    recorded = _recorded_hit_then_miss(har, tmp_path)
+    end = _end_of_first_record(recorded)
+    flows_path = tmp_path / "corrupted.flows"
+    flows_path.write_bytes(recorded[:end] + b"\xff" + recorded[end:])
 
     server = proxy.Proxy(har, tmp_path / "proxy.log", flows_path)
-    with pytest.raises(exceptions.FlowReadException):
+    with pytest.raises(subprocess.CalledProcessError):
         server.served()
 
 
-def test_served_matches_on_method_and_url_together_not_on_either_alone(post_har, tmp_path):
-    """A flow must match on method and url, and actually have replayed, to count as served."""
-    flows_path = tmp_path / "proxy.flows"
-    with open(flows_path, "wb") as fo:
-        writer = FlowWriter(fo)
+def test_served_matches_on_method_and_url_together_not_on_the_url_alone(get_and_post_har, tmp_path):
+    """One GET of a URL recorded as both GET and POST is served once, as the GET only."""
+    server = proxy.Proxy(get_and_post_har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
+    server.start()
+    try:
+        assert _fetch(server.port, _BOTH_METHODS_URL).read() == _GET_RESPONSE.encode()
+    finally:
+        server.stop()
+    assert server.served() == {("GET", _BOTH_METHODS_URL): 1, ("POST", _BOTH_METHODS_URL): 0}
 
-        differing_body_req = tutils.treq(
-            method=b"POST",
-            host="example.invalid",
-            port=80,
-            scheme=b"http",
-            path=b"/submit",
-            content=b"field=other",
-        )
-        differing_body_flow = tflow.tflow(req=differing_body_req, resp=True)
-        differing_body_flow.is_replay = None
-        writer.add(differing_body_flow)
 
-        differing_method_req = tutils.treq(
-            method=b"GET", host="example.invalid", port=80, scheme=b"http", path=b"/submit"
-        )
-        differing_method_flow = tflow.tflow(req=differing_method_req, resp=True)
-        differing_method_flow.is_replay = "response"
-        writer.add(differing_method_flow)
+def test_start_runs_the_clones_own_mitmdump_never_one_found_on_path(har, tmp_path, monkeypatch):
+    """A `mitmdump` earlier on PATH is unpinned; the clone's locked one is the one that runs."""
+    path_bin = tmp_path / "path-bin"
+    path_bin.mkdir()
+    impostor = path_bin / "mitmdump"
+    impostor.write_text("#!/bin/sh\nexit 1\n")
+    impostor.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{path_bin}{os.pathsep}{os.environ['PATH']}")
 
-    server = proxy.Proxy(post_har, tmp_path / "proxy.log", flows_path)
-    assert server.served() == {("POST", _POST_URL): 0}
+    server = proxy.Proxy(har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
+    server.start()
+    try:
+        assert _fetch(server.port, _HIT_URL).read() == _HIT_BODY
+    finally:
+        server.stop()
+    assert server.served() == {("GET", _HIT_URL): 1}
+
+
+def test_the_runner_and_its_plugin_import_without_mitmproxy():
+    """mitmproxy runs only as processes from its own environment; the runner never imports it."""
+    blocked = "import sys; sys.modules['mitmproxy'] = None; import wisebench.plugin"
+    result = subprocess.run([sys.executable, "-c", blocked], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
