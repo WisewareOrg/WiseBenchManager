@@ -84,14 +84,26 @@ def watch(tmp_path, *steps, size=(100, 30)):
             row = (section and section.name, offset)
         focused = app.focused and app.focused.id
         record = app.current and app.current.record
-        stage = app.query_one("#stages").cursor
+        stage, queue = app.query_one("#stages").cursor, app.query_one("#queuerows").cursor
+        half = (log.size.height - len(log.head)) // 2
         return SimpleNamespace(
-            focused=focused, row=row, stage=stage, shown=app.shown(), record=record
+            focused=focused,
+            row=row,
+            stage=stage,
+            shown=app.shown(),
+            record=record,
+            queue=queue,
+            half=half,
         )
 
     strips, seen = drive(app, *steps, size=size, look=look)
     seen.screen, seen.text, seen.code = strips, text(strips), app.return_code
     return seen
+
+
+def hold(app):
+    """A step after which no `Queue` read starts, as if GitHub had stopped answering."""
+    app.background = lambda *args, **kwargs: None
 
 
 def tick(change):
@@ -145,13 +157,17 @@ def test_each_key_shows_what_the_boards_show(
         ([run(), run(record=OLDER)], IDLE, ["left_square_bracket", "3", "1"],
          {"record": STAMP, "shown": "run"}),
         ([run(), run(record=OLDER)], IDLE, ["3", "j", "enter"], {"record": OLDER, "shown": "run"}),
+        ([run(), run(record=OLDER)], IDLE, ["left_square_bracket", "3", "enter"],
+         {"record": OLDER}),
+        ([run()], IDLE, ["2", "j", "1", "2"], {"queue": 0}),
         ([run()], IDLE, ["tab"], {"shown": "queue"}),
         ([run()], IDLE, ["tab", "tab", "tab"], {"shown": "run"}),
         ([run()], IDLE, ["shift+tab"], {"shown": "history"}),
         ([run()], IDLE, ["3", "question_mark", "escape"], {"shown": "history"}),
     ],
     ids=["enter into the log", "esc back", "starts on the running test", "search", "n", "N",
-         "] newer", "1 back to the newest", "history enter", "tab", "tab wraps", "shift-tab",
+         "] newer", "1 back to the newest", "history enter", "history starts on the run shown",
+         "queue starts on its first row", "tab", "tab wraps", "shift-tab",
          "esc leaves help"],
 )  # fmt: skip
 def test_each_key_moves_where_the_keymap_says(tmp_path, disk, queue, runs, bench, steps, expected):
@@ -169,11 +185,15 @@ def test_the_live_stage_follows_the_run_until_the_user_picks_one(tmp_path, disk)
     assert watch(tmp_path, "k", progress).stage == 1
 
 
-def test_G_follows_the_log_as_it_grows_and_a_move_off_the_end_stops_following(tmp_path, disk):
+def test_G_follows_a_growing_log_a_move_off_the_end_stops_it_and_ctrl_d_goes_half_a_page(
+    tmp_path, disk
+):
     disk.runs, disk.bench = [live("build", build=plain("build", 50))], LIVE
     grow = tick(lambda: setattr(disk, "runs", [live("build", build=plain("build", 60))]))
     assert watch(tmp_path, "enter", "g", "g", "G", grow).row == (None, 59)
     assert watch(tmp_path, "enter", "g", "g", "j", grow).row == (None, 1)
+    seen = watch(tmp_path, "enter", "g", "g", "ctrl+d")
+    assert seen.row == (None, seen.half) and seen.half > 1
 
 
 def test_entering_the_queue_reads_it_once_and_again_every_30_seconds_while_it_shows(
@@ -214,6 +234,8 @@ def test_run_previews_the_typed_ref_and_enter_queues_it_whatever_view_tab_shows(
     shown = watch(tmp_path, "colon", *"run feat2").text
     assert 'resolves to 1234567 "Fix", clean tree' in shown and "joins as 2, after feat" in shown
     queue.preview.assert_called_with("feat2", None)
+    held = watch(tmp_path, "colon", *"run feat2", hold, "x").text
+    assert "resolves to" not in held
     seen = watch(tmp_path, "colon", *"run -C ~/x fe", "tab", *"at2", "enter")
     queue.add.assert_called_once_with("feat2", None, False, [], "~/x")
     assert "queued 5 1234567" in seen.text and seen.shown == "history"
@@ -229,10 +251,6 @@ def test_run_of_an_unresolvable_ref_says_so_and_the_view_goes_on(tmp_path, disk,
 def test_dd_removes_the_selected_hand_run_at_once_and_refuses_a_merge_queue_entry(
     tmp_path, disk, queue
 ):
-    def hold(app):
-        """Keep the next `entries` read from starting, as a slow GitHub would."""
-        app.reading.add("entries")
-
     seen = watch(tmp_path, "2", hold, "d", "d")
     queue.remove.assert_called_once_with(3)
     assert "removed queued run 3" in seen.text and "feat" not in seen.text
@@ -313,11 +331,14 @@ def test_a_key_or_a_refresh_reads_only_the_log_lines_on_screen(tmp_path, disk, s
     assert "all" not in reads and len(set(reads)) <= 30
 
 
-def test_a_key_in_history_draws_only_the_runs_on_screen(tmp_path, disk, monkeypatch):
+@pytest.mark.parametrize("step", ["G", lambda app: app.tick()])
+def test_a_key_or_a_refresh_in_history_draws_only_the_runs_on_screen(
+    tmp_path, disk, monkeypatch, step
+):
     drawn, cells = [], view.history_cells
     monkeypatch.setattr(view, "history_cells", lambda run, *a: drawn.append(run) or cells(run, *a))
     disk.runs = [run(record=f"2026{i:04d}") for i in range(2000, 0, -1)]
-    watch(tmp_path, "3", lambda app: drawn.clear(), "G", size=(100, 30))
+    watch(tmp_path, "3", lambda app: drawn.clear(), step, size=(100, 30))
     assert 0 < len(drawn) <= 30
 
 

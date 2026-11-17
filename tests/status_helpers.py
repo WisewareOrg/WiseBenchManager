@@ -189,7 +189,7 @@ def real_run():
 def drive(app, *steps, size=(100, 30), look=lambda app: None):
     """Run `app` headless through `steps`: a key name, or a function of the app called there.
 
-    After each step the app settles and the `Queue` reads it started land, or a second passes.
+    After each step the app settles and the `Queue` reads it started land, or five seconds pass.
 
     Returns:
         tuple: The screen's rows after the last step, and what `look(app)` saw then.
@@ -201,7 +201,7 @@ def drive(app, *steps, size=(100, 30), look=lambda app: None):
                 await pilot.pause()
                 step(app) if callable(step) else await pilot.press(step)
                 await pilot.pause()
-                for _ in range(100):
+                for _ in range(500):
                     if not app.reading:
                         break
                     await asyncio.sleep(0.01)
