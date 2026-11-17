@@ -151,7 +151,7 @@ def grown(lines):
 
 
 THREE = [run(STAMP), failing_at(OLDER, "bundle"), run(OLDEST)]
-SUITES = run(host_suite=suite("host_suite", ["passed", "failed"]))
+SUITES = run(host_suite=suite("host_suite", ["passed", "failed", "not-started"]))
 
 # A scenario: the runs and the bench each refresh reads, then its steps. A step is the keys to
 # press, or a function of the view; then the texts the screen shows, and those it does not.
@@ -225,7 +225,7 @@ SCENARIOS = {
         IDLE,
         [
             ([], ["host suite    1 passed  1 failed"], []),
-            ([*"jjjjj"], ["host suite  2 of 2  1 passed  1 failed"], []),
+            ([*"jjjjj"], ["host suite  2 of 3  1 passed  1 failed"], []),
         ],
     ),
     "a running build shows its progress and its running tasks": (
