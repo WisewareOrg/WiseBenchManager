@@ -790,15 +790,6 @@ def watch_source(
     return sha, seen
 
 
-def test_run_with_a_directory_previews_its_commit_without_fetching_it(
-    monkeypatch, tmp_path, bench_clone
-):
-    sha, seen = watch_source(monkeypatch, tmp_path, bench_clone, lambda snap: ["\x1b"])
-    frame, fetched = seen[0]
-    assert f'resolves to {sha[:7]} "unpushed work"' in frame
-    assert not fetched
-
-
 def test_the_preview_of_a_directory_reports_the_state_of_the_checkout_not_of_the_directory(
     monkeypatch, tmp_path, bench_clone
 ):
@@ -822,20 +813,10 @@ def test_run_with_a_home_relative_directory_previews_and_queues_its_commit(
         lambda snap: ["\n", TIMEOUT, TIMEOUT, snap],
         typed_dir="~/src",
     )
-    (preview, _), (queued, fetched) = seen
+    (preview, fetched_by_preview), (queued, fetched) = seen
     assert f'resolves to {sha[:7]} "unpushed work"' in preview
+    assert not fetched_by_preview
     assert f"queued 1 {sha[:7]}" in queued
-    assert fetched
-
-
-def test_enter_on_run_with_a_directory_fetches_the_commit_and_queues_it(
-    monkeypatch, tmp_path, bench_clone
-):
-    sha, seen = watch_source(
-        monkeypatch, tmp_path, bench_clone, lambda snap: ["\n", TIMEOUT, TIMEOUT, snap]
-    )
-    frame, fetched = seen[1]
-    assert f"queued 1 {sha[:7]}" in frame
     assert fetched
     held = queue.Queue(bench_clone.checkout, tmp_path / "records").entries()
     assert [(e["ref"], e["sha"]) for e in held] == [("HEAD", sha)]

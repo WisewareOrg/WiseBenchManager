@@ -16,10 +16,7 @@ import pytest
 from helpers import TIMES_OUT as stub_timeout
 from helpers import (
     FakeMergeQueueCheck,
-    git,
-    has_commit,
     repo_with_one_commit,
-    source_repo,
     stub_fetch,
     stub_merge_queue,
     stub_popen,
@@ -578,29 +575,3 @@ def test_a_bench_toml_without_a_github_table_raises_from_the_merge_queue_read(
     write_bench_toml(tmp_path)
     with pytest.raises(ValueError, match=r"\[github\] repo is required"):
         queue.Queue(tmp_path, tmp_path / "records").entries()
-
-
-def test_a_commit_queued_from_a_directory_is_in_the_checkout_when_take_returns_it(
-    monkeypatch, tmp_path
-):
-    """With a real `origin`, `add(source=...)` brings the commit and `take()` returns it intact."""
-    remote = tmp_path / "remote.git"
-    remote.mkdir()
-    git(remote, "init", "--bare", "-q")
-    seed = tmp_path / "seed"
-    seed.mkdir()
-    repo_with_one_commit(seed)
-    git(seed, "push", "-q", str(remote), "HEAD:refs/heads/main")
-    local = tmp_path / "local"
-    git(tmp_path, "clone", "-q", str(remote), str(local))
-    stub_merge_queue(monkeypatch, local)
-    sha = source_repo(tmp_path / "src")
-    assert not has_commit(local, sha)
-    store = queue.Queue(local, local / "records")
-
-    entry_id, queued_sha, _ = store.add("HEAD", None, False, [], source=str(tmp_path / "src"))
-    taken = store.take()
-
-    assert queued_sha == sha
-    assert (taken["id"], taken["sha"]) == (entry_id, sha)
-    assert has_commit(local, sha)

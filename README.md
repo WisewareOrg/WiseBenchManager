@@ -74,7 +74,7 @@ fixture erroring during setup or teardown is never read as the candidate's test 
 
 ## What a layer provides
 
-The runner is pointed at a checkout and reads `bench.toml` from it. Board identity is never in it —
+The runner reads `bench.toml` from the clone's `checkout/`. Board identity is never in it —
 see "Running it".
 
 ```toml

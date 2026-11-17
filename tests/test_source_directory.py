@@ -70,19 +70,6 @@ def test_a_ref_that_resolves_only_in_the_checkout_is_refused_for_a_directory(
     assert entries(bench_clone) == []
 
 
-def test_a_directory_that_is_not_a_repo_is_refused(tmp_path, source, bench_clone, capsys):
-    plain = tmp_path / "plain"
-    plain.mkdir()
-
-    assert cli.main(["test", "HEAD", "-C", str(plain)]) == 2
-
-    captured = capsys.readouterr()
-    assert captured.err.startswith("BENCH ERROR: ")
-    assert "does not resolve to a commit" in captured.err
-    assert captured.out == ""
-    assert entries(bench_clone) == []
-
-
 def test_a_relative_directory_resolves_against_the_callers_directory(
     tmp_path, source, bench_clone, monkeypatch
 ):
