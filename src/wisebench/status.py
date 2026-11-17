@@ -644,7 +644,7 @@ class Watch(App):
         text = event.value
         self.action_escape()
         if text == ":q":
-            self.exit(0)
+            self.exit()
         elif text == ":disable":
             self.say(self.change(stop_timer, "disabled"))
         elif text == ":enable":

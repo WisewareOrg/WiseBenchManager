@@ -228,6 +228,6 @@ def test_the_failure_box_names_the_last_failed_setup_and_the_time_the_bench_stop
 
 
 def test_a_disabled_file_that_does_not_parse_shows_no_reason_and_no_time():
-    reason, at = view.disabled("hand-touched")
+    reason, at = view.disabled("hand-touched\nreason\n")
     assert (reason, at) == ("", None)
     assert view.failure_box(reason, at, run()).plain.split("\n")[1:] == ["", ""]
