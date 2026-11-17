@@ -231,6 +231,7 @@ SOURCES = {
     "a merge-queue title": lambda: frame(
         [run()], IDLE, tab="queue", queue=[{**MERGE_ENTRY, "title": DIRTY}]
     ),
+    "a message carrying an exception's text": lambda: frame([run()], IDLE, message=DIRTY),
 }
 
 
