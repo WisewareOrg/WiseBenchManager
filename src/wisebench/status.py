@@ -94,7 +94,7 @@ Commands, typed after `:` or `;`, then Enter:
 _ENABLE = Content.assemble(
     (":enable\n", "$dim"),
     ("Enable the bench?", "$bright bold"),
-    " Clears DISABLED and starts the timer. ",
+    " Clears DISABLED and starts the timer; the next run checks the board first. ",
     ("[y/N]", "$green"),
 )
 
@@ -152,30 +152,30 @@ def _read_disabled(directory):
         directory (pathlib.Path): The records directory.
 
     Returns:
-        tuple[str, str] | None: The local `HH:MM:SS` it was written and its reason; None when it
-        cannot be read.
+        tuple[str | None, str]: The local `HH:MM:SS` it was written and its reason; None and a
+        blank reason when it cannot be read or parsed.
     """
     try:
-        written, _, reason = (directory / DISABLED).read_text().partition("\n")
+        written, reason = (directory / DISABLED).read_text().split("\n")[:2]
         return view.clock(datetime.fromisoformat(written)), reason.strip()
     except (OSError, ValueError):
-        return None
+        return None, ""
 
 
-class WatchScreen(Screen, inherit_bindings=False):
+class WatchScreen(Screen):
     """The tab line, the three views, the status bar and the command line."""
 
     HELP = COMMANDS
     BINDINGS = [
-        Binding("tab", "view(1)", "Next view"),
-        Binding("shift+tab", "view(-1)", "Previous view"),
-        Binding("1", "open(None)", "The live run"),
-        Binding("2", "show('queue')", "Queue"),
-        Binding("3", "show('history')", "History"),
-        Binding("colon,semicolon", "command(':')", "Command line (commands above)"),
-        Binding("question_mark", "keys", "Show or hide the keys"),
-        Binding("escape", "escape", "Back to the stages"),
-        Binding("q", "app.quit", "Quit"),
+        Binding("tab", "view(1)", "next view"),
+        Binding("shift+tab", "view(-1)", "prev view"),
+        Binding("1", "open(None)", "back to the live run"),
+        Binding("2", "show('queue')", "jump to Queue"),
+        Binding("3", "show('history')", "jump to History"),
+        Binding("colon,semicolon", "command(':')", "command line (see commands above)"),
+        Binding("question_mark", "keys", "this panel"),
+        Binding("escape", "escape", "back to stages"),
+        Binding("q", "app.quit", "quit"),
     ]
 
     runs = var(list)
@@ -242,7 +242,7 @@ class WatchScreen(Screen, inherit_bindings=False):
             yield HistoryView(shown, id="history").data_bind(
                 WatchScreen.runs, WatchScreen.bench, WatchScreen.now
             )
-        yield StatusBar().data_bind(WatchScreen.bench)
+        yield StatusBar().data_bind(WatchScreen.bench, WatchScreen.failure, WatchScreen.runs)
         yield Label(id="message")
         with Horizontal(id="command-row"):
             yield Input(id="command", select_on_focus=False, compact=True)
@@ -447,21 +447,20 @@ class WatchScreen(Screen, inherit_bindings=False):
             target.move_cursor(row=0)
             self.read_queue()
         elif name == "history":
-            target = self.query_one("#history-table", DataTable)
-            self.query_one(HistoryView).select(self.run)
+            target = self.query_one(RunList)
+            target.select(self.run)
         if self.query_one("#command-row").display:
             self.back = target
         else:
             target.focus()
 
-    @on(DataTable.RowSelected, "#history-table")
-    def open_selected(self, event):
-        """Open the History row Enter was pressed on.
+    def on_run_list_opened(self, message):
+        """Open the History run Enter was pressed on.
 
         Args:
-            event (DataTable.RowSelected): The row.
+            message (RunList.Opened): The run's place.
         """
-        index = event.cursor_row
+        index = message.index
         self.action_open(None if index == 0 else self.runs[index].record)
 
     @on(Input.Changed, "#command")
@@ -562,11 +561,11 @@ class WatchScreen(Screen, inherit_bindings=False):
         self.app.call_from_thread(self.read_queue)
 
     def remove_selected(self):
-        """`:remove`: remove the selected Queue row when it was queued by hand."""
+        """`:remove`: remove the selected hand-queued Queue row; off the Queue tab, nothing."""
         row = self.query_one(QueueView).selected()
-        if row is None:
-            self.say("no queued run is selected")
-        elif row.id is None:
+        if self.current != "queue" or row is None:
+            return
+        if row.id is None:
             self.say("only hand-queued runs can be removed")
         else:
             self.remove(row.id)
@@ -584,8 +583,19 @@ class WatchScreen(Screen, inherit_bindings=False):
             text = str(exc)
         else:
             text = f"removed queued run {entry_id}" if removed else f"no queued run {entry_id}"
+            if removed:
+                self.app.call_from_thread(self.drop, entry_id)
         self.app.call_from_thread(self.say, text)
         self.app.call_from_thread(self.read_queue)
+
+    def drop(self, entry_id):
+        """Take a removed hand entry out of the rows at once, before the queue is read again.
+
+        Args:
+            entry_id (int): The entry's id.
+        """
+        entries = self.entries or []
+        self.entries = [e for e in entries if not (e["kind"] == "test" and e["id"] == entry_id)]
 
     @work(thread=True, group="write")
     def change_bench(self, enabling):
@@ -618,9 +628,11 @@ class Clock(Label):
 
 
 class StatusBar(Horizontal):
-    """The bench's badge, its timer, and the `? keys` box."""
+    """The bench's badge, its timer, since when it is disabled, and the `? keys` box."""
 
     bench = var(NO_BENCH)
+    failure = var(None)
+    runs = var(list)
 
     def compose(self):
         """The badge, the timer and the keys box.
@@ -632,32 +644,41 @@ class StatusBar(Horizontal):
         yield Label(id="timer")
         yield Label(Content.assemble(("?", "$ground on $text"), " keys"), id="keys")
 
-    def watch_bench(self, bench):
-        """Show the bench's state.
-
-        Args:
-            bench (Bench): The bench.
-        """
+    def watch_bench(self):
+        """Show the bench's state; disabled, since when and whether its run posted."""
+        bench = self.bench
         state = "running" if bench.live else "disabled" if bench.disabled else "idle"
         badge = self.query_one("#badge", Label)
         badge.update(f" {state.upper()} ")
         badge.set_classes(state)
         colour = {"on": "$green", "off": "$red"}.get(bench.timer, "$dim")
+        notes = []
+        if bench.disabled:
+            written, _ = self.failure or (None, "")
+            notes += [f"since {written}"] if written else []
+            posted = self.runs and any(
+                s.name == POSTED and s.state == "passed" for s in self.runs[0].stages
+            )
+            notes += [] if posted else ["nothing posted"]
         self.query_one("#timer", Label).update(
-            Content.assemble(("timer ", "$dim"), (bench.timer, colour))
+            Content.assemble(
+                ("timer ", "$dim"), (bench.timer, colour), (f"    {', '.join(notes)}", "$dim")
+            )
         )
+
+    watch_failure = watch_runs = watch_bench
 
 
 class RunView(Vertical):
     """Run: the run's header, its stage list, and the pane of the stage shown."""
 
     BINDINGS = [
-        Binding("enter", "into_log", "Into the log"),
-        Binding("left_square_bracket", "screen.step(1)", "Older run"),
-        Binding("right_square_bracket", "screen.step(-1)", "Newer run"),
-        Binding("slash", "screen.command('/')", "Search the log"),
-        Binding("n", "screen.search(1)", "Next match"),
-        Binding("N", "screen.search(-1)", "Previous match"),
+        Binding("enter", "into_log", "open selection"),
+        Binding("left_square_bracket", "screen.step(1)", "older run"),
+        Binding("right_square_bracket", "screen.step(-1)", "newer run"),
+        Binding("slash", "screen.command('/')", "search"),
+        Binding("n", "screen.search(1)", "next match"),
+        Binding("N", "screen.search(-1)", "prev match"),
     ]
 
     run = var(None, always_update=True)
@@ -809,12 +830,12 @@ class StageList(Vertical, can_focus=True):
     """The run's stages under a column header; the stage shown is on a ground."""
 
     BINDINGS = [
-        Binding("j,down", "move(1)", "Next stage"),
-        Binding("k,up", "move(-1)", "Previous stage"),
-        Binding("home", "move(-99)", "First stage"),
-        Binding("end,G", "move(99)", "Last stage"),
-        Binding("ctrl+d", "move(3)", "Down half the stages"),
-        Binding("ctrl+u", "move(-3)", "Up half the stages"),
+        Binding("j,down", "move(1)", "down"),
+        Binding("k,up", "move(-1)", "up"),
+        Binding("home", "move(-99)", "top"),
+        Binding("end,G", "move(99)", "bottom"),
+        Binding("ctrl+d", "move(3)", "half page down"),
+        Binding("ctrl+u", "move(-3)", "half page up"),
     ]
 
     run = var(None, always_update=True)
@@ -973,7 +994,7 @@ class FailureBox(Drawn):
         """
         if self.stage is None:
             return Content("")
-        written, reason = self.failure or (DASH, "")
+        written, reason = self.failure or (None, "")
         where = next(
             (
                 s
@@ -982,12 +1003,13 @@ class FailureBox(Drawn):
             ),
             None,
         )
-        place = f"in setup {view.clean(where.name)}; " if where else ""
+        place = [f"in setup {view.clean(where.name)}"] if where else []
+        place += [f"from the DISABLED file, {written}"] if written else []
         return Content("\n").join(
             [
                 Content.styled("bench failure, not the candidate's", "$red bold"),
                 Content(view.clean(reason)),
-                Content.styled(f"{place}from the DISABLED file, {written}", "$dim"),
+                Content.styled("; ".join(place), "$dim"),
             ]
         )
 
@@ -1101,80 +1123,48 @@ def _every(stage):
             yield (section.id, offset), section, line
 
 
-class LogView(ScrollView, can_focus=True, inherit_bindings=False):
-    """A stage's log, drawn a line at a time: only the rows on screen are ever built.
+class Lines(ScrollView, can_focus=True):
+    """A list drawn a line at a time with a cursor: only the rows on screen are ever built.
 
-    It keeps its own cursor, its folds and what the cursor is anchored to: a row, the tail
-    (following the live log), or None for where the stage opens.
+    A subclass says how many rows there are (`count`) and draws one (`segments`).
     """
 
     COMPONENT_CLASSES = {
-        "log--line",
-        "log--dim",
-        "log--passed",
-        "log--failed",
-        "log--running",
-        "log--hand",
-        "log--cursor",
+        "lines--line",
+        "lines--dim",
+        "lines--passed",
+        "lines--failed",
+        "lines--running",
+        "lines--hand",
+        "lines--cursor",
     }
     BINDINGS = [
-        Binding("j,down", "move(1)", "Down a line"),
-        Binding("k,up", "move(-1)", "Up a line"),
-        Binding("ctrl+d", "half(1)", "Down half a page"),
-        Binding("ctrl+u", "half(-1)", "Up half a page"),
-        Binding("home", "top", "Top of the log"),
-        Binding("end,G", "follow", "Bottom of the log, following it"),
-        Binding("enter,space", "toggle", "Fold or unfold the section"),
+        Binding("j,down", "move(1)", "down"),
+        Binding("k,up", "move(-1)", "up"),
+        Binding("ctrl+d", "half(1)", "half page down"),
+        Binding("ctrl+u", "half(-1)", "half page up"),
+        Binding("home", "go(0)", "top"),
+        Binding("end,G", "bottom", "bottom"),
     ]
 
-    shown = var(None, always_update=True)
-    live = var(False)
-    now = var(None)
-
-    def __init__(self):
-        """An empty log."""
-        super().__init__()
-        self.folds, self.anchor, self.cursor = {}, None, 0
-        self.rows = Rows(None, {})
-
-    def reset(self):
-        """Forget the folds and the cursor's anchor, so the stage shows as it opens."""
-        self.folds, self.anchor = {}, None
-        self.lay_out()
-
-    def watch_shown(self, old, new):
-        """Lay out the new read of the stage; another stage or run starts afresh.
+    def __init__(self, **kwargs):
+        """An empty list.
 
         Args:
-            old (tuple | None): The (record, stage) shown before.
-            new (tuple | None): The (record, stage) shown now.
+            **kwargs: Widget arguments.
         """
-        if old is None or new is None or (old[0], old[1].name) != (new[0], new[1].name):
-            self.folds, self.anchor = {}, None
-        self.lay_out()
+        super().__init__(**kwargs)
+        self.cursor = self.count = 0
 
-    def watch_now(self):
-        """Redraw the running section's time."""
-        if self.live and self.rows.stage is not None and self.rows.stage.sections:
-            self.refresh()
+    def lay_out(self, count, cursor):
+        """Take a new row count and cursor, and keep the cursor's row on screen.
 
-    def lay_out(self):
-        """Lay the rows out again and put the cursor on its anchor."""
-        stage = self.shown[1] if self.shown else None
-        self.rows = rows = Rows(stage, self.folds)
-        self.virtual_size = Size(self.size.width, rows.count)
-        if not rows.count:
-            self.cursor = 0
-            if self.has_focus:
-                self.screen.query_one(StageList).focus()
-        elif self.anchor == TAIL:
-            self.cursor = rows.count - 1
-        elif self.anchor is not None and (found := rows.index(self.anchor)) is not None:
-            self.cursor = found
-        elif (section := view.landing(stage)) is not None:
-            self.cursor = rows.index((section.id, 0))
-        else:
-            self.cursor = 0 if stage.sections else rows.count - 1
+        Args:
+            count (int): How many rows there are.
+            cursor (int): The cursor's row.
+        """
+        self.count, self.cursor = count, cursor
+        self.virtual_size = Size(self.size.width, count)
         self.on_resize()
         self.refresh()
 
@@ -1182,16 +1172,14 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
         """Scroll as little as keeps the cursor's row on screen."""
         self.scroll_to_region(Region(0, self.cursor, 1, 1), animate=False, immediate=True)
 
-    def go(self, index):
-        """Put the cursor on row `index`, clamped, and anchor it there.
+    def action_go(self, index):
+        """Put the cursor on row `index`, clamped.
 
         Args:
             index (int): The row.
         """
-        if not self.rows.count:
-            return
-        self.anchor = self.rows.anchor(min(max(index, 0), self.rows.count - 1))
-        self.lay_out()
+        if self.count:
+            self.lay_out(self.count, min(max(index, 0), self.count - 1))
 
     def action_move(self, step):
         """Move the cursor a row down (1) or up (-1).
@@ -1199,7 +1187,7 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
         Args:
             step (int): The direction.
         """
-        self.go(self.cursor + step)
+        self.action_go(self.cursor + step)
 
     def action_half(self, step):
         """Move the cursor half a page down (1) or up (-1).
@@ -1207,51 +1195,11 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
         Args:
             step (int): The direction.
         """
-        self.go(self.cursor + step * max(1, self.size.height // 2))
+        self.action_go(self.cursor + step * max(1, self.size.height // 2))
 
-    def action_top(self):
-        """Move the cursor to the first row."""
-        self.go(0)
-
-    def action_follow(self):
-        """Move the cursor to the last row and keep it there as the log grows."""
-        self.anchor = TAIL
-        self.lay_out()
-
-    def action_toggle(self):
-        """Fold or unfold the cursor's section, and put the cursor on its header."""
-        section, _, opened, _ = self.rows.at(self.cursor) if self.rows.count else (None,) * 4
-        if section is not None:
-            self.folds[section.id] = not opened
-            self.anchor = (section.id, 0)
-            self.lay_out()
-
-    def find(self, pattern, step):
-        """Move the cursor to the next (1) or previous (-1) row holding `pattern`, wrapping.
-
-        Folded bodies are searched too; a match in one unfolds its section. A match takes focus;
-        nothing moves on a miss.
-
-        Args:
-            pattern (str): The text to find.
-            step (int): The direction.
-        """
-        if not self.rows.count:
-            return
-        every = list(_every(self.rows.stage))
-        here = self.rows.anchor(self.cursor)
-        at = next(i for i, (anchor, _, _) in enumerate(every) if anchor == here)
-        for distance in range(1, len(every) + 1):
-            anchor, section, text = every[(at + step * distance) % len(every)]
-            if pattern in text:
-                break
-        else:
-            return
-        if anchor[1] and section is not None and not view.is_open(section, self.folds):
-            self.folds[section.id] = True
-        self.anchor = anchor
-        self.lay_out()
-        self.focus()
+    def action_bottom(self):
+        """Move the cursor to the last row."""
+        self.action_go(self.count - 1)
 
     def render_lines(self, crop):
         """Draw the lines in `crop`, working out each meaning's style once for them all.
@@ -1263,10 +1211,10 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
             list[Strip]: The lines.
         """
         base = self.rich_style
-        cursor = base + self.get_component_rich_style("log--cursor", partial=True)
+        cursor = base + self.get_component_rich_style("lines--cursor", partial=True)
         self.drawing = {
             on_cursor: {
-                name: ground + self.get_component_rich_style(f"log--{name}", partial=True)
+                name: ground + self.get_component_rich_style(f"lines--{name}", partial=True)
                 for name in ("line", "dim", "passed", "failed", "running", "hand")
             }
             | {"ground": ground}
@@ -1283,46 +1231,258 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
         Returns:
             Strip: The line.
         """
-        index, width = self.scroll_offset.y + y, self.size.width
+        index = self.scroll_offset.y + y
         style = self.drawing[index == self.cursor and self.has_focus]
-        if index >= self.rows.count:
-            return Strip.blank(width, style["ground"])
+        segments = self.segments(index, style) if index < self.count else []
+        return Strip(segments).crop_extend(0, self.size.width, style["ground"])
+
+    def segments(self, index, style):
+        """Draw row `index`.
+
+        Args:
+            index (int): The row.
+            style (dict): The meaning names' Rich styles on this row's ground.
+
+        Returns:
+            list[Segment]: The row.
+        """
+        return []
+
+
+class LogView(Lines):
+    """A stage's log: its own lines, then each section's header and, unfolded, its body.
+
+    It keeps its folds and what the cursor is anchored to: a row, the tail (following the live
+    log), or None for where the stage opens.
+    """
+
+    BINDINGS = [
+        Binding("end", "bottom", "bottom"),
+        Binding("G", "follow", "follow the live log"),
+        Binding("enter,space", "toggle", "fold / unfold a section"),
+    ]
+
+    shown = var(None, always_update=True)
+    live = var(False)
+    now = var(None)
+
+    def __init__(self):
+        """An empty log."""
+        super().__init__()
+        self.folds, self.anchor = {}, None
+        self.rows = Rows(None, {})
+
+    def reset(self):
+        """Forget the folds and the cursor's anchor, so the stage shows as it opens."""
+        self.folds, self.anchor = {}, None
+        self.place()
+
+    def watch_shown(self, old, new):
+        """Lay out the new read of the stage; another stage or run starts afresh.
+
+        Args:
+            old (tuple | None): The (record, stage) shown before.
+            new (tuple | None): The (record, stage) shown now.
+        """
+        if old is None or new is None or (old[0], old[1].name) != (new[0], new[1].name):
+            self.folds, self.anchor = {}, None
+        self.place()
+
+    def watch_now(self):
+        """Redraw the running section's time."""
+        if self.live and self.rows.stage is not None and self.rows.stage.sections:
+            self.refresh()
+
+    def place(self):
+        """Lay the rows out again and put the cursor on its anchor."""
+        stage = self.shown[1] if self.shown else None
+        self.rows = rows = Rows(stage, self.folds)
+        if not rows.count:
+            cursor = 0
+            if self.has_focus:
+                self.screen.query_one(StageList).focus()
+        elif self.anchor == TAIL:
+            cursor = rows.count - 1
+        elif self.anchor is not None and (found := rows.index(self.anchor)) is not None:
+            cursor = found
+        elif (section := view.landing(stage)) is not None:
+            cursor = rows.index((section.id, 0))
+        else:
+            cursor = 0 if stage.sections else rows.count - 1
+        self.lay_out(rows.count, cursor)
+
+    def action_go(self, index):
+        """Put the cursor on row `index`, clamped, and anchor it there.
+
+        Args:
+            index (int): The row.
+        """
+        if self.count:
+            self.anchor = self.rows.anchor(min(max(index, 0), self.count - 1))
+            self.place()
+
+    def action_follow(self):
+        """Move the cursor to the last row and keep it there as the log grows."""
+        self.anchor = TAIL
+        self.place()
+
+    def action_toggle(self):
+        """Fold or unfold the cursor's section, and put the cursor on its header."""
+        section, _, opened, _ = self.rows.at(self.cursor) if self.count else (None,) * 4
+        if section is not None:
+            self.folds[section.id] = not opened
+            self.anchor = (section.id, 0)
+            self.place()
+
+    def find(self, pattern, step):
+        """Move the cursor to the next (1) or previous (-1) row holding `pattern`, wrapping.
+
+        Folded bodies are searched too; a match in one unfolds its section. A match takes focus;
+        nothing moves on a miss.
+
+        Args:
+            pattern (str): The text to find.
+            step (int): The direction.
+        """
+        if not self.count:
+            return
+        every = list(_every(self.rows.stage))
+        here = self.rows.anchor(self.cursor)
+        at = next(i for i, (anchor, _, _) in enumerate(every) if anchor == here)
+        for distance in range(1, len(every) + 1):
+            anchor, section, text = every[(at + step * distance) % len(every)]
+            if pattern in text:
+                break
+        else:
+            return
+        if anchor[1] and section is not None and not view.is_open(section, self.folds):
+            self.folds[section.id] = True
+        self.anchor = anchor
+        self.place()
+        self.focus()
+
+    def segments(self, index, style):
+        """Draw row `index`: a stage line, a section's header, or a section's body line.
+
+        Args:
+            index (int): The row.
+            style (dict): The meaning names' Rich styles on this row's ground.
+
+        Returns:
+            list[Segment]: The row.
+        """
         section, end, opened, offset = self.rows.at(index)
         text = view.clean(self.rows.text(section, offset))
         if section is None or offset:
-            segments = [Segment(("      " if section else "") + text, style["line"])]
-        else:
-            fold = ("▾ " if opened else "▸ ") if section.lines or section.failure else "  "
-            running = self.live and section.outcome == "open"
-            glyph, meaning = view.tone(section.outcome, running)
-            segments = [Segment(fold, style["dim"]), Segment(f"{glyph} ", style[meaning])]
-            if section.kind == "setup":
-                segments += [Segment("setup", style["hand"]), Segment(" ", style[meaning])]
-            segments.append(Segment(text, style[meaning]))
-            if section.started is not None:
-                took = view.took(section.started, end, running, self.now)
-                segments.append(Segment(f"  {took}", style["dim"]))
-        return Strip(segments).crop_extend(0, width, style["ground"])
+            return [Segment(("      " if section else "") + text, style["line"])]
+        fold = ("▾ " if opened else "▸ ") if section.lines or section.failure else "  "
+        running = self.live and section.outcome == "open"
+        glyph, meaning = view.tone(section.outcome, running)
+        segments = [Segment(fold, style["dim"]), Segment(f"{glyph} ", style[meaning])]
+        if section.kind == "setup":
+            segments += [Segment("setup", style["hand"]), Segment(" ", style[meaning])]
+        segments.append(Segment(text, style[meaning]))
+        if section.started is not None:
+            took = view.took(section.started, end, running, self.now)
+            segments.append(Segment(f"  {took}", style["dim"]))
+        return segments
 
 
-class Table(DataTable, inherit_bindings=False):
-    """A table whose cursor is a row, moved with the view's keys."""
+class RunList(Lines):
+    """History's rows, a run per row, newest first; Enter opens the run under the cursor."""
 
-    COMPONENT_CLASSES = DataTable.COMPONENT_CLASSES | {
-        "table--passed",
-        "table--failed",
-        "table--running",
-        "table--dim",
-        "table--hand",
-    }
+    BINDINGS = [Binding("enter", "open", "open selection")]
+
+    runs = var(list)
+    bench = var(NO_BENCH)
+    now = var(None)
+
+    class Opened(Message):
+        """The operator opened a run.
+
+        Args:
+            index (int): The run's place, newest first.
+        """
+
+        def __init__(self, index):
+            """The message.
+
+            Args:
+                index (int): The run's place, newest first.
+            """
+            super().__init__()
+            self.index = index
+
+    def __init__(self):
+        """An empty list."""
+        super().__init__()
+        self.width = 18
+
+    def watch_runs(self, old, new):
+        """Keep the cursor on its run as runs arrive and go, and draw the rows on screen.
+
+        Args:
+            old (list[Run]): The runs before.
+            new (list[Run]): The runs now.
+        """
+        selected = old[self.cursor].record if self.cursor < len(old) else None
+        records = [run.record for run in new]
+        cursor = records.index(selected) if selected in records else self.cursor
+        self.width = view.record_width(new)
+        self.lay_out(len(new), min(cursor, max(len(new) - 1, 0)))
+
+    def watch_now(self):
+        """Redraw the running run's time."""
+        if self.bench.live:
+            self.refresh()
+
+    def select(self, run):
+        """Put the cursor on a run.
+
+        Args:
+            run (Run | None): The run.
+        """
+        if run is not None and run in self.runs:
+            self.action_go(self.runs.index(run))
+
+    def action_open(self):
+        """Open the run under the cursor in Run."""
+        if self.count:
+            self.post_message(self.Opened(self.cursor))
+
+    def segments(self, index, style):
+        """Draw a run: record, what, sha, result, took, then the failing stage or `by hand`.
+
+        Args:
+            index (int): The run's place, newest first.
+            style (dict): The meaning names' Rich styles on this row's ground.
+
+        Returns:
+            list[Segment]: The row.
+        """
+        running = index == 0 and self.bench.live
+        record, what, sha, (word, meaning), took, (note, tone) = view.history_row(
+            self.runs[index], running, self.now
+        )
+        return [
+            Segment(view.clean(f"{record:<{self.width}}{what[:20]:<22}{sha:<9}"), style["ground"]),
+            Segment(f"{word:<13}", style[meaning]),
+            Segment(f"{took:>4}  ", style["ground"]),
+            Segment(note, style[tone]),
+        ]
+
+
+class Table(DataTable):
+    """The Queue's table: its cursor is a row, moved with the view's keys."""
+
+    COMPONENT_CLASSES = DataTable.COMPONENT_CLASSES | {"table--running", "table--hand"}
     BINDINGS = [
-        Binding("j,down", "cursor_down", "Down"),
-        Binding("k,up", "cursor_up", "Up"),
-        Binding("home", "scroll_top", "Top"),
-        Binding("end,G", "scroll_bottom", "Bottom"),
-        Binding("ctrl+d", "half(1)", "Down half a page"),
-        Binding("ctrl+u", "half(-1)", "Up half a page"),
-        Binding("enter", "select_cursor", "Open the run"),
+        Binding("j,down", "cursor_down", "down"),
+        Binding("k,up", "cursor_up", "up"),
+        Binding("home", "scroll_top", "top"),
+        Binding("end,G", "scroll_bottom", "bottom"),
+        Binding("ctrl+d", "half(1)", "half page down"),
+        Binding("ctrl+u", "half(-1)", "half page up"),
     ]
 
     def __init__(self, **kwargs):
@@ -1346,7 +1506,7 @@ class Table(DataTable, inherit_bindings=False):
 
         Args:
             text (str): The text.
-            meaning (str | None): "passed", "failed", "running", "dim" or "hand".
+            meaning (str | None): "running" or "hand".
 
         Returns:
             Text: The cell.
@@ -1452,7 +1612,7 @@ class QueueView(Vertical):
 
 
 class HistoryView(Vertical):
-    """History: a row per run, newest first, and the count of records."""
+    """History: the column header, a row per run, and the count of records."""
 
     runs = var(list)
     bench = var(NO_BENCH)
@@ -1466,77 +1626,31 @@ class HistoryView(Vertical):
             **kwargs: Widget arguments.
         """
         super().__init__(**kwargs)
-        self.directory, self.shown = directory, []
+        self.directory = directory
 
     def compose(self):
-        """The table and the footer.
+        """The column header, the runs and the footer.
 
         Yields:
             Widget: Each part.
         """
-        yield Table(id="history-table")
+        yield Label(id="history-header")
+        yield RunList().data_bind(HistoryView.runs, HistoryView.bench, HistoryView.now)
         yield Label(id="history-footer")
 
-    def on_mount(self):
-        """Name the columns."""
-        table = self.query_one(Table)
-        for name in ("record", "what", "sha", "result", "took", ""):
-            table.add_column(name, key=name)
-
-    def cells(self, run, index):
-        """The table cells of a run.
+    def watch_runs(self, runs):
+        """Name the columns at the record column's width, and count the records.
 
         Args:
-            run (Run): The run.
-            index (int): Its place, newest first.
-
-        Returns:
-            list[Text]: The cells.
+            runs (list[Run]): Every run, newest first.
         """
-        table = self.query_one(Table)
-        running = index == 0 and self.bench is not None and self.bench.live
-        record, what, sha, (word, meaning), took, (note, tone) = view.history_row(
-            run, running, self.now
+        header = (
+            "record".ljust(view.record_width(runs))
+            + "what".ljust(22)
+            + "sha".ljust(9)
+            + "result".ljust(13)
         )
-        return [
-            table.cell(record),
-            table.cell(what[:20]),
-            table.cell(sha),
-            table.cell(word, meaning),
-            table.cell(f"{took:>4}"),
-            table.cell(note, tone),
-        ]
-
-    def watch_runs(self):
-        """Fill the table afresh when the records changed; else redraw only the rows that did."""
-        table, runs, shown = self.query_one(Table), self.runs, self.shown
-        if [r.record for r in runs] != [r.record for r in shown]:
-            selected = shown[table.cursor_row].record if shown else None
-            table.clear()
-            for index, run in enumerate(runs):
-                table.add_row(*self.cells(run, index), key=run.record)
-            table.move_cursor(row=table.get_row_index(selected) if selected in table.rows else 0)
-            self.query_one("#history-footer", Label).update(
-                Content(f"{len(runs)} records in {view.clean(self.directory)}/")
-            )
-        else:
-            for index, (run, old) in enumerate(zip(runs, shown, strict=True)):
-                if run is old and index > 0:
-                    continue
-                cells = zip(self.cells(run, index), table.get_row_at(index), strict=True)
-                for column, (cell, was) in enumerate(cells):
-                    if cell != was:
-                        table.update_cell_at((index, column), cell, update_width=True)
-        self.shown = runs
-
-    watch_bench = watch_now = watch_runs
-
-    def select(self, run):
-        """Select a run's row.
-
-        Args:
-            run (Run | None): The run.
-        """
-        table = self.query_one(Table)
-        if run is not None and run.record in table.rows:
-            table.move_cursor(row=table.get_row_index(run.record))
+        self.query_one("#history-header", Label).update(header + "took")
+        self.query_one("#history-footer", Label).update(
+            Content(f"{len(runs)} records in {view.clean(self.directory)}/")
+        )

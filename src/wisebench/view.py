@@ -276,6 +276,18 @@ def by_start(task):
     return task.started is None, task.started.timestamp() if task.started else 0
 
 
+def record_width(runs):
+    """The History record column's width: the longest record name and two spaces, at least 18.
+
+    Args:
+        runs (list[Run]): Every run.
+
+    Returns:
+        int: The width.
+    """
+    return max(18, max((len(run.record) for run in runs), default=0) + 2)
+
+
 def history_row(run, running, now):
     """One History row: record, what, sha, result, took, then the failing stage or `by hand`.
 

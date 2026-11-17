@@ -95,10 +95,6 @@ StageList {
         display: none;
     }
 
-    LogView {
-        height: 1fr;
-    }
-
     &.summary {
         #output-label, LogView { display: none; }
     }
@@ -119,20 +115,20 @@ StageList {
     }
 }
 
-LogView {
+Lines {
+    height: 1fr;
     scrollbar-size: 0 0;
 
-    & > .log--line { color: $log; }
-    & > .log--dim { color: $dim; }
-    & > .log--passed { color: $green; }
-    & > .log--failed { color: $red; text-style: bold; }
-    & > .log--running { color: $amber; text-style: bold; }
-    & > .log--hand { color: $blue; }
-    & > .log--cursor { background: $selection; }
+    & > .lines--line { color: $log; }
+    & > .lines--dim { color: $dim; }
+    & > .lines--passed { color: $green; }
+    & > .lines--failed { color: $red; text-style: bold; }
+    & > .lines--running { color: $amber; text-style: bold; }
+    & > .lines--hand { color: $blue; }
+    & > .lines--cursor { background: $selection; }
 }
 
 Table {
-    height: 1fr;
     scrollbar-size: 0 0;
 
     &:focus { background-tint: 0%; }
@@ -140,10 +136,7 @@ Table {
 
     & > .datatable--header { color: $dim; background: $ground; text-style: none; }
     & > .datatable--cursor { background: $selection; text-style: none; }
-    & > .table--passed { color: $green; }
-    & > .table--failed { color: $red; }
     & > .table--running { color: $amber; }
-    & > .table--dim { color: $dim; }
     & > .table--hand { color: $blue; }
 }
 
@@ -160,7 +153,7 @@ Table {
     display: none;
 }
 
-#history-footer {
+#history-header, #history-footer {
     color: $dim;
 }
 
