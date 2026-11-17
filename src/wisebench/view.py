@@ -2,9 +2,9 @@
 
 `State` holds the user's intent, and the commands (`run_ref`, `remove_id`, `disable_request`,
 `enable_request`) and message the shell exchanges with `handle`. `resolve` derives the `Frame` to
-show from it and one `Snapshot` of the disk; it is the only code that knows where anything sits.
-`screen.draw` draws that frame and `handle` acts on the same frame, so a row a key moves to is a row
-drawn. A field of `State` left None means "derive it every frame"; a value means the user chose it.
+show from it and one `Snapshot` of the disk. `handle` reads every position from the frame that was
+shown, and the shell passes it how many rows a half-page key moves. A field of `State` left None
+means "derive it every frame"; a value means the user chose it.
 """
 
 import re
@@ -15,8 +15,6 @@ from wisebench.bench_state import Bench
 from wisebench.runlog import KAS_STAMP, Run, Section, Stage, Task
 
 TAIL = "tail"
-MIN_ROWS, MIN_COLS = 24, 80
-MIN_LOG_ROWS = 3
 
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _ENTER = ("\n", "\r")
@@ -78,8 +76,6 @@ class State:
         confirm_enable (bool): `:enable` asked and the next key answers y/N.
         enable_request (bool): `y` confirmed `:enable`; the shell does it and clears this.
         message (str | None): The text shown in the command line's row while it is closed.
-        scroll (int): The log scroll the last frame drew; written only from a frame.
-        history_scroll (int): The History scroll the last frame drew; written only from a frame.
     """
 
     tab: str = "run"
@@ -100,37 +96,6 @@ class State:
     confirm_enable: bool = False
     enable_request: bool = False
     message: str | None = None
-    scroll: int = 0
-    history_scroll: int = 0
-
-
-@dataclass(frozen=True)
-class Layout:
-    """Where the regions of a screen sit.
-
-    Args:
-        rows (int): Screen height.
-        cols (int): Screen width.
-        bar (int): The status bar's row.
-        prompt (int | None): The command line's row while it is open or shows a message.
-        pane_top (int): The first row of the panes.
-        pane_bottom (int): The last row of the panes: the hint row and the History footer.
-        too_small (bool): The screen is below the smallest drawable size.
-        rule_top (int): The rule under the tab line.
-        header (int): The row of a tab's header line, between the rules.
-        rule_bottom (int): The rule over the status bar.
-    """
-
-    rows: int
-    cols: int
-    bar: int
-    prompt: int | None
-    pane_top: int
-    pane_bottom: int
-    too_small: bool
-    rule_top: int
-    header: int
-    rule_bottom: int
 
 
 @dataclass(frozen=True)
@@ -198,22 +163,16 @@ class Frame:
         bench (Bench): The bench's state.
         now (datetime): The time of the refresh.
         directory (str): The records directory as the History footer names it.
-        layout (Layout): Where the regions sit.
         run (Run | None): The run shown in Run.
         newest (bool): The run shown is the newest.
         live (bool): The run shown is the newest and the bench is running it.
         stage (Stage | None): The stage shown; None is the run's summary.
         pane_head (str): "build", "suite", "plain" or "summary".
-        head_height (int): Rows the pane head takes above the log rows.
-        tasks (tuple[Task, ...]): The running build tasks listed, oldest first, capped.
+        tasks (tuple[Task, ...]): Every running build task, oldest first.
         rows (list[Row]): The stage's log rows with folds applied.
         cursor (int | None): Index of the log cursor in `rows`; None without rows.
-        scroll (int): Index of the first log row drawn.
-        room (int): How many log rows are drawn.
         history (list[Run]): Every run, newest first.
         history_cursor (int): Index of the History selection.
-        history_scroll (int): Index of the first History row drawn.
-        history_room (int): How many History rows are drawn.
         focus (str): "stages" or "log", the pane with focus.
         queue_rows (list[QueueRow]): The Queue tab's rows: the running run, the hand entries,
             then the merge-queue entries.
@@ -229,22 +188,16 @@ class Frame:
     bench: Bench
     now: datetime
     directory: str
-    layout: Layout
     run: Run | None
     newest: bool
     live: bool
     stage: Stage | None
     pane_head: str
-    head_height: int
     tasks: tuple[Task, ...]
     rows: list[Row]
     cursor: int | None
-    scroll: int
-    room: int
     history: list[Run]
     history_cursor: int
-    history_scroll: int
-    history_room: int
     focus: str
     queue_rows: list[QueueRow]
     queue_cursor: int | None
@@ -253,26 +206,22 @@ class Frame:
     pending: str | None
 
 
-def resolve(state, snap, rows, cols):
-    """The frame to show for `state` over `snap` on a `rows` by `cols` screen.
+def resolve(state, snap):
+    """The frame to show for `state` over `snap`.
 
     Args:
         state (State): What the user chose.
         snap (Snapshot): The runs, the bench and the time.
-        rows (int): Screen height.
-        cols (int): Screen width.
 
     Returns:
-        Frame: Everything `screen.draw` and `handle` need.
+        Frame: Everything the screen and `handle` need.
     """
-    lay = _layout(rows, cols, state.prompt is not None or state.message is not None)
     runs = snap.runs
     run = next((r for r in runs if r.record == state.record), runs[0] if runs else None)
     newest = run is not None and run is runs[0]
     live = snap.bench.live and newest
     stage = _stage(state.stage, run, newest, snap.bench) if run is not None else None
-    pane_head, head_height, tasks = _head(stage, live, lay)
-    room = max(1, lay.pane_bottom - lay.pane_top - head_height)
+    pane_head, tasks = _head(stage, live)
     log = _rows(stage, state.folds) if stage is not None else []
     cursor = _cursor(state.cursor, stage, log)
     history_cursor = 0
@@ -280,7 +229,6 @@ def resolve(state, snap, rows, cols):
         records = [r.record for r in runs]
         chosen = state.history_record if state.history_record in records else run.record
         history_cursor = records.index(chosen)
-    history_room = max(1, lay.pane_bottom - lay.pane_top)
     queue_rows = _queue_rows(snap)
     return Frame(
         tab=state.tab,
@@ -288,48 +236,22 @@ def resolve(state, snap, rows, cols):
         bench=snap.bench,
         now=snap.now,
         directory=snap.directory,
-        layout=lay,
         run=run,
         newest=newest,
         live=live,
         stage=stage,
         pane_head=pane_head,
-        head_height=head_height,
         tasks=tasks,
         rows=log,
         cursor=cursor,
-        scroll=_scroll(state.scroll, cursor, len(log), room),
-        room=room,
         history=runs,
         history_cursor=history_cursor,
-        history_scroll=_scroll(state.history_scroll, history_cursor, len(runs), history_room),
-        history_room=history_room,
         focus=state.focus,
         queue_rows=queue_rows,
-        queue_cursor=_queue_cursor(state.queue_at, queue_rows, _queue_room(lay)),
+        queue_cursor=_queue_cursor(state.queue_at, queue_rows),
         preview_lines=_preview_lines(state.prompt, snap.preview, queue_rows),
         message=state.message,
         pending=state.pending,
-    )
-
-
-def _layout(rows, cols, prompt_row):
-    """The layout of a `rows` by `cols` screen; an open prompt or a message takes the last row."""
-    bar = rows - 2 if prompt_row else rows - 1
-    prompt = rows - 1 if prompt_row else None
-    too_small = rows < MIN_ROWS or cols < MIN_COLS
-    rule_top, header, rule_bottom = 1, 2, bar - 1
-    return Layout(
-        rows=rows,
-        cols=cols,
-        bar=bar,
-        prompt=prompt,
-        pane_top=header + 1,
-        pane_bottom=rule_bottom - 1,
-        too_small=too_small,
-        rule_top=rule_top,
-        header=header,
-        rule_bottom=rule_bottom,
     )
 
 
@@ -402,19 +324,14 @@ def _identity(row):
     return ("hand", row.id) if row.id is not None else ("merge", row.pr)
 
 
-def _queue_room(lay):
-    """How many Queue rows the pane draws."""
-    return max(1, lay.pane_bottom - lay.pane_top + 1)
+def _queue_cursor(at, rows):
+    """Index of the Queue selection among `rows`; None without rows.
 
-
-def _queue_cursor(at, rows, room):
-    """Index of the Queue selection among the `room` rows drawn; None without rows.
-
-    The selection is its row, else the index it had; either is held to the last row drawn.
+    The selection is its row, else the index it had; either is held to the last row.
     """
     if not rows:
         return None
-    last = min(len(rows), room) - 1
+    last = len(rows) - 1
     if at is None:
         return 0
     identity, index = at
@@ -487,24 +404,22 @@ def _stage(chosen, run, newest, bench):
     return next((s for s in run.stages if s.state in ("failed", "error", "open")), None)
 
 
-def _head(stage, live, lay):
-    """(pane head, its height, the running tasks listed) for the stage shown.
+def _head(stage, live):
+    """(pane head, the running tasks) for the stage shown.
 
     A suite's head is its counts line and a plain stage's its output label. A build adds its
-    progress line and bar, and while running a `running now` line and one row per task, capped so
-    that at least `MIN_LOG_ROWS` log rows remain.
+    progress line and bar, and while running a `running now` line and every running task, oldest
+    first.
     """
     if stage is None:
-        return "summary", 0, ()
+        return "summary", ()
     if stage.sections:
-        return "suite", 1, ()
+        return "suite", ()
     if stage.progress is None:
-        return "plain", 1, ()
+        return "plain", ()
     if not (live and stage.state == "open"):
-        return "build", 3, ()
-    spare = lay.pane_bottom - lay.pane_top - 4 - MIN_LOG_ROWS
-    listed = tuple(sorted(stage.progress.tasks, key=_by_start)[: max(0, spare)])
-    return "build", 4 + len(listed), listed
+        return "build", ()
+    return "build", tuple(sorted(stage.progress.tasks, key=_by_start))
 
 
 def _by_start(task):
@@ -592,20 +507,14 @@ def _cursor(chosen, stage, rows):
     return anchors.index((stage.name, wanted.id, 0)) if wanted else 0
 
 
-def _scroll(memo, at, count, room):
-    """The first row drawn: `memo` moved only as far as keeps row `at` in view, within the rows."""
-    if at is not None:
-        memo = min(max(memo, at - room + 1), at)
-    return min(max(memo, 0), max(0, count - room))
-
-
-def handle(state, key, frame):
-    """Apply one key to `state`, reading every position from the frame that was drawn.
+def handle(state, key, frame, page):
+    """Apply one key to `state`, reading every position from the frame that was shown.
 
     Args:
         state (State): What the user chose; changed in place.
-        key (str | int): A character, or a key code the shell did not translate.
+        key (str): A character, or a sequence the shell translated a named key to.
         frame (Frame): The frame on screen when the key was pressed.
+        page (int): How many rows `^d` and `^u` move, at least 1.
 
     Returns:
         bool: True to quit.
@@ -621,7 +530,7 @@ def handle(state, key, frame):
     pending, state.pending = state.pending, None
     if pending == "g":
         if key == "g":
-            _move(state, "top", frame)
+            _move(state, "top", frame, page)
         return False
     if pending == "z":
         if key in ("a", "R", "M"):
@@ -663,7 +572,7 @@ def handle(state, key, frame):
     elif key in ("n", "N"):
         _search(state, frame, 1 if key == "n" else -1)
     elif key in _MOVES:
-        _move(state, _MOVES[key], frame)
+        _move(state, _MOVES[key], frame, page)
     return False
 
 
@@ -710,7 +619,10 @@ def _open_prompt(state):
 
 
 def _show(state, tab):
-    """Show Run, Queue or History; entering History or Queue selects its first row."""
+    """Show Run, Queue or History.
+
+    Entering Queue selects its first row; entering History selects the run shown in Run.
+    """
     if tab == "history" and state.tab != "history":
         state.history_record = None
     if tab == "queue" and state.tab != "queue":
@@ -732,7 +644,7 @@ def _remove(state, frame):
 def _open(state, record):
     """Show a run in Run in its automatic state; None is the newest run."""
     state.tab, state.record, state.stage, state.cursor = "run", record, None, None
-    state.focus, state.scroll = "stages", 0
+    state.focus = "stages"
 
 
 def _step(state, frame, direction):
@@ -754,7 +666,7 @@ def _enter(state, frame):
         state.focus = "log"
 
 
-def _index_after(kind, at, count, half):
+def _index_after(kind, at, count, page):
     """The index a `kind` of movement reaches from `at` (None: no selection) among `count` rows."""
     if kind == "top":
         return 0
@@ -762,40 +674,34 @@ def _index_after(kind, at, count, half):
         return count - 1
     if at is None:
         at = -1 if kind in ("down", "half_down") else count
-    step = {"down": 1, "up": -1, "half_down": half, "half_up": -half}[kind]
+    step = {"down": 1, "up": -1, "half_down": page, "half_up": -page}[kind]
     return min(max(at + step, 0), count - 1)
 
 
-def _move(state, kind, frame):
+def _move(state, kind, frame, page):
     """Move the Queue or History selection, the log cursor or the stage, by the tab and focus.
 
-    In the log, `G` follows its tail. The log focus acts on the stage list while the log has no
-    rows. A stage change resets the scroll memo, as opening a run does.
+    A half-page move is `page` rows. In the log, `G` follows its tail. The log focus acts on the
+    stage list while the log has no rows.
     """
     if state.tab == "queue":
         if frame.queue_rows:
-            room = _queue_room(frame.layout)
-            index = _index_after(
-                kind, frame.queue_cursor, min(len(frame.queue_rows), room), room // 2
-            )
+            index = _index_after(kind, frame.queue_cursor, len(frame.queue_rows), page)
             state.queue_at = (_identity(frame.queue_rows[index]), index)
     elif state.tab == "history":
         if frame.history:
-            index = _index_after(
-                kind, frame.history_cursor, len(frame.history), frame.history_room // 2
-            )
+            index = _index_after(kind, frame.history_cursor, len(frame.history), page)
             state.history_record = frame.history[index].record
     elif state.focus == "log" and frame.rows:
         if kind == "bottom":
             state.cursor = TAIL
         else:
-            index = _index_after(kind, frame.cursor, len(frame.rows), frame.room // 2)
+            index = _index_after(kind, frame.cursor, len(frame.rows), page)
             state.cursor = frame.rows[index].anchor
     elif frame.run is not None:
         names = [stage.name for stage in frame.run.stages]
         at = names.index(frame.stage.name) if frame.stage is not None else None
-        state.stage = names[_index_after(kind, at, len(names), frame.room // 2)]
-        state.scroll = 0
+        state.stage = names[_index_after(kind, at, len(names), page)]
 
 
 def _fold(state, op, frame):
