@@ -1,16 +1,15 @@
 """mitmdump serving one recorded HAR, over a loopback port it picks itself."""
 
 import hashlib
-import io
+import json
 import socket
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-from mitmproxy import exceptions, http
-from mitmproxy.io import FlowReader
 from tenacity import Retrying, stop_after_delay, wait_fixed
+
+from wisebench import clone
 
 _LISTEN_TIMEOUT = 10
 _LISTEN_INTERVAL = 0.1
@@ -20,9 +19,10 @@ class Proxy:
     """One mitmdump process replaying one recorded HAR, on a loopback port it picks itself.
 
     Holds the subprocess, the port it is listening on, and the log and flow files mitmdump
-    writes to; starts mitmdump and waits for it to accept connections. `served` and `killed`
-    report what it did by reading the flow file back with mitmproxy's own `FlowReader`, and work
-    both while mitmdump is running and after `stop`.
+    writes to; starts mitmdump and waits for it to accept connections. mitmdump, and the
+    `flows.py` that reads flows back with mitmproxy's own `FlowReader`, run from the clone's
+    `tools/mitmproxy` environment. `served` and `killed` report what mitmdump did from that
+    read-back, and work both while mitmdump is running and after `stop`.
     """
 
     def __init__(self, har, log_path, flows_path):
@@ -59,7 +59,7 @@ class Proxy:
             sock.bind(("127.0.0.1", 0))
             self._port = sock.getsockname()[1]
 
-        mitmdump = str(Path(sys.executable).parent / "mitmdump")
+        mitmdump = str(_tools() / ".venv" / "bin" / "mitmdump")
         with open(self.log_path, "w") as log:
             self._process = subprocess.Popen(
                 [
@@ -110,14 +110,13 @@ class Proxy:
             non-HTTP flow is never counted, since it is never a replay response.
 
         Raises:
-            mitmproxy.exceptions.FlowReadException: See `_read_flows`.
+            subprocess.CalledProcessError: The HAR could not be read, or see `_read_flows`.
         """
-        with open(self.har, "rb") as fo:
-            recorded = [(f.request.method, f.request.url) for f in FlowReader(fo).stream()]
+        recorded = [(f["method"], f["url"]) for f in _flows(self.har)]
         counts = dict.fromkeys(recorded, 0)
         for f in self._read_flows():
-            if f.is_replay == "response":
-                key = (f.request.method, f.request.url)
+            if f["is_replay"] == "response":
+                key = (f["method"], f["url"])
                 if key in counts:
                     counts[key] += 1
         return counts
@@ -132,42 +131,24 @@ class Proxy:
             mitmdump saves unanswered at shutdown counts as killed.
 
         Raises:
-            mitmproxy.exceptions.FlowReadException: See `_read_flows`.
+            subprocess.CalledProcessError: See `_read_flows`.
         """
-        killed = []
-        for f in self._read_flows():
-            if f.is_replay == "response":
-                continue
-            if isinstance(f, http.HTTPFlow):
-                killed.append(f.request.url)
-            else:
-                host, port = f.server_conn.address
-                killed.append(f"tcp://{host}:{port}")
-        return killed
+        return [f["url"] for f in self._read_flows() if f["is_replay"] != "response"]
 
     def _read_flows(self):
         """Read the complete flows in a snapshot of `flows_path`.
 
-        A `FlowReadException` raised once the whole snapshot is consumed is a trailing record
-        mitmdump is still writing; the flows before it are returned.
+        A read error once the whole snapshot is consumed is a trailing record mitmdump is still
+        writing; the flows before it are returned.
 
         Returns:
-            list[mitmproxy.flow.Flow]: The flows before any partly written trailing record.
+            list[dict]: The flows before any partly written trailing record, as `_flows` gives
+            them.
 
         Raises:
-            mitmproxy.exceptions.FlowReadException: The reader failed before the end of the
-                snapshot.
+            subprocess.CalledProcessError: The reader failed before the end of the snapshot.
         """
-        data = Path(self.flows_path).read_bytes()
-        buf = io.BytesIO(data)
-        flows = []
-        try:
-            for f in FlowReader(buf).stream():
-                flows.append(f)
-        except exceptions.FlowReadException:
-            if buf.tell() < len(data):
-                raise
-        return flows
+        return _flows(self.flows_path, growing=True)
 
     def _wait_until_listening(self):
         """Retry a loopback connect to `self.port` until it succeeds.
@@ -188,6 +169,35 @@ class Proxy:
                 address = ("127.0.0.1", self._port)
                 with socket.create_connection(address, timeout=_LISTEN_INTERVAL):
                     pass
+
+
+def _tools():
+    """The clone's own mitmproxy environment: `<clone>/tools/mitmproxy`."""
+    return clone.root() / "tools" / "mitmproxy"
+
+
+def _flows(path, growing=False):
+    """Read a flow file or HAR file with `tools/mitmproxy/flows.py`, in mitmproxy's environment.
+
+    Args:
+        path (str | os.PathLike): The file to read.
+        growing (bool): The file is one mitmdump may still be writing, so a partly written
+            trailing record is tolerated.
+
+    Returns:
+        list[dict]: One `{"method", "url", "is_replay"}` per flow, in file order. `url` is
+        `request.url` for an HTTP flow and `tcp://<host>:<port>` for any other, whose
+        `method` is None.
+
+    Raises:
+        subprocess.CalledProcessError: The read failed; its `stderr` holds mitmproxy's error.
+    """
+    tools = _tools()
+    args = [str(tools / ".venv" / "bin" / "python"), "-I", str(tools / "flows.py")]
+    if growing:
+        args.append("--growing")
+    result = subprocess.run([*args, str(path)], check=True, capture_output=True, text=True)
+    return [json.loads(line) for line in result.stdout.splitlines()]
 
 
 @pytest.fixture
