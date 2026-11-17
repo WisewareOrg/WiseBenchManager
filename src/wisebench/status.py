@@ -162,7 +162,7 @@ def _read_disabled(directory):
         return None
 
 
-class WatchScreen(Screen):
+class WatchScreen(Screen, inherit_bindings=False):
     """The tab line, the three views, the status bar and the command line."""
 
     HELP = COMMANDS
@@ -172,22 +172,16 @@ class WatchScreen(Screen):
         Binding("1", "open(None)", "The live run"),
         Binding("2", "show('queue')", "Queue"),
         Binding("3", "show('history')", "History"),
-        Binding("left_square_bracket", "step(1)", "Older run"),
-        Binding("right_square_bracket", "step(-1)", "Newer run"),
-        Binding("slash", "command('/')", "Search the log"),
-        Binding("n", "search(1)", "Next match"),
-        Binding("N", "search(-1)", "Previous match"),
         Binding("colon,semicolon", "command(':')", "Command line (commands above)"),
         Binding("question_mark", "keys", "Show or hide the keys"),
         Binding("escape", "escape", "Back to the stages"),
         Binding("q", "app.quit", "Quit"),
     ]
-    inherit_bindings = False
 
-    runs = var(list, always_update=True)
+    runs = var(list)
     bench = var(NO_BENCH)
     now = var(lambda: datetime.now(UTC))
-    disabled = var(None)
+    failure = var(None)
     record = var(None)
     run = var(None, always_update=True)
     newest = var(True)
@@ -236,7 +230,7 @@ class WatchScreen(Screen):
                 WatchScreen.live,
                 WatchScreen.bench,
                 WatchScreen.now,
-                WatchScreen.disabled,
+                WatchScreen.failure,
             )
             yield QueueView(id="queue").data_bind(
                 WatchScreen.runs,
@@ -251,7 +245,7 @@ class WatchScreen(Screen):
         yield StatusBar().data_bind(WatchScreen.bench)
         yield Label(id="message")
         with Horizontal(id="command-row"):
-            yield Input(id="command", select_on_focus=False)
+            yield Input(id="command", select_on_focus=False, compact=True)
             yield Label("Enter queue it  Esc cancel", id="run-hint")
 
     def on_mount(self):
@@ -281,23 +275,19 @@ class WatchScreen(Screen):
         """Read the runs, the bench and `DISABLED`, and hand them to the screen."""
         runs = self.records.runs()
         bench = read_bench(self.directory, runs[0] if runs else None, self.run_unit, Path("/proc"))
-        disabled = _read_disabled(self.directory) if bench.disabled else None
-        self.app.call_from_thread(self.take, runs, bench, datetime.now(UTC), disabled)
+        failure = _read_disabled(self.directory) if bench.disabled else None
+        self.app.call_from_thread(self.take, runs, bench, datetime.now(UTC), failure)
 
-    def take(self, runs, bench, now, disabled):
-        """Take one read into the model; the runs only when a run changed.
+    def take(self, runs, bench, now, failure):
+        """Take one read into the model.
 
         Args:
             runs (list[Run]): Every run, newest first.
             bench (Bench): The bench's state.
             now (datetime): When it was read.
-            disabled (tuple[str, str] | None): `DISABLED`'s time and reason.
+            failure (tuple[str, str] | None): `DISABLED`'s time and reason.
         """
-        if len(runs) != len(self.runs) or any(
-            a is not b for a, b in zip(runs, self.runs, strict=True)
-        ):
-            self.runs = runs
-        self.bench, self.disabled, self.now = bench, disabled, now
+        self.runs, self.bench, self.failure, self.now = runs, bench, failure, now
 
     def watch_runs(self):
         """Pick the run shown from the new runs."""
@@ -332,7 +322,7 @@ class WatchScreen(Screen):
         label.display = message is not None
 
     def check_action(self, action, parameters):
-        """Which bindings act: none while the command line is open, the run's keys on Run only.
+        """Which bindings act: none while the command line is open, the run's keys with a run.
 
         Args:
             action (str): The action name.
@@ -344,7 +334,7 @@ class WatchScreen(Screen):
         if self.query_one("#command-row").display and action != "escape":
             return False
         if action in ("step", "search") or (action == "command" and parameters == ("/",)):
-            return self.current == "run" and self.run is not None
+            return self.run is not None
         return True
 
     def on_key(self, event):
@@ -661,14 +651,21 @@ class StatusBar(Horizontal):
 class RunView(Vertical):
     """Run: the run's header, its stage list, and the pane of the stage shown."""
 
-    BINDINGS = [Binding("enter", "into_log", "Into the log")]
+    BINDINGS = [
+        Binding("enter", "into_log", "Into the log"),
+        Binding("left_square_bracket", "screen.step(1)", "Older run"),
+        Binding("right_square_bracket", "screen.step(-1)", "Newer run"),
+        Binding("slash", "screen.command('/')", "Search the log"),
+        Binding("n", "screen.search(1)", "Next match"),
+        Binding("N", "screen.search(-1)", "Previous match"),
+    ]
 
     run = var(None, always_update=True)
     newest = var(True)
     live = var(False)
     bench = var(NO_BENCH)
     now = var(None)
-    disabled = var(None)
+    failure = var(None)
     chosen = var(None)
     stage = var(None, always_update=True)
     shown = var(None, always_update=True)
@@ -694,7 +691,7 @@ class RunView(Vertical):
             yield StageList().data_bind(RunView.run, RunView.stage, RunView.live, RunView.now)
             with Vertical(id="pane"):
                 yield Head().data_bind(RunView.run, RunView.stage, RunView.live, RunView.now)
-                yield FailureBox().data_bind(RunView.stage, RunView.disabled)
+                yield FailureBox().data_bind(RunView.stage, RunView.failure)
                 yield Label("this stage's output", id="output-label")
                 yield LogView().data_bind(RunView.shown, RunView.live, RunView.now)
                 yield Label("Enter into the log   Space fold   Esc back to stages", id="hint")
@@ -965,8 +962,8 @@ class FailureBox(Drawn):
     """The bench failure that disabled the bench, from `DISABLED`, in a red box."""
 
     stage = var(None, always_update=True)
-    disabled = var(None)
-    watch_stage = watch_disabled = Drawn.redraw
+    failure = var(None)
+    watch_stage = watch_failure = Drawn.redraw
 
     def draw(self):
         """The box's lines.
@@ -976,11 +973,16 @@ class FailureBox(Drawn):
         """
         if self.stage is None:
             return Content("")
-        written, reason = self.disabled or (DASH, "")
+        written, reason = self.failure or (DASH, "")
         where = next(
-            (s for s in reversed(self.stage.sections) if s.outcome in ("open", "failed")), None
+            (
+                s
+                for s in reversed(self.stage.sections)
+                if s.kind == "setup" and s.outcome in ("open", "failed")
+            ),
+            None,
         )
-        place = f"in {where.kind} {view.clean(where.name)}; " if where else ""
+        place = f"in setup {view.clean(where.name)}; " if where else ""
         return Content("\n").join(
             [
                 Content.styled("bench failure, not the candidate's", "$red bold"),
@@ -1251,14 +1253,6 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
         self.lay_out()
         self.focus()
 
-    def on_focus(self):
-        """Show the cursor."""
-        self.refresh()
-
-    def on_blur(self):
-        """Hide the cursor."""
-        self.refresh()
-
     def render_lines(self, crop):
         """Draw the lines in `crop`, working out each meaning's style once for them all.
 
@@ -1364,7 +1358,7 @@ class Table(DataTable, inherit_bindings=False):
 class QueueView(Vertical):
     """Queue: the running run, the hand-queued runs and the merge queue; the `:run` preview."""
 
-    runs = var(list, always_update=True)
+    runs = var(list)
     bench = var(NO_BENCH)
     entries = var(None)
     typed = var(None)
@@ -1417,7 +1411,9 @@ class QueueView(Vertical):
                 table.cell(row.what),
                 table.cell(row.sha7),
                 table.cell(row.added),
-                table.cell(f"running, {row.stage}" if row.stage else "", "running"),
+                table.cell(
+                    f"running, {view.display_name(row.stage)}" if row.stage else "", "running"
+                ),
                 key=row.key,
             )
         self.rows = rows
@@ -1458,7 +1454,7 @@ class QueueView(Vertical):
 class HistoryView(Vertical):
     """History: a row per run, newest first, and the count of records."""
 
-    runs = var(list, always_update=True)
+    runs = var(list)
     bench = var(NO_BENCH)
     now = var(None)
 
@@ -1470,7 +1466,7 @@ class HistoryView(Vertical):
             **kwargs: Widget arguments.
         """
         super().__init__(**kwargs)
-        self.directory, self.filled = directory, []
+        self.directory, self.shown = directory, []
 
     def compose(self):
         """The table and the footer.
@@ -1513,27 +1509,25 @@ class HistoryView(Vertical):
 
     def watch_runs(self):
         """Fill the table afresh when the records changed; else redraw only the rows that did."""
-        table, runs = self.query_one(Table), self.runs
-        if [r.record for r in runs] != [r.record for r, _ in self.filled]:
-            selected = self.filled[table.cursor_row][0].record if self.filled else None
+        table, runs, shown = self.query_one(Table), self.runs, self.shown
+        if [r.record for r in runs] != [r.record for r in shown]:
+            selected = shown[table.cursor_row].record if shown else None
             table.clear()
-            self.filled = [(run, self.cells(run, i)) for i, run in enumerate(runs)]
-            table.add_rows(cells for _, cells in self.filled)
-            records = [r.record for r in runs]
-            table.move_cursor(row=records.index(selected) if selected in records else 0)
+            for index, run in enumerate(runs):
+                table.add_row(*self.cells(run, index), key=run.record)
+            table.move_cursor(row=table.get_row_index(selected) if selected in table.rows else 0)
             self.query_one("#history-footer", Label).update(
                 Content(f"{len(runs)} records in {view.clean(self.directory)}/")
             )
-            return
-        for index, (run, (old, old_cells)) in enumerate(zip(runs, self.filled, strict=True)):
-            if run is old and index > 0:
-                continue
-            cells = self.cells(run, index)
-            if cells != old_cells:
-                for column, (cell, was) in enumerate(zip(cells, old_cells, strict=True)):
+        else:
+            for index, (run, old) in enumerate(zip(runs, shown, strict=True)):
+                if run is old and index > 0:
+                    continue
+                cells = zip(self.cells(run, index), table.get_row_at(index), strict=True)
+                for column, (cell, was) in enumerate(cells):
                     if cell != was:
                         table.update_cell_at((index, column), cell, update_width=True)
-            self.filled[index] = (run, cells)
+        self.shown = runs
 
     watch_bench = watch_now = watch_runs
 
@@ -1543,6 +1537,6 @@ class HistoryView(Vertical):
         Args:
             run (Run | None): The run.
         """
-        records = [r.record for r, _ in self.filled]
-        if run is not None and run.record in records:
-            self.query_one(Table).move_cursor(row=records.index(run.record))
+        table = self.query_one(Table)
+        if run is not None and run.record in table.rows:
+            table.move_cursor(row=table.get_row_index(run.record))

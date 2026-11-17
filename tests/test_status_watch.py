@@ -316,6 +316,8 @@ async def test_a_failure_box_shows_the_disabled_reason_over_the_stages_output(
         "from the DISABLED file, 06:14:02",
     ]
     assert lines(one(pilot, status.LogView))[:2] == ["ota: reboot", "ota: ssh: no answer"]
+    await press(pilot, "colon", "e")
+    assert one(pilot, "#command").value == ":e"
 
 
 # -- Run: the log -------------------------------------------------------------------------------

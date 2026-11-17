@@ -1,15 +1,5 @@
 /* The watch view's layout and colours; the palette is the `bench` theme's variables. */
 
-Screen {
-    background: $ground;
-    color: $text;
-    layers: base;
-}
-
-Label {
-    width: auto;
-}
-
 #tabline {
     height: 2;
     border-bottom: solid $rule;
@@ -23,7 +13,6 @@ Label {
 Tabs {
     width: 1fr;
     height: 1;
-    background: $ground;
 
     Underline {
         display: none;
@@ -31,13 +20,10 @@ Tabs {
 
     Tab {
         color: $dim;
-        padding: 0 1;
-        height: 1;
 
         &.-active {
             color: $ground;
             background: $text;
-            text-style: none;
         }
     }
 }
@@ -135,7 +121,6 @@ StageList {
 
 LogView {
     scrollbar-size: 0 0;
-    background: $ground;
 
     & > .log--line { color: $log; }
     & > .log--dim { color: $dim; }
@@ -149,7 +134,9 @@ LogView {
 Table {
     height: 1fr;
     scrollbar-size: 0 0;
-    background: $ground;
+
+    &:focus { background-tint: 0%; }
+    &:focus > .datatable--header { background-tint: 0%; }
 
     & > .datatable--header { color: $dim; background: $ground; text-style: none; }
     & > .datatable--cursor { background: $selection; text-style: none; }
@@ -206,11 +193,8 @@ StatusBar {
 
     Input {
         width: 1fr;
-        height: 1;
-        border: none;
-        padding: 0;
-        background: $ground;
-        color: $text;
+
+        &:focus { background-tint: 0%; }
     }
 
     #run-hint {
