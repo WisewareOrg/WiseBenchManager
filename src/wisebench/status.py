@@ -1,10 +1,10 @@
-"""Status: `bench status --watch`, the urwid shell around `view` and `screen`.
+"""Status: `bench status --watch`, the urwid main loop around `view` and `screen`.
 
 Once a second, and after every key, `Shell.tick` reads the records and the bench once, resolves a
-frame and refills the screen from it; `Shell.press` hands a key to `view.handle` with the frame
-last shown. Nothing here takes a lock of its own: the Queue tab reads `Queue.entries` and
-`Queue.preview` on a background thread, `:run` and `dd` call `Queue.add` and `Queue.remove`, and
-`:disable` and `:enable` call `stop_timer` and `enable`.
+frame and refills the screen from it. Nothing here takes a lock of its own: the Queue tab reads
+`Queue.entries` and `Queue.preview` on a background thread, whose results come back through
+`MainLoop.call_from_thread`; `:run` and `dd` call `Queue.add` and `Queue.remove`, and `:disable` and
+`:enable` call `stop_timer` and `enable`.
 """
 
 import functools
@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import threading
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,15 +25,6 @@ from wisebench.bench_state import enable, read_bench, read_run_unit, stop_timer
 from wisebench.queue import Queue
 from wisebench.records import Records
 
-_KEYS = {
-    "enter": "\n",
-    "backspace": "\x7f",
-    "esc": "\x1b",
-    "tab": "\t",
-    "shift tab": "\x1b[Z",
-    "ctrl d": "\x04",
-    "ctrl u": "\x15",
-}
 _QUEUE_REFRESH = timedelta(seconds=30)
 _NO_TERMINAL = "BENCH ERROR: bench status --watch needs a terminal"
 
@@ -51,53 +43,15 @@ def watch(checkout, directory):
         print(_NO_TERMINAL, file=sys.stderr)
         return 2
     shell = Shell(checkout, directory)
-    shell.tick(datetime.now(UTC))
     terminal = urwid.display.raw.Screen()
     terminal.set_terminal_properties(colors=2**24)
-    loop = urwid.MainLoop(
-        shell.widget,
-        screen.PALETTE,
-        screen=terminal,
-        input_filter=lambda keys, raw: _input(shell, keys, datetime.now(UTC)),
-        handle_mouse=False,
-    )
-
-    def refresh(loop, _):
-        """The one-second alarm: refresh, then arm the next."""
-        shell.tick(datetime.now(UTC))
-        loop.set_alarm_in(1, refresh)
-
-    loop.set_alarm_in(1, refresh)
+    loop = urwid.MainLoop(shell.widget, screen=terminal, handle_mouse=False)
+    shell.start(loop)
     try:
         loop.run()
     except KeyboardInterrupt:
         return 0
     return 0
-
-
-def _input(shell, keys, now):
-    """Hand urwid's keys to `shell` one at a time, refreshing after each.
-
-    Args:
-        shell (Shell): The watch session.
-        keys (list): The keys urwid read, in its names.
-        now (datetime): The time of the refreshes.
-
-    Returns:
-        list: The `"window resize"` keys, left for urwid to lay the screen out again.
-
-    Raises:
-        urwid.ExitMainLoop: A key quit.
-    """
-    resized = []
-    for key in keys:
-        if key == "window resize":
-            resized.append(key)
-            continue
-        if shell.press(key):
-            raise urwid.ExitMainLoop
-        shell.tick(now)
-    return resized
 
 
 @dataclass
@@ -149,26 +103,8 @@ def _outcome(call):
         return exc
 
 
-def _collect(results, reads, state):
-    """Take every finished background read into `reads`; a failed `entries()` becomes a message.
-
-    The message is not set while the command line is open or `:enable` waits for its answer.
-    The newest result of each kind wins.
-    """
-    while not results.empty():
-        kind, ref, outcome = results.get()
-        reads.pending.discard(kind)
-        if kind == "preview":
-            reads.preview = (ref, str(outcome) if isinstance(outcome, Exception) else outcome)
-        elif isinstance(outcome, Exception):
-            if state.prompt is None and not state.confirm_enable:
-                state.message = str(outcome)
-        else:
-            reads.entries = outcome
-
-
-def _request(queue, run, results, reads, state, now):
-    """Ask `run` for the reads the state calls for.
+def _request(queue, run, land, reads, state, now):
+    """Ask `run` for the reads the state calls for; each result goes to `land(kind, ref, outcome)`.
 
     `Queue.entries` is read on entering the Queue tab and every 30 seconds while it shows;
     `Queue.preview` whenever the ref typed after `:run ` is not the one last asked for. A kind of
@@ -180,7 +116,7 @@ def _request(queue, run, results, reads, state, now):
     if shown and (due or not reads.shown) and "entries" not in reads.pending:
         reads.read_at = now
         reads.pending.add("entries")
-        run(lambda: results.put(("entries", None, _outcome(queue.entries))))
+        run(lambda: land("entries", None, _outcome(queue.entries)))
     reads.shown = shown
     ref = view.typed_ref(state.prompt)
     if ref is None:
@@ -189,7 +125,7 @@ def _request(queue, run, results, reads, state, now):
         reads.asked = ref
         reads.pending.add("preview")
         source, name = view.split_run(ref)
-        run(lambda: results.put(("preview", ref, _outcome(lambda: queue.preview(name, source)))))
+        run(lambda: land("preview", ref, _outcome(lambda: queue.preview(name, source))))
 
 
 def _perform(queue, reads, state, directory, run_unit):
@@ -228,66 +164,87 @@ def _perform(queue, reads, state, directory, run_unit):
 
 
 class Shell:
-    """One watch session apart from the terminal: the state, the reads, the writes and the widgets.
+    """One watch session: the state, the reads, the writes and the widgets, on a urwid main loop.
 
     Args:
         checkout (pathlib.Path): The bench's layer checkout.
         directory (pathlib.Path): The records directory.
         run (Callable): Runs a function of no arguments away from the draw path; tests pass a
             function that calls it at once, or holds it.
+        clock (Callable): The current time.
 
     Attributes:
         frame (view.Frame | None): The frame last shown; None before the first tick.
-        screen (screen.Screen): The widgets the frame is shown in.
-        widget (urwid.Widget): The top widget, `screen.widget`.
+        widget (screen.Screen): The top widget.
     """
 
-    def __init__(self, checkout, directory, run=_background):
-        """Start a session over the records in `directory`, showing nothing until `tick`."""
+    def __init__(self, checkout, directory, run=_background, clock=lambda: datetime.now(UTC)):
+        """A session over the records in `directory`, showing nothing until `start`."""
         directory = Path(directory)
         self.frame = None
-        self.screen = screen.Screen()
-        self.widget = self.screen.widget
         self._state = view.State()
+        self.widget = screen.Screen(self._state, self._after_key)
         self._records = Records(directory)
         self._directory = directory
         self._shown_directory = os.path.relpath(directory)
         self._run_unit = read_run_unit()
         self._queue = Queue(Path(checkout), directory)
-        self._run = run
-        self._results, self._reads = SimpleQueue(), _Reads()
+        self._run, self._clock = run, clock
+        self._reads = _Reads()
+        self._loop = None
 
-    def tick(self, now):
-        """Take in finished reads, read the records and the bench, and show the frame for `now`.
+    def start(self, loop):
+        """Show the first frame on `loop`, and refresh it once a second.
 
         Args:
-            now (datetime): The time of the refresh.
+            loop (urwid.MainLoop): The main loop showing `widget`; results of the background reads
+                come back through it while it runs.
         """
-        _collect(self._results, self._reads, self._state)
+        self._loop = loop
+
+        def refresh(loop, _):
+            """The one-second alarm: refresh, then arm the next."""
+            self.tick()
+            loop.set_alarm_in(1, refresh)
+
+        self.tick()
+        loop.set_alarm_in(1, refresh)
+
+    def tick(self):
+        """Read the records and the bench, ask for the reads due, and show the frame for now."""
+        now = self._clock()
         runs = self._records.runs()
         bench = read_bench(
             self._directory, runs[0] if runs else None, self._run_unit, Path("/proc")
         )
-        _request(self._queue, self._run, self._results, self._reads, self._state, now)
+        _request(self._queue, self._run, self._land, self._reads, self._state, now)
         reads = self._reads
         snap = view.Snapshot(runs, bench, now, self._shown_directory, reads.entries, reads.preview)
         self.frame = view.resolve(self._state, snap)
-        self.screen.update(self.frame)
+        self.widget.update(self.frame)
 
-    def press(self, key):
-        """Hand one key, in urwid's names, to the view, and carry out what it asked for.
+    def _land(self, kind, ref, outcome):
+        """Hand a finished read to the main loop's thread, which takes it in and refreshes."""
+        with suppress(RuntimeError):
+            self._loop.call_from_thread(self._take, kind, ref, outcome)
 
-        A named key outside `_KEYS` does nothing.
+    def _take(self, kind, ref, outcome):
+        """Take in a finished read; a failed `entries()` becomes a message, then refresh.
 
-        Args:
-            key (str): The key.
-
-        Returns:
-            bool: True to quit.
+        The message is not set while the command line is open or `:enable` waits for its answer.
         """
-        key = _KEYS.get(key, key if len(key) == 1 else None)
-        if key is None:
-            return False
-        done = view.handle(self._state, key, self.frame, self.screen.page(self._state.tab))
+        reads, state = self._reads, self._state
+        reads.pending.discard(kind)
+        if kind == "preview":
+            reads.preview = (ref, str(outcome) if isinstance(outcome, Exception) else outcome)
+        elif isinstance(outcome, Exception):
+            if state.prompt is None and not state.confirm_enable:
+                state.message = str(outcome)
+        else:
+            reads.entries = outcome
+        self.tick()
+
+    def _after_key(self):
+        """Carry out what the key asked for, and refresh."""
         _perform(self._queue, self._reads, self._state, self._directory, self._run_unit)
-        return done
+        self.tick()

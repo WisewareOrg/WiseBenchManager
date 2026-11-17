@@ -13,6 +13,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import urwid
 from helpers import (
     add_settings,
     clone_root,
@@ -25,6 +26,7 @@ from helpers import (
     write_bench_toml,
 )
 from status_helpers import shown
+from urwid.testing import ScriptedScreen, VirtualClockEventLoop
 
 from wisebench import queue, status
 
@@ -41,41 +43,63 @@ def immediately(work):
     work()
 
 
-class Watch:
-    """A `status.Shell` over the fake clone, fed keys and ticks as the main loop feeds it.
+_LOOPS = []
 
-    It ticks once on being made, as `watch` does before the loop starts. Every key is pressed and
-    then ticked, as `status._input` does; `tick` is the one-second alarm with the clock held and
-    `wait` the alarm after the clock moves on. `frames` holds every frame shown, in order.
+
+@pytest.fixture(autouse=True)
+def _stop_the_loops():
+    """Stop every main loop a test started."""
+    yield
+    while _LOOPS:
+        _LOOPS.pop().stop()
+
+
+class Watch:
+    """A `status.Shell` on a started urwid main loop over the fake clone, at 80 by 24.
+
+    The loop runs on urwid's virtual clock: `tick` serves what is due with the clock held, `wait`
+    moves the clock on, firing the one-second refresh on the way, and `press` hands keys to the
+    loop as the terminal does. `frames` holds the frame shown after each of them, in order.
     """
 
     def __init__(self, tmp_path, run=immediately):
         directory = tmp_path / "records"
         directory.mkdir(exist_ok=True)
-        self.now = START
+        self.clock = VirtualClockEventLoop()
         self.frames = []
-        self.shell = status.Shell(_checkout(tmp_path), directory, run=run)
-        self.tick()
+        self.shell = status.Shell(_checkout(tmp_path), directory, run=run, clock=self.time)
+        self.loop = urwid.MainLoop(
+            self.shell.widget, screen=ScriptedScreen(inputs=None), event_loop=self.clock
+        )
+        self.loop.start()
+        _LOOPS.append(self.loop)
+        self.shell.start(self.loop)
+        self.frames.append(self.shell.frame)
+
+    def time(self):
+        """The loop's clock as a time of day."""
+        return START + timedelta(seconds=self.clock.now)
 
     def elapsed(self):
         """Seconds the clock has moved on since the watch was made."""
-        return (self.now - START).total_seconds()
+        return self.clock.now
 
     def tick(self):
-        """The alarm: one refresh at the current time."""
-        self.shell.tick(self.now)
+        """Serve the background results that came back, then one refresh at the current time."""
+        self.clock.advance(0)
+        self.shell.tick()
         self.frames.append(self.shell.frame)
 
     def wait(self, seconds):
         """Move the clock on by `seconds`, then refresh."""
-        self.now += timedelta(seconds=seconds)
+        self.clock.advance(seconds)
         self.tick()
 
     def press(self, *keys):
-        """Press each key, in urwid's names, refreshing after each."""
+        """Press each key, in urwid's names, as the terminal hands keys to the loop."""
         for key in keys:
-            self.shell.press(key)
-            self.tick()
+            self.loop.process_input([key])
+            self.frames.append(self.shell.frame)
 
     def text(self):
         """The text of the frame last shown."""
@@ -433,7 +457,7 @@ def test_a_batch_of_keys_acts_key_by_key_so_jdd_removes_the_row_j_moved_to(monke
     watch = Watch(tmp_path)
     watch.press("2")
     watch.tick()
-    status._input(watch.shell, ["j", "d", "d"], watch.now)
+    watch.loop.process_input(["j", "d", "d"])
     assert removals(calls) == [("remove", 4)]
 
 
@@ -559,22 +583,8 @@ def test_a_failed_read_while_the_command_line_is_open_leaves_no_message_behind_a
     assert "remote is down" not in after
 
 
-def test_a_resize_goes_back_to_urwid_to_lay_out_again_and_never_reaches_the_view(
-    monkeypatch, tmp_path
-):
-    watch = Watch(tmp_path)
-    pressed = []
-    monkeypatch.setattr(watch.shell, "press", lambda key: pressed.append(key) or False)
-    assert status._input(watch.shell, ["window resize"], watch.now) == ["window resize"]
-    assert pressed == []
-
-
-def test_half_page_keys_before_anything_is_rendered_raise_nothing(tmp_path):
-    directory = tmp_path / "records"
-    directory.mkdir()
-    shell = status.Shell(_checkout(tmp_path), directory)
-    shell.tick(START)
-    shell.press("ctrl d")
+def test_page_keys_before_anything_is_drawn_raise_nothing(tmp_path):
+    Watch(tmp_path).press("ctrl d", "ctrl u")
 
 
 def test_the_shell_runs_background_work_through_the_worker_thread_by_default():

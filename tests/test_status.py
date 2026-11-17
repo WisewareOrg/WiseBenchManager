@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import urwid
 from helpers import (
     add_settings,
     repo_with_one_commit,
@@ -20,6 +21,7 @@ from helpers import (
     write_suite,
 )
 from status_helpers import mark, real_run, rep, shown
+from urwid.testing import ScriptedScreen, VirtualClockEventLoop
 
 from wisebench import bench_state, bench_test, runlog, status
 from wisebench.lock import Lock
@@ -702,13 +704,20 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        shell = status.Shell(bench_clone.checkout, records, run=lambda work: work())
-        shell.tick(now)
-        for key in keys:
-            if shell.press(key):
-                quit_on = key
-                break
-            shell.tick(now)
+        clock = VirtualClockEventLoop()
+        shell = status.Shell(
+            bench_clone.checkout, records, run=lambda work: work(), clock=lambda: now
+        )
+        loop = urwid.MainLoop(shell.widget, screen=ScriptedScreen(inputs=None), event_loop=clock)
+        with loop.start():
+            shell.start(loop)
+            for key in keys:
+                try:
+                    loop.process_input([key])
+                except urwid.ExitMainLoop:
+                    quit_on = key
+                    break
+                clock.advance(0)
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)

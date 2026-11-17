@@ -1,6 +1,8 @@
-"""`view.resolve` and `view.handle`: the frame derived from intent, and keys acting on it."""
+"""`view.resolve`, `view.handle` and `view.moved`: the frame derived from intent, and keys acting
+on it through the screen that shows it."""
 
 import pytest
+import urwid
 from status_helpers import (
     DIRECTORY,
     DISABLED,
@@ -26,10 +28,20 @@ from status_helpers import (
     t,
 )
 
-from wisebench import view
+from wisebench import screen, view
 
 ENTER, ESC, HALF_DOWN, HALF_UP = "\n", "\x1b", "\x04", "\x15"
-PAGE = 5
+NAMES = {
+    ENTER: "enter",
+    ESC: "esc",
+    "\x7f": "backspace",
+    "\b": "backspace",
+    "\t": "tab",
+    "\x1b[Z": "shift tab",
+    HALF_DOWN: "ctrl d",
+    HALF_UP: "ctrl u",
+    "\x01": "ctrl a",
+}
 THREE = [live("build"), failing_at(OLDER, "bundle"), run(OLDEST)]
 PLAIN_BUILD = live("build", build=plain("build", 40))
 TAB, BTAB = "\t", "\x1b[Z"
@@ -70,15 +82,18 @@ def resolve(runs, bench=IDLE, state=None, **read):
 
 
 def press(state, runs, keys, bench=IDLE, **read):
-    """Resolve and handle each key in turn with a half page of `PAGE` rows, as the shell does.
+    """Press each key on an 80 by 24 screen showing the frame resolved before it, as the shell does.
 
-    Returns the last key's quit flag.
+    A character stands for the key urwid names in `NAMES`. Returns whether a key quit.
     """
-    quits = False
+    shown = screen.Screen(state)
     for key in keys:
-        frame = resolve(runs, bench, state, **read)
-        quits = view.handle(state, key, frame, PAGE)
-    return quits
+        shown.update(resolve(runs, bench, state, **read))
+        try:
+            shown.keypress((80, 24), NAMES.get(key, key))
+        except urwid.ExitMainLoop:
+            return True
+    return False
 
 
 def stage_name(frame):
@@ -341,10 +356,8 @@ def test_stage_list_keys_set_the_stage_from_the_one_shown(keys, expected):
         ("j", 11),
         ("k", 9),
         ("gg", 0),
-        (HALF_DOWN, 10 + PAGE),
-        (HALF_UP, 10 - PAGE),
     ],
-    ids=["j", "k", "gg", "^d", "^u"],
+    ids=["j", "k", "gg"],
 )
 def test_log_keys_move_the_cursor_over_the_frames_rows(keys, expected):
     state = view.State(stage="host_suite", focus="log", cursor=host_rows()[10].anchor)
@@ -405,9 +418,8 @@ def test_search_unfolds_a_match_and_n_and_capital_n_step_between_matches():
         ("G", 39),
         ("Gk", 38),
         ("Ggg", 0),
-        (HALF_DOWN, PAGE),
     ],
-    ids=["j", "G", "G k", "G gg", "^d"],
+    ids=["j", "G", "G k", "G gg"],
 )
 def test_history_keys_move_the_selection(keys, expected):
     state = view.State(tab="history")
@@ -597,7 +609,13 @@ def test_fold_keys_do_nothing_on_a_lead_line_or_with_focus_on_the_stages(keys, f
 def test_log_movement_clamps_at_the_first_and_last_row(at, keys, row):
     state = view.State(stage="host_suite", focus="log", cursor=host_rows()[at].anchor)
     press(state, [LONG], keys)
-    assert state.cursor == host_rows()[row].anchor
+    assert resolve([LONG], state=state).cursor == row
+
+
+def test_moving_onto_the_last_log_row_follows_the_tail():
+    state = view.State(stage="host_suite", focus="log", cursor=host_rows()[28].anchor)
+    press(state, [LONG], "j")
+    assert state.cursor == view.TAIL
 
 
 @pytest.mark.parametrize("keys", [ENTER, "j", "k", "G", "gg", HALF_DOWN, HALF_UP])
@@ -719,11 +737,25 @@ def _crowded(count=29):
     return [{**HAND1, "id": i + 1, "ref": f"r{i:02d}"} for i in range(count)]
 
 
-def test_half_page_keys_move_the_queue_selection_by_the_page():
+def test_page_keys_move_the_log_cursor_and_the_selections_by_more_than_a_row():
+    def row(state):
+        """Index of the log cursor among the host suite's rows."""
+        return resolve([LONG], state=state).cursor
+
+    down = view.State(stage="host_suite", focus="log", cursor=host_rows()[10].anchor)
+    press(down, [LONG], HALF_DOWN)
+    up = view.State(stage="host_suite", focus="log", cursor=host_rows()[20].anchor)
+    press(up, [LONG], HALF_UP)
+    assert row(down) > 11 and row(up) < 19
+
+    history = view.State(tab="history")
+    press(history, MANY, HALF_DOWN)
+    assert resolve(MANY, state=history).history_cursor > 1
+
     entries = _crowded()
-    state = view.State()
-    press(state, [run()], "2" + HALF_DOWN + HALF_DOWN + HALF_UP, queue=entries)
-    assert resolve([run()], state=state, queue=entries).queue_cursor == PAGE
+    queue = view.State()
+    press(queue, [run()], "2" + HALF_DOWN, queue=entries)
+    assert resolve([run()], state=queue, queue=entries).queue_cursor > 1
 
 
 @pytest.mark.parametrize(

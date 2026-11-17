@@ -4,7 +4,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from wisebench import bench_state, runlog, screen
+from urwid.testing import render_text
+
+from wisebench import bench_state, runlog, screen, view
 
 STAMP = "20261110T030715Z"
 OLDER = "20261109T030715Z"
@@ -182,9 +184,9 @@ MANY = [run(record=f"2026{i:04d}") for i in range(40, 0, -1)]
 
 def shown(frame, cols=80, rows=24):
     """The text `screen.Screen` shows for `frame` on a `cols` by `rows` terminal, a line per row."""
-    drawn = screen.Screen()
+    drawn = screen.Screen(view.State())
     drawn.update(frame)
-    return "\n".join(line.decode() for line in drawn.widget.render((cols, rows)).text)
+    return "\n".join(render_text(drawn, (cols, rows)))
 
 
 REAL_RUN = Path(__file__).parent / "fixtures" / "real_run"

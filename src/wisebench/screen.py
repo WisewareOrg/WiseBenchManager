@@ -1,14 +1,18 @@
 """Screen: the watch view's urwid widgets, refilled from each resolved `view.Frame`.
 
-The widgets only show; every key goes to `view.handle` through the shell. Each list's focus is set
-from the frame, so urwid scrolls a list only as far as keeps the selection in view, and the
-selected row's ground is drawn here. The colours are the canvas's hex values, as 24-bit colour.
+A key goes to `view.handle` first, and on to the widgets when the view leaves it: the lists move
+their focus, `Tabs` switches tab and `Edit` edits the command line, by the keys `KEYS` binds in
+urwid's command map. Where a list's focus went goes back to the view through `view.moved`. The
+colours are the canvas's hex values, as 24-bit colour.
 """
 
-import urwid
+import functools
 
+import urwid
+from urwid.command_map import Command, command_map
+
+from wisebench import view
 from wisebench.bench_state import DASH
-from wisebench.runlog import POSTED, STAGES
 
 GROUND = "#0c0c0c"
 TEXT = "#cccccc"
@@ -25,31 +29,21 @@ FAILED_TINT = "#3a1d20"
 SELECTION = "#1f2a36"
 
 MIN_ROWS, MIN_COLS = 24, 80
-MIN_LOG_ROWS = 3
+KEYS = {
+    "j": Command.DOWN,
+    "k": Command.UP,
+    "gg": Command.MAX_LEFT,
+    "G": Command.MAX_RIGHT,
+    "ctrl d": Command.PAGE_DOWN,
+    "ctrl u": Command.PAGE_UP,
+    "tab": Command.NEXT_TAB,
+    "shift tab": Command.PREVIOUS_TAB,
+    "enter": Command.ACTIVATE,
+    "esc": Command.MENU,
+}
 
-_COLOURS = (
-    GROUND,
-    TEXT,
-    DIM,
-    LOG,
-    RULE,
-    BRIGHT,
-    GREEN,
-    AMBER,
-    RED,
-    BLUE,
-    RUNNING_TINT,
-    FAILED_TINT,
-    SELECTION,
-)
-_STAGES_WIDTH = 34
-_START_COL, _TOOK_COL = 17, 27
-_BAR_CELLS = 33
-_NAME_MIN = 14
-_HELP_GAP = 2
-_MARKER_WIDTH, _SOURCE_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 9, 7
-_RUNNING_STAGE = "running, {}"
-_RUNNING_STAGE_WIDTH = max(len(_RUNNING_STAGE.format(name)) for name in (*STAGES, POSTED))
+_TASK_ROWS = 8
+_WHAT_WIDTH = 20
 _PROMPT_HINT = "Enter queue it  Esc cancel"
 _BODY_INDENT = " " * 6
 _HINT = "Enter into the log   za fold   Esc back to stages"
@@ -67,7 +61,7 @@ _HELP = (
             ("1-3", "jump to view"),
             ("j k", "down / up"),
             ("gg G", "top / bottom"),
-            ("^d ^u", "half page"),
+            ("^d ^u", "page down / up"),
             ("Enter", "open selection"),
         ],
     ),
@@ -97,27 +91,15 @@ _HELP = (
     ),
 )
 
+command_map.clear()
+command_map.bind_readline()
+command_map.update(KEYS)
 
+
+@functools.cache
 def _attr(fg, bg=None, bold=False):
-    """The palette name of `fg` on `bg` (None: the ground), bold if `bold`."""
-    return f"{fg} {bg or GROUND} {'bold' if bold else 'plain'}"
-
-
-def _entry(fg, bg, bold):
-    """One palette entry: the exact colours in 24-bit, else reverse video for a filled ground."""
-    flags = ["bold"] * bold + ["standout"] * (bg != GROUND)
-    high = ",".join([fg, *["bold"] * bold])
-    return (
-        _attr(fg, bg, bold),
-        ",".join(["default", *flags]),
-        "default",
-        ",".join(flags),
-        high,
-        bg,
-    )
-
-
-PALETTE = [_entry(fg, bg, bold) for fg in _COLOURS for bg in _COLOURS for bold in (False, True)]
+    """`fg` on `bg` (None: the ground), bold if `bold`, in 24-bit colour."""
+    return urwid.AttrSpec(fg + ",bold" * bold, bg or GROUND, 2**24)
 
 
 class MinimumSize(urwid.WidgetWrap):
@@ -132,99 +114,89 @@ class MinimumSize(urwid.WidgetWrap):
         return super().render(size, focus)
 
 
-class _List(urwid.ListBox):
-    """A list of rows whose focus the frame sets; `rows` is the height it was last drawn at.
+class _Bar(urwid.ProgressBar):
+    """A progress bar without its percentage."""
 
-    With a `label`, the label sits directly over the rows, and rows fewer than the list's height
-    sit at its bottom; `rows` is then the height under the label.
+    def get_text(self):
+        """No text over the bar."""
+        return ""
+
+
+class Screen(urwid.WidgetWrap):
+    """The view's widgets, kept across refreshes and refilled from each frame; the top widget.
+
+    Args:
+        state (view.State): What the user chose; the keys change it.
+        after (Callable): Called after every key, to act on what it asked for and refresh.
     """
 
-    def __init__(self):
-        """An empty list, not yet drawn."""
-        super().__init__(urwid.SimpleFocusListWalker([]))
-        self.rows = 0
-        self.label = None
-
-    def fill(self, rows, focus, label=None):
-        """Show `rows` with row `focus` (None: leave it) in view, under `label` if given."""
-        self.body[:] = rows
-        self.label = label
-        if focus is not None and rows:
-            self.set_focus(focus)
-        self._invalidate()
-
-    def render(self, size, focus=False):
-        """Render the rows at `size`, recording the height they were given."""
-        cols, height = size
-        if self.label is None:
-            self.rows = height
-            return super().render(size, focus)
-        self.rows = max(0, height - 1)
-        shown = min(len(self.body), self.rows)
-        canvases = []
-        if self.rows > shown:
-            canvases.append(urwid.SolidCanvas(" ", cols, self.rows - shown))
-        if height:
-            canvases.append(self.label.render((cols,)))
-        if shown:
-            canvases.append(super().render((cols, shown), focus))
-        return urwid.CanvasCombine([(canvas, None, False) for canvas in canvases])
-
-
-class _Pane(urwid.Widget):
-    """A plain stage's pane: a build's head, then the log under its label.
-
-    The running tasks are listed oldest first, as many as leave `MIN_LOG_ROWS` log rows.
-    """
-
-    _sizing = frozenset([urwid.BOX])
-
-    def __init__(self, log):
-        """A pane over the log list `log`."""
-        super().__init__()
-        self.log = log
-        self.frame = None
-
-    def show(self, frame):
-        """Show `frame`'s stage."""
-        self.frame = frame
-        self._invalidate()
-
-    def render(self, size, focus=False):
-        """Render the head, cut to leave room for the log, and the log at `size`."""
-        cols, rows = size
-        head = _build_head(self.frame) if self.frame.pane_head == "build" else []
-        if self.frame.tasks:
-            spare = max(0, rows - len(head) - 1 - MIN_LOG_ROWS)
-            head += _running_tasks(self.frame, self.frame.tasks[:spare], cols)
-        pile = urwid.Pile([*(("pack", line) for line in head), self.log])
-        return pile.render(size, focus)
-
-
-class Screen:
-    """The view's widgets, kept across refreshes and refilled from each frame."""
-
-    def __init__(self):
+    def __init__(self, state, after=lambda: None):
         """Every widget, empty until the first `update`."""
-        self._stages = _List()
-        self._log = _List()
-        self._queue = _List()
-        self._history = _List()
-        self._pane = _Pane(self._log)
-        self._top = urwid.WidgetPlaceholder(urwid.SolidFill(" "))
-        self.widget = MinimumSize(urwid.AttrMap(self._top, _attr(TEXT)))
+        self.state, self.frame, self._after = state, None, after
+        column = urwid.TableColumn
+        dim = _attr(DIM)
+        self._stages = urwid.Table(
+            [column("stage"), column("start"), column("took")], header_attr=dim
+        )
+        self._log = urwid.Table([column()], header=False)
+        self._tasks = urwid.Table([column()] * 3, header=False, max_rows=_TASK_ROWS)
+        self._queue = urwid.Table(
+            [column(""), column("source"), column("what", (urwid.WEIGHT, 1))]
+            + [column("sha"), column("added"), column("")],
+            header_attr=dim,
+        )
+        self._history = urwid.Table(
+            [column("record"), column("what", _WHAT_WIDTH), column("sha"), column("result")]
+            + [column("took", align="right"), column("")],
+            header_attr=dim,
+        )
+        self._run_label = urwid.Text("")
+        self._run = urwid.WidgetPlaceholder(urwid.SolidFill(" "))
+        self._queue_tab = urwid.WidgetPlaceholder(self._queue)
+        self._tabs = urwid.Tabs(
+            [(self._run_label, self._run), (" 2 Queue ", self._queue_tab)]
+            + [(" 3 History ", self._history)],
+            attr_map=_attr(DIM),
+            selected_map=_attr(GROUND, TEXT),
+            underline=("─", "─"),
+            dividechars=0,
+        )
+        self._edit = urwid.Edit(wrap="clip")
+        urwid.connect_signal(self._edit, "postchange", self._typed)
+        self._main = urwid.WidgetPlaceholder(self._tabs)
+        self._frame = urwid.Frame(self._main)
+        super().__init__(MinimumSize(urwid.AttrMap(self._frame, _attr(TEXT))))
 
-    def page(self, tab):
-        """How many rows `^d` and `^u` move on `tab`: half the height of the list it scrolls.
+    def selectable(self):
+        """Every key reaches the view, whatever the widgets shown."""
+        return True
 
-        Args:
-            tab (str): "run", "queue", "history" or "help".
+    def keypress(self, size, key):
+        """Hand `key` to the view, then to the widgets if it leaves it; then `after`.
 
-        Returns:
-            int: At least 1.
+        Raises:
+            urwid.ExitMainLoop: The key quit.
         """
-        lists = {"run": self._log, "queue": self._queue, "history": self._history}
-        return max(1, lists[tab].rows // 2) if tab in lists else 1
+        frame = self.frame
+        key = view.handle(self.state, key, frame)
+        if key is not None and super().keypress(size, key) is None and frame.prompt is None:
+            view.moved(self.state, frame, view.TABS[self._tabs.focus_position], self._at())
+        self._after()
+        if self.state.quit:
+            raise urwid.ExitMainLoop
+        return None
+
+    def _at(self):
+        """The focus of the list the movement keys act on, or None while it has no rows."""
+        tables = {"queue": self._queue, "history": self._history}
+        table = tables.get(
+            self.frame.tab, self._log if self._into_log(self.frame) else self._stages
+        )
+        return table.focus_position if len(table.body) else None
+
+    def _typed(self, edit, _old):
+        """The command line's text changed: the view takes the caption and the text."""
+        view.typed(self.state, edit.caption + edit.edit_text)
 
     def update(self, frame):
         """Refill every widget from `frame`.
@@ -232,96 +204,128 @@ class Screen:
         Args:
             frame (view.Frame): The frame to show.
         """
+        self.frame = frame
+        if frame.tab in view.TABS:
+            self._tabs.focus_position = view.TABS.index(frame.tab)
+        record = "" if frame.run is None or frame.newest else f" {frame.run.record} "
+        self._run_label.set_text(f" 1 Run {record}")
         if frame.tab == "history":
-            header, body = self._history_tab(frame)
+            self._fill_history(frame)
         elif frame.tab == "queue":
-            header, body = self._queue_tab(frame)
-        elif frame.tab == "help":
-            header, body = _row([("keys", BRIGHT, True)]), _help()
+            self._fill_queue(frame)
         else:
-            header, body = self._run_tab(frame)
-        rule = urwid.AttrMap(urwid.Divider("─"), _attr(RULE))
-        rows = [_tab_line(frame), rule, header, body, rule, _status_bar(frame)]
-        if frame.prompt is not None or frame.message is not None:
-            rows.append(_command_row(frame))
-        self._top.original_widget = urwid.Pile(
-            [row if row is body else ("pack", row) for row in rows]
-        )
+            self._run.original_widget = self._run_tab(frame)
+        self._main.original_widget = self._tabs
+        if frame.tab == "help":
+            body = urwid.Pile([("pack", _row([("keys", BRIGHT, True)])), _help()])
+            self._main.original_widget = urwid.Overlay(
+                body, self._tabs, "left", ("relative", 100), "top", ("relative", 100), top=2
+            )
+        rows = [urwid.AttrMap(urwid.Divider("─"), _attr(RULE)), _status_bar(frame)]
+        if frame.prompt is not None:
+            rows.append(self._command_line(frame.prompt))
+        elif frame.message is not None:
+            rows.append(_row([(frame.message, TEXT, False)]))
+        self._frame.footer = urwid.Pile(rows)
+        self._frame.focus_position = "body" if frame.prompt is None else "footer"
+
+    def _command_line(self, prompt):
+        """The open command line, editing `prompt`; a `:run` line shows what Enter and Esc do."""
+        if self._frame.focus_position == "body":
+            self._edit.set_caption(prompt[0])
+            self._edit.set_edit_text(prompt[1:])
+            self._edit.edit_pos = len(prompt)
+        if not prompt.startswith(":run "):
+            return self._edit
+        return urwid.Columns([self._edit, ("pack", _row([(_PROMPT_HINT, DIM, False)]))])
+
+    @staticmethod
+    def _into_log(frame):
+        """Whether the keys act on the log: it has focus and rows."""
+        return frame.focus == "log" and bool(frame.rows)
 
     def _run_tab(self, frame):
-        """The Run tab's header and body: the stage list, the divider and the stage's pane."""
+        """The Run tab: the header, the stage list, the divider and the stage's pane."""
         if frame.run is None:
-            return _row([(_record_count(frame), DIM, False)]), urwid.SolidFill(" ")
+            return urwid.Filler(_row([(_record_count(frame), DIM, False)]), "top")
         stages = frame.run.stages
-        shown = stages.index(frame.stage) if frame.stage in stages else None
-        self._stages.fill([_stage_row(stage, frame) for stage in stages], shown)
-        heading = f"{'stage':<{_START_COL}}{'start':<{_TOOK_COL - _START_COL}}took"
-        left = urwid.Pile([("pack", _row([(heading, DIM, False)])), self._stages])
+        rows = [_stage_row(self._stages, stage, frame) for stage in stages]
+        _fill(self._stages, rows, stages.index(frame.stage) if frame.stage in stages else 0)
         divider = urwid.AttrMap(urwid.SolidFill("│"), _attr(RULE))
-        columns = [(_STAGES_WIDTH, left), (1, urwid.SolidFill(" ")), (1, divider)]
-        columns += [(1, urwid.SolidFill(" ")), self._run_pane(frame)]
-        return _row(_run_header(frame)), urwid.Columns(columns)
+        columns = urwid.Columns(
+            [(self._stages.pack(())[0], self._stages), (1, divider), self._run_pane(frame)],
+            dividechars=1,
+        )
+        columns.focus_position = 2 if self._into_log(frame) else 0
+        return urwid.Pile([("pack", _row(_run_header(frame))), columns])
 
     def _run_pane(self, frame):
         """The pane of the stage shown: the summary, a suite's sections, or a plain stage's log."""
         if frame.pane_head == "summary":
             return urwid.Filler(urwid.Pile(_summary(frame)), "top")
-        rows = [_log_row(row, index, frame) for index, row in enumerate(frame.rows)]
+        rows = [_log_row(self._log, row, index, frame) for index, row in enumerate(frame.rows)]
+        _fill(self._log, rows, frame.cursor)
         if frame.pane_head == "suite":
-            self._log.fill(rows, frame.cursor)
             hint = _row([(_HINT, DIM, False)])
             return urwid.Pile([("pack", _suite_head(frame)), self._log, ("pack", hint)])
-        self._log.fill(rows, frame.cursor, _row([("this stage's output", DIM, False)]))
-        self._pane.show(frame)
-        return self._pane
+        head = _build_head(frame) if frame.pane_head == "build" else []
+        if frame.tasks:
+            _fill(self._tasks, [_task_row(self._tasks, task, frame) for task in frame.tasks], 0)
+            head.append(self._tasks)
+        label = _row([("this stage's output", DIM, False)])
+        items = [("pack", widget) for widget in (*head, label)]
+        return urwid.Pile([*items, self._log], focus_item=len(items))
 
-    def _queue_tab(self, frame):
-        """The Queue tab's column header and body: a row per run, then the preview box."""
-        names = ("", "source", "what", "sha", "added", "")
-        header = _queue_columns([_row([(name, DIM, False)]) for name in names])
+    def _fill_queue(self, frame):
+        """The Queue tab: a row per run, then the preview box."""
         rows = [
-            _queue_row(row, index == frame.queue_cursor)
+            _queue_row(self._queue, row, index == frame.queue_cursor)
             for index, row in enumerate(frame.queue_rows)
         ]
-        self._queue.fill(rows, frame.queue_cursor)
-        body = [self._queue]
-        if frame.preview_lines:
-            lines = [
-                _row([(line, BLUE if index == 0 else TEXT, False)])
-                for index, line in enumerate(frame.preview_lines)
-            ]
-            box = urwid.LineBox(urwid.Pile(lines))
-            body.append(("pack", urwid.AttrMap(box, _attr(BLUE))))
-        return header, urwid.Pile(body)
+        _fill(self._queue, rows, frame.queue_cursor)
+        if not frame.preview_lines:
+            self._queue_tab.original_widget = self._queue
+            return
+        lines = [
+            _row([(line, BLUE if index == 0 else TEXT, False)])
+            for index, line in enumerate(frame.preview_lines)
+        ]
+        box = urwid.AttrMap(urwid.LineBox(urwid.Pile(lines)), _attr(BLUE))
+        self._queue_tab.original_widget = urwid.Pile([self._queue, ("pack", box)])
 
-    def _history_tab(self, frame):
-        """The History tab's column header and body: a row per run, then the footer."""
-        width = max(18, max((len(r.record) for r in frame.history), default=0) + 2)
-        header = "record".ljust(width) + "what".ljust(22) + "sha".ljust(9) + "result".ljust(13)
-        rows = [_history_row(run, index, frame, width) for index, run in enumerate(frame.history)]
-        self._history.fill(rows, frame.history_cursor if frame.history else None)
-        footer = _row([(_record_count(frame), DIM, False)])
-        return _row([(header + "took", DIM, False)]), urwid.Pile([self._history, ("pack", footer)])
+    def _fill_history(self, frame):
+        """The History tab: a row per run, then the record count."""
+        rows = [
+            _history_row(self._history, run, index, frame)
+            for index, run in enumerate(frame.history)
+        ]
+        _fill(self._history, rows, frame.history_cursor)
+        count = [(_attr(DIM), _record_count(frame))]
+        self._history.footer = urwid.TableRow(self._history.layout, [count], span=True)
 
 
-def _text(line):
-    """`line` with tabs expanded to the next multiple of 8 and other controls as carets."""
-    out = ""
-    for char in line:
-        if char == "\t":
-            out += " " * (8 - len(out) % 8)
-        elif ord(char) < 32 or ord(char) == 127:
-            out += "^" + chr(ord(char) ^ 64)
-        else:
-            out += char
-    return out
+def _fill(table, rows, focus):
+    """Show `rows` in `table` with row `focus` (None: leave it) in view."""
+    table.body[:] = rows
+    if focus is not None and rows:
+        table.focus_position = focus
+
+
+def _markup(parts, bg=None):
+    """Markup for `(text, fg, bold)` parts on `bg`."""
+    return [(_attr(fg, bg, bold), text) for text, fg, bold in parts if text]
 
 
 def _row(parts, bg=None):
     """One row of `(text, fg, bold)` parts, clipped at its edge, on `bg` across its width."""
-    markup = [(_attr(fg, bg, bold), _text(text)) for text, fg, bold in parts if text]
-    row = urwid.Text(markup, wrap="clip")
+    row = urwid.Text(_markup(parts, bg), wrap="clip")
     return urwid.AttrMap(row, _attr(TEXT, bg)) if bg else row
+
+
+def _table_row(table, cells, bg=None):
+    """A row of `table` whose cells are lists of `(text, fg, bold)` parts, on `bg`."""
+    markup = [_markup(parts, bg) for parts in cells]
+    return urwid.TableRow(table.layout, markup, attr=_attr(TEXT, bg) if bg else None)
 
 
 def _clock(moment):
@@ -408,35 +412,8 @@ def _running(frame, stage):
     return frame.live and stage.state == "open"
 
 
-def _tab_line(frame):
-    """The top row: `bench`, the three tabs with the shown one filled, and the clock."""
-    run_label = " 1 Run "
-    if frame.run is not None and not frame.newest:
-        run_label = f" 1 Run  {frame.run.record} "
-    markup = [(_attr(TEXT, None, True), "bench  ")]
-    for label, tab in ((run_label, "run"), (" 2 Queue ", "queue"), (" 3 History ", "history")):
-        filled = frame.tab == tab
-        markup.append((_attr(GROUND, TEXT) if filled else _attr(DIM), _text(label)))
-    clock = _row([(_clock(frame.now), DIM, False)])
-    return urwid.Columns([urwid.Text(markup, wrap="clip"), ("pack", clock)])
-
-
-def _command_row(frame):
-    """The last row: the message while the command line is closed, else the command line.
-
-    A `:run` command line also shows what Enter and Esc do, at the right edge.
-    """
-    prompt = frame.prompt
-    if prompt is None:
-        return _row([(frame.message, TEXT, False)])
-    line = urwid.Text([(_attr(TEXT), _text(prompt)), (_attr(GROUND, TEXT), " ")], wrap="clip")
-    if not prompt.startswith(":run "):
-        return line
-    return urwid.Columns([line, ("pack", _row([(_PROMPT_HINT, DIM, False)]))])
-
-
 def _status_bar(frame):
-    """The badge (running, disabled or idle), the timer, the pending key and the `? keys` box."""
+    """The badge (running, disabled or idle), the timer, the pending key, the clock and `? keys`."""
     bench = frame.bench
     if bench.live:
         badge, fg, bg = " RUNNING ", GROUND, AMBER
@@ -450,7 +427,8 @@ def _status_bar(frame):
         (_attr(DIM), "  timer "),
         (_attr(timer_colour), bench.timer),
     ]
-    right = [(_attr(TEXT), _text(frame.pending) + " ")] if frame.pending else []
+    right = [(_attr(TEXT), frame.pending + " ")] if frame.pending else []
+    right += [(_attr(DIM), _clock(frame.now) + "  ")]
     right += [(_attr(GROUND, TEXT), "?"), (_attr(TEXT), " keys")]
     return urwid.Columns([urwid.Text(left, wrap="clip"), ("pack", urwid.Text(right))])
 
@@ -479,18 +457,17 @@ def _run_header(frame):
     return [(title, BRIGHT, True), (f"  {rest}", DIM, False)]
 
 
-def _stage_row(stage, frame):
-    """One stage row, glyph, name, start and took, in the stage's colour across the row.
+def _stage_row(table, stage, frame):
+    """One stage row: glyph and name, start and took, in the stage's colour.
 
     Only the shown stage's row has a ground: the running tint, else the failed tint, else the
     selection.
     """
     running = _running(frame, stage)
     glyph, colour, bold = _tone(stage.state, running)
-    text = f"{glyph} {_display_name(stage.name)}".ljust(_START_COL)
+    cells = [f"{glyph} {_display_name(stage.name)}", "", ""]
     if stage.started is not None and stage.state not in ("not-started", "skipped"):
-        took = _took(stage.started, stage.ended, running, frame.now)
-        text += _clock(stage.started).ljust(_TOOK_COL - _START_COL) + took
+        cells[1:] = _clock(stage.started), _took(stage.started, stage.ended, running, frame.now)
     bg = None
     if stage is frame.stage:
         if running:
@@ -499,7 +476,7 @@ def _stage_row(stage, frame):
             bg = FAILED_TINT
         else:
             bg = SELECTION
-    return _row([(text, colour, bold)], bg)
+    return _table_row(table, [[(cell, colour, bold)] for cell in cells], bg)
 
 
 def _summary(frame):
@@ -548,51 +525,29 @@ def _build_head(frame):
     stage = frame.stage
     progress = stage.progress
     progress_line = f"  {progress.phase}"
-    filled = 0
     if progress.total:
         percent = progress.done * 100 // progress.total
-        filled = round(_BAR_CELLS * progress.done / progress.total)
         progress_line += f" {progress.done} of {progress.total}  {percent}%"
     _, colour, _ = _tone(stage.state, _running(frame, stage))
-    head = [
-        _row([("build", colour, True), (progress_line, TEXT, False)]),
-        _row([("▉" * filled, colour, False), ("▉" * (_BAR_CELLS - filled), RULE, False)]),
-    ]
+    bar = _Bar(_attr(RULE, RULE), _attr(colour, colour), progress.done, progress.total or 1)
+    head = [_row([("build", colour, True), (progress_line, TEXT, False)]), bar]
     if _running(frame, stage):
         head.append(_row([("running now", DIM, False)]))
     return head
 
 
-def _running_tasks(frame, tasks, cols):
-    """The `running now` rows of `tasks` in a pane `cols` wide: recipe, task and elapsed time.
-
-    Each name column is its longest name plus two, at least `_NAME_MIN`. The elapsed time always
-    shows whole: when the columns would overflow the pane, the excess comes off the recipe column
-    down to `_NAME_MIN`, then off the task column down to it, and a name is cut to its column
-    minus two.
-    """
-    tooks = [_duration(frame.now - t.started) if t.started else DASH for t in tasks]
-    recipe_width = max(_NAME_MIN, max((len(t.recipe) for t in tasks), default=0) + 2)
-    task_width = max(_NAME_MIN, max((len(t.task) for t in tasks), default=0) + 2)
-    took_width = max(map(len, tooks), default=0)
-    excess = recipe_width + task_width + took_width - cols
-    cut = min(max(excess, 0), recipe_width - _NAME_MIN)
-    recipe_width -= cut
-    task_width -= min(max(excess - cut, 0), task_width - _NAME_MIN)
-    rows = []
-    for task, took in zip(tasks, tooks, strict=True):
-        names = f"{task.recipe[: recipe_width - 2]:<{recipe_width}}"
-        names += f"{task.task[: task_width - 2]:<{task_width}}"
-        rows.append(_row([(names + took, TEXT, False)]))
-    return rows
+def _task_row(table, task, frame):
+    """One `running now` row: recipe, task and elapsed time."""
+    took = _duration(frame.now - task.started) if task.started else DASH
+    return _table_row(table, [[(text, TEXT, False)] for text in (task.recipe, task.task, took)])
 
 
-def _log_row(row, index, frame):
+def _log_row(table, row, index, frame):
     """One log row; the cursor's row is selected only while the log has focus."""
     bg = SELECTION if frame.focus == "log" and index == frame.cursor else None
     if row.kind != "head":
         indent = _BODY_INDENT if row.kind == "body" else ""
-        return _row([(indent + row.text, LOG, False)], bg)
+        return _table_row(table, [[(indent + row.text, LOG, False)]], bg)
     section = row.section
     running = _running(frame, frame.stage)
     has_body = section.lines or section.failure
@@ -605,68 +560,55 @@ def _log_row(row, index, frame):
     if section.started is not None:
         took = _took(section.started, row.end, running and section.outcome == "open", frame.now)
         parts.append((f"  {took}", DIM, False))
-    return _row(parts, bg)
+    return _table_row(table, [parts], bg)
 
 
-def _queue_columns(cells):
-    """The Queue's columns over `cells`: marker, source, what, sha, added, then the stage."""
-    marker, source, what, sha, added, *stage = cells
-    columns = [(_MARKER_WIDTH, marker), (_SOURCE_WIDTH, source)]
-    columns += [urwid.Padding(what, right=2), (_SHA_WIDTH, sha), (_ADDED_WIDTH, added)]
-    columns += [(_RUNNING_STAGE_WIDTH, cell) for cell in stage]
-    return urwid.Columns(columns)
-
-
-def _queue_row(row, selected):
+def _queue_row(table, row, selected):
     """One Queue row: marker, source, what, sha and added time, then the running stage.
 
     The selected row is on the selection, else the running row on the running tint.
     """
     running = row.marker == "▶"
     bg = SELECTION if selected else RUNNING_TINT if running else None
-    stage = _RUNNING_STAGE.format(row.stage) if running and row.stage else ""
+    stage = f"running, {row.stage}" if running and row.stage else ""
     cells = [
-        _row([(row.marker, AMBER if running else TEXT, False)], bg),
-        _row([(row.source, BLUE if row.source == "by hand" else TEXT, False)], bg),
-        _row([(row.what, TEXT, False)], bg),
-        _row([(row.sha7, TEXT, False)], bg),
-        _row([(row.added, TEXT, False)], bg),
-        _row([(stage, AMBER, False)], bg),
+        [(row.marker, AMBER if running else TEXT, False)],
+        [(row.source, BLUE if row.source == "by hand" else TEXT, False)],
+        [(row.what, TEXT, False)],
+        [(row.sha7, TEXT, False)],
+        [(row.added, TEXT, False)],
+        [(stage, AMBER, False)],
     ]
-    columns = _queue_columns(cells)
-    return urwid.AttrMap(columns, _attr(TEXT, bg)) if bg else columns
+    return _table_row(table, cells, bg)
 
 
-def _history_row(run, index, frame, width):
+def _history_row(table, run, index, frame):
     """One History row: record, what, sha, result, took, then the failing stage or `by hand`."""
     running = index == 0 and frame.bench.live
     word, colour = ("running", AMBER) if running else _RESULT_WORDS[run.result]
-    took = _run_took(run, running, frame.now)
-    parts = [
-        (run.record.ljust(width), TEXT, False),
-        (_what(run)[:20].ljust(22), TEXT, False),
-        (_sha7(run).ljust(9), TEXT, False),
-        (word.ljust(13), colour, False),
-        (f"{took:>4}  ", TEXT, False),
-    ]
+    trailing = []
     failing = next((s for s in run.stages if s.state in ("failed", "error")), None)
     if failing is not None:
-        parts.append((_display_name(failing.name) + "  ", DIM, False))
+        trailing.append((_display_name(failing.name) + "  ", DIM, False))
     if run.kind == "test":
-        parts.append(("by hand", BLUE, False))
-    return _row(parts, SELECTION if index == frame.history_cursor else None)
+        trailing.append(("by hand", BLUE, False))
+    cells = [
+        [(run.record, TEXT, False)],
+        [(_what(run), TEXT, False)],
+        [(_sha7(run), TEXT, False)],
+        [(word, colour, False)],
+        [(_run_took(run, running, frame.now), TEXT, False)],
+        trailing,
+    ]
+    return _table_row(table, cells, SELECTION if index == frame.history_cursor else None)
 
 
 def _help():
-    """The Help body: three columns of keys, each as wide as its widest entry."""
+    """The Help body: three columns of keys, each under its heading."""
     columns = []
     for heading, entries in _HELP:
-        key_width = max(len(key) for key, _ in entries) + 1
-        width = key_width + max(len(words) for _, words in entries) + _HELP_GAP
-        lines = [_row([(heading, BLUE, False)])]
-        lines += [
-            _row([(key.ljust(key_width), AMBER, False), (words, TEXT, False)])
-            for key, words in entries
-        ]
-        columns.append((width, urwid.Pile(lines)))
-    return urwid.Filler(urwid.Columns(columns), "top")
+        table = urwid.Table([urwid.TableColumn()] * 2, header=False)
+        table.body[:] = [urwid.TableRow(table.layout, [[(_attr(BLUE), heading)]], span=True)]
+        table.body.extend([[(_attr(AMBER), key)], words] for key, words in entries)
+        columns.append(("pack", table))
+    return urwid.Filler(urwid.Columns(columns, dividechars=2), "top")

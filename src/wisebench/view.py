@@ -2,9 +2,10 @@
 
 `State` holds the user's intent, and the commands (`run_ref`, `remove_id`, `disable_request`,
 `enable_request`) and message the shell exchanges with `handle`. `resolve` derives the `Frame` to
-show from it and one `Snapshot` of the disk. `handle` reads every position from the frame that was
-shown, and the shell passes it how many rows a half-page key moves. A field of `State` left None
-means "derive it every frame"; a value means the user chose it.
+show from it and one `Snapshot` of the disk. `handle` takes the keys that mean something to the
+view and leaves the rest to the widgets, which move their own focus; `moved` takes where it went
+back into `State` as the row it is on. Keys are named as urwid names them. A field of `State`
+left None means "derive it every frame"; a value means the user chose it.
 """
 
 import re
@@ -17,15 +18,10 @@ from wisebench.runlog import KAS_STAMP, Run, Section, Stage, Task
 TAIL = "tail"
 
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
-_ENTER = ("\n", "\r")
-_BACKSPACE = ("\x7f", "\b")
-_ESC = "\x1b"
 _ENABLE_PROMPT = "Enable the bench? Clears DISABLED and starts the timer. [y/N]"
-_TAB, _BTAB = "\t", "\x1b[Z"
-_TABS = ("run", "queue", "history")
+TABS = ("run", "queue", "history")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
 _RUNNING = "▶"
-_MOVES = {"j": "down", "k": "up", "G": "bottom", "\x04": "half_down", "\x15": "half_up"}
 
 
 @dataclass(frozen=True)
@@ -76,6 +72,7 @@ class State:
         confirm_enable (bool): `:enable` asked and the next key answers y/N.
         enable_request (bool): `y` confirmed `:enable`; the shell does it and clears this.
         message (str | None): The text shown in the command line's row while it is closed.
+        quit (bool): A key asked to quit.
     """
 
     tab: str = "run"
@@ -96,6 +93,7 @@ class State:
     confirm_enable: bool = False
     enable_request: bool = False
     message: str | None = None
+    quit: bool = False
 
 
 @dataclass(frozen=True)
@@ -507,50 +505,47 @@ def _cursor(chosen, stage, rows):
     return anchors.index((stage.name, wanted.id, 0)) if wanted else 0
 
 
-def handle(state, key, frame, page):
-    """Apply one key to `state`, reading every position from the frame that was shown.
+def handle(state, key, frame):
+    """Apply one key to `state`, or leave it to the widgets.
 
     Args:
         state (State): What the user chose; changed in place.
-        key (str): A character, or a sequence the shell translated a named key to.
+        key (str): The key, as urwid names it.
         frame (Frame): The frame on screen when the key was pressed.
-        page (int): How many rows `^d` and `^u` move, at least 1.
 
     Returns:
-        bool: True to quit.
+        str | None: The key for the widgets: a key the view has no meaning for, every key the
+        command line edits, and `gg` for the second `g`; None when the view took it.
     """
     if state.confirm_enable:
         state.confirm_enable, state.message = False, None
         state.enable_request = key == "y"
-        return False
+        return None
     if state.prompt is not None:
         return _prompt_key(state, key, frame)
     if state.tab == "help":
-        return _help_key(state, key)
+        _help_key(state, key)
+        return None
     pending, state.pending = state.pending, None
     if pending == "g":
-        if key == "g":
-            _move(state, "top", frame, page)
-        return False
+        return "gg" if key == "g" else None
     if pending == "z":
         if key in ("a", "R", "M"):
             _fold(state, key, frame)
-        return False
+        return None
     if pending == "d":
         if key == "d":
             _remove(state, frame)
-        return False
+        return None
     if key == "q":
-        return True
-    if key in (":", ";"):
+        state.quit = True
+    elif key in (":", ";"):
         _open_prompt(state)
     elif key == "/":
         if state.tab == "run" and frame.rows:
             state.prompt = "/"
     elif key == "?":
         state.back, state.tab = state.tab, "help"
-    elif key in (_TAB, _BTAB):
-        _show(state, _TABS[(_TABS.index(state.tab) + (1 if key == _TAB else -1)) % len(_TABS)])
     elif key == "2":
         _show(state, "queue")
     elif key == "3":
@@ -565,25 +560,30 @@ def handle(state, key, frame, page):
     elif key == "d":
         if state.tab == "queue":
             state.pending = key
-    elif key in _ENTER:
+    elif key == "enter":
         _enter(state, frame)
-    elif key == _ESC:
+    elif key == "esc":
         state.focus, state.message = "stages", None
     elif key in ("n", "N"):
         _search(state, frame, 1 if key == "n" else -1)
-    elif key in _MOVES:
-        _move(state, _MOVES[key], frame, page)
-    return False
+    elif key in ("j", "k") and state.tab == "run" and frame.run and frame.stage is None:
+        state.stage = frame.run.stages[0 if key == "j" else -1].name
+    else:
+        return key
+    return None
 
 
 def _prompt_key(state, key, frame):
-    """A key while the command line is open: edit it, close it, or run it on Enter."""
-    if key == _ESC:
+    """A key while the command line is open: close it, run it on Enter, or leave it to be edited.
+
+    Backspace on the bare `:` or `/` closes the command line.
+    """
+    if key == "esc" or (key == "backspace" and len(state.prompt) == 1):
         state.prompt = None
-    elif key in _ENTER:
+    elif key == "enter":
         text, state.prompt = state.prompt, None
         if text == ":q":
-            return True
+            state.quit = True
         if text == ":disable":
             state.disable_request = True
         if text == ":enable":
@@ -593,24 +593,26 @@ def _prompt_key(state, key, frame):
         if text.startswith("/") and len(text) > 1:
             state.pattern = text[1:]
             _search(state, frame, 1)
-    elif key in _BACKSPACE:
-        state.prompt = state.prompt[:-1] or None
-    elif isinstance(key, str) and key.isprintable():
-        state.prompt += key
-        if state.prompt == ":run ":
-            _show(state, "queue")
-    return False
+    else:
+        return key
+    return None
+
+
+def typed(state, text):
+    """The command line's text became `text`; `:run ` shows the Queue."""
+    state.prompt = text
+    if text == ":run ":
+        _show(state, "queue")
 
 
 def _help_key(state, key):
     """A key on the Help tab: back, quit or the command line; every other key is ignored."""
-    if key in ("?", _ESC):
+    if key in ("?", "esc"):
         state.tab = state.back
     elif key == "q":
-        return True
+        state.quit = True
     elif key in (":", ";"):
         _open_prompt(state)
-    return False
 
 
 def _open_prompt(state):
@@ -628,6 +630,33 @@ def _show(state, tab):
     if tab == "queue" and state.tab != "queue":
         state.queue_at = None
     state.tab = tab
+
+
+def moved(state, frame, tab, at):
+    """Take where the widgets moved to into `state`: the tab, else the row the keys act on.
+
+    A row is kept as what it shows, so the selection stays on it as rows come and go. In the log,
+    the last row follows the tail.
+
+    Args:
+        state (State): What the user chose; changed in place.
+        frame (Frame): The frame on screen when the key was pressed.
+        tab (str): The tab the widgets show.
+        at (int | None): The focus of the list the keys act on: the Queue, the History, the log
+            while it has focus and rows, else the stage list; None while it has no rows.
+    """
+    if tab != frame.tab:
+        _show(state, tab)
+    elif at is None:
+        return
+    elif tab == "queue":
+        state.queue_at = (_identity(frame.queue_rows[at]), at)
+    elif tab == "history":
+        state.history_record = frame.history[at].record
+    elif frame.focus == "log" and frame.rows:
+        state.cursor = TAIL if at == len(frame.rows) - 1 else frame.rows[at].anchor
+    elif frame.run is not None:
+        state.stage = frame.run.stages[at].name
 
 
 def _remove(state, frame):
@@ -664,44 +693,6 @@ def _enter(state, frame):
             _open(state, None if index == 0 else frame.history[index].record)
     elif frame.rows:
         state.focus = "log"
-
-
-def _index_after(kind, at, count, page):
-    """The index a `kind` of movement reaches from `at` (None: no selection) among `count` rows."""
-    if kind == "top":
-        return 0
-    if kind == "bottom":
-        return count - 1
-    if at is None:
-        at = -1 if kind in ("down", "half_down") else count
-    step = {"down": 1, "up": -1, "half_down": page, "half_up": -page}[kind]
-    return min(max(at + step, 0), count - 1)
-
-
-def _move(state, kind, frame, page):
-    """Move the Queue or History selection, the log cursor or the stage, by the tab and focus.
-
-    A half-page move is `page` rows. In the log, `G` follows its tail. The log focus acts on the
-    stage list while the log has no rows.
-    """
-    if state.tab == "queue":
-        if frame.queue_rows:
-            index = _index_after(kind, frame.queue_cursor, len(frame.queue_rows), page)
-            state.queue_at = (_identity(frame.queue_rows[index]), index)
-    elif state.tab == "history":
-        if frame.history:
-            index = _index_after(kind, frame.history_cursor, len(frame.history), page)
-            state.history_record = frame.history[index].record
-    elif state.focus == "log" and frame.rows:
-        if kind == "bottom":
-            state.cursor = TAIL
-        else:
-            index = _index_after(kind, frame.cursor, len(frame.rows), page)
-            state.cursor = frame.rows[index].anchor
-    elif frame.run is not None:
-        names = [stage.name for stage in frame.run.stages]
-        at = names.index(frame.stage.name) if frame.stage is not None else None
-        state.stage = names[_index_after(kind, at, len(names), page)]
 
 
 def _fold(state, op, frame):

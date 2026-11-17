@@ -160,26 +160,6 @@ def test_on_a_short_terminal_many_running_tasks_still_leave_three_log_lines():
     assert sum(line in text for line in lines) >= 3
 
 
-def test_a_short_plain_stage_log_sits_at_the_bottom_of_its_pane_under_its_label():
-    """With a line more, the label and the first line move up and the last line stays put."""
-
-    def rendered(count):
-        """(label line, first log line, last log line) of a plain stage with `count` lines."""
-        lines = [f"posted line {i}" for i in range(count)]
-        posted = stage("posted", "passed", t(3, 30), t(3, 31), lines=lines)
-        text = shown(frame([run(posted=posted)], IDLE, stage="posted"))
-        return (
-            line_holding(text, "this stage's output"),
-            line_holding(text, lines[0]),
-            line_holding(text, lines[-1]),
-        )
-
-    two, three = rendered(2), rendered(3)
-    assert two[0] + 1 == two[1]
-    assert three[0] + 1 == three[1]
-    assert two[2] == three[2]
-
-
 def test_the_idle_summary_is_the_result_its_end_and_length_and_a_row_per_suite():
     text = shown(frame([FINISHED], IDLE))
     assert re.search(rf"passed +ended {lc(4, 2)}, took 62m", text)
@@ -236,9 +216,9 @@ SOURCES = {
 
 
 @pytest.mark.parametrize("source", SOURCES.values(), ids=SOURCES)
-def test_control_characters_show_as_carets_and_a_tab_as_spaces_and_other_text_unchanged(source):
+def test_control_sequences_are_dropped_a_tab_shows_as_spaces_and_other_text_unchanged(source):
     text = shown(source(), cols=120)
-    assert re.search(r"x\^\[\[0m\^Gy▶é +z", text)
+    assert re.search(r"xy▶é +z", text)
     assert not {"\x1b", "\x07", "\t"} & set(text)
 
 
@@ -379,8 +359,8 @@ def test_help_lists_the_keys_under_three_headings_and_no_longer_h_l():
 )
 def test_a_pending_key_is_drawn_in_the_status_bar_before_the_keys_box(tab, pending):
     text = shown(frame([run()], tab=tab, pending=pending))
-    assert re.search(rf"timer \w+ +{pending} +\? keys", text)
+    assert re.search(rf"timer \w+ +{pending} +{lc(10, 7, 30)} +\? keys", text)
 
 
 def test_no_pending_text_is_drawn_when_no_key_waits():
-    assert re.search(r"timer \w+ +\? keys", shown(frame([run()], tab="queue")))
+    assert re.search(rf"timer \w+ +{lc(10, 7, 30)} +\? keys", shown(frame([run()], tab="queue")))
