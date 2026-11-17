@@ -267,7 +267,7 @@ GitHub App (`Check.merge_queue`), whose verdict it posts as a GitHub check run (
 waiting run queued by hand starts only when that read of the merge queue succeeds: a `git fetch`
 fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before the hand entry
 runs.
-`bench status --watch` is the view of all of it, run from any directory. It is a curses screen
+`bench status --watch` is the view of all of it, run from any directory. It is a Textual screen
 refreshed once a second: Run shows the newest run's stages and the selected stage's log, headed by
 bitbake's task progress while a build runs, Queue lists what waits (the running run, the runs queued
 by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and `Shift-Tab`
@@ -275,12 +275,12 @@ cycle the views and `1` to `3` jump to one; in Queue, `:run [-C <dir>] <ref>` pr
 you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
 the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes
 `DISABLED` and starts the timer. It reads `records/*/bench.log`, each suite's `report.jsonl`,
-whether `records/DISABLED` exists, the holder of the `lock` file from `/proc/locks`, the run timer's
+`records/DISABLED` (whether it exists, and its time and reason), the holder of the `lock` file from `/proc/locks`, the run timer's
 state from `systemctl --user`, and the settings file's `[run] unit`. It takes no lock and runs no
 git itself. The Queue tab reads and changes the queue only through `Queue`, the same entry point as
 `bench test` and `bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`),
 and only `:disable` and `:enable` change the timer. No maintained viewer reads the runner's markers
-or joins them to pytest-reportlog's outcomes, so the view is the runner's own, on stdlib `curses`.
+or joins them to pytest-reportlog's outcomes, so the view is the runner's own, on `textual`.
 Bitbake shows its task progress only on the terminal that ran the build, so the view reads bitbake's
 `NOTE:` lines from the log; and it asks the kernel's `/proc/locks` who holds the lock rather than
 `lslocks`, which resolves holders by path through `/proc/<pid>/fd`.

@@ -1,4 +1,5 @@
-"""The watch view through Textual's Pilot: keys, the Queue's reads and writes, colour and speed."""
+"""The watch view through Textual's Pilot: what each key shows, the Queue's reads and writes,
+colour, speed, and the guarantees a real terminal shows."""
 
 import contextlib
 import os
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import create_autospec
 
@@ -41,6 +43,9 @@ HAND = {
     "sha": "1" * 40,
 }
 MERGE = {"kind": "run", "pr": 34, "title": "Bump kernel", "sha": "9" * 40}
+BODIES = {1: ("needle one",), 4: ("needle two",)}
+NEEDLES = run(target_suite=suite("target_suite", ["passed"] * 6, BODIES, state="failed"))
+FIND = ["slash", *"needle", "enter"]
 
 
 @pytest.fixture
@@ -73,14 +78,15 @@ def watch(tmp_path, *steps, size=(100, 30)):
     app = status.Watch(tmp_path / "checkout", tmp_path / "records")
 
     def look(app):
-        log = app.query_one("#log")
-        (section, *_), offset = log.at(log.cursor) if log.blocks else ((None,), None)
+        log, row = app.query_one("#log"), None
+        if log.cursor is not None:
+            (section, *_), offset = log.rows.at(log.cursor)
+            row = (section and section.name, offset)
+        focused = app.focused and app.focused.id
+        record = app.current and app.current.record
+        stage = app.query_one("#stages").cursor
         return SimpleNamespace(
-            focused=app.focused,
-            row=(section and section.name, offset),
-            stage=app.query_one("#stages").highlighted,
-            shown=app.shown(),
-            record=app.run and app.run.record,
+            focused=focused, row=row, stage=stage, shown=app.shown(), record=record
         )
 
     strips, seen = drive(app, *steps, size=size, look=look)
@@ -88,162 +94,150 @@ def watch(tmp_path, *steps, size=(100, 30)):
     return seen
 
 
-def test_idle_shows_the_summary_and_j_then_enter_moves_into_a_stages_log(tmp_path, disk):
-    disk.runs = [run(build=plain("build", 5, state="passed"))]
-    assert "passed  ended" in watch(tmp_path).text
-    seen = watch(tmp_path, "j", "j", "j", "enter")
-    assert "build line 4" in seen.text
-    assert isinstance(seen.focused, status.StageLog) and seen.row == (None, 4)
-    assert watch(tmp_path, "j", "j", "j", "enter", "escape").focused.id == "stages"
+def tick(change):
+    """A step that changes the disk, then lets the view read it."""
+    return lambda app: (change(), app.tick())
+
+
+@pytest.mark.parametrize(
+    ("runs", "bench", "steps", "shows", "hides"),
+    [
+        ([run()], IDLE, [], ["last run", "passed  ended"], []),
+        ([run(build=plain("build", 5, "passed"))], IDLE, list("jjj"), ["build line 4"], []),
+        ([running_test(2)], LIVE, [], ["out 2", "Enter into the log"], ["out 1"]),
+        ([running_test(2)], LIVE, ["enter", "z", "a"], ["▸ ● t.py::test_2"], ["out 2"]),
+        ([running_test(2)], LIVE, ["enter", "z", "R"], ["out 0", "booted slot B"], []),
+        ([running_test(2)], LIVE, ["enter", "z", "R", "z", "M"], [], ["out 0", "out 2"]),
+        ([NEEDLES], DISABLED, FIND, ["needle one"], []),
+        ([run(), run(record=OLDER, result="failed")], IDLE, ["left_square_bracket"],
+         [f"1 Run  {OLDER}", "failed  ended"], ["last run"]),
+        ([run(), failing_at(OLDER, "host_suite")], IDLE, ["3"],
+         ["record", "host suite", "2 records in"], []),
+        ([run()], IDLE, ["z"], ["z  ? keys"], []),
+        ([run()], IDLE, ["question_mark"], ["follow the live log", "? back"], []),
+        ([live("build")], LIVE, ["2"], ["▶", "running, build", "PR #34 Bump kernel", "by hand"],
+         []),
+    ],
+    ids=["idle summary", "a stage's log", "running test unfolded", "za", "zR", "zM",
+         "search unfolds", "older run", "history", "pending key", "help", "queue"],
+)  # fmt: skip
+def test_each_key_shows_what_the_boards_show(
+    tmp_path, disk, queue, runs, bench, steps, shows, hides
+):
+    disk.runs, disk.bench = runs, bench
+    shown = watch(tmp_path, *steps).text
+    assert all(part in shown for part in shows), shown
+    assert not any(part in shown for part in hides), shown
+
+
+@pytest.mark.parametrize(
+    ("runs", "bench", "steps", "expected"),
+    [
+        ([run(build=plain("build", 5))], IDLE, [*"jjj", "enter"],
+         {"focused": "log", "row": (None, 4)}),
+        ([run()], IDLE, [*"jjj", "enter", "escape"], {"focused": "stages"}),
+        ([running_test(2)], LIVE, ["enter"], {"row": (TESTS[2], 0)}),
+        ([NEEDLES], DISABLED, FIND, {"focused": "log", "row": ("case_01", 1)}),
+        ([NEEDLES], DISABLED, [*FIND, "n"], {"row": ("case_04", 1)}),
+        ([NEEDLES], DISABLED, [*FIND, "n", "n", "N"], {"row": ("case_04", 1)}),
+        ([run(), run(record=OLDER)], IDLE, ["left_square_bracket", "right_square_bracket"],
+         {"record": STAMP}),
+        ([run(), run(record=OLDER)], IDLE, ["left_square_bracket", "3", "1"],
+         {"record": STAMP, "shown": "run"}),
+        ([run(), run(record=OLDER)], IDLE, ["3", "j", "enter"], {"record": OLDER, "shown": "run"}),
+        ([run()], IDLE, ["tab"], {"shown": "queue"}),
+        ([run()], IDLE, ["tab", "tab", "tab"], {"shown": "run"}),
+        ([run()], IDLE, ["shift+tab"], {"shown": "history"}),
+        ([run()], IDLE, ["3", "question_mark", "escape"], {"shown": "history"}),
+    ],
+    ids=["enter into the log", "esc back", "starts on the running test", "search", "n", "N",
+         "] newer", "1 back to the newest", "history enter", "tab", "tab wraps", "shift-tab",
+         "esc leaves help"],
+)  # fmt: skip
+def test_each_key_moves_where_the_keymap_says(tmp_path, disk, queue, runs, bench, steps, expected):
+    disk.runs, disk.bench = runs, bench
+    seen = watch(tmp_path, *steps)
+    assert {name: getattr(seen, name) for name in expected} == expected
 
 
 def test_the_live_stage_follows_the_run_until_the_user_picks_one(tmp_path, disk):
-    disk.runs, disk.bench = [live("build")], LIVE
-
-    def progress(app):
-        disk.runs = [live("bundle")]
-        app.tick()
-
+    disk.bench = LIVE
+    progress = tick(lambda: setattr(disk, "runs", [live("bundle")]))
+    disk.runs = [live("build")]
     assert watch(tmp_path, progress).stage == 3
+    disk.runs = [live("build")]
     assert watch(tmp_path, "k", progress).stage == 1
-
-
-def test_sections_fold_with_za_zR_and_zM_and_the_cursor_starts_on_the_running_test(tmp_path, disk):
-    disk.runs, disk.bench = [running_test(2)], LIVE
-    seen = watch(tmp_path, "enter")
-    assert seen.row == (TESTS[2], 0)
-    assert "out 2" in seen.text and "out 1" not in seen.text
-    assert "out 2" not in watch(tmp_path, "enter", "z", "a").text
-    unfolded = watch(tmp_path, "enter", "z", "R").text
-    assert "out 0" in unfolded and "booted slot B" in unfolded
-    folded = watch(tmp_path, "enter", "z", "R", "z", "M").text
-    assert "out 0" not in folded and "out 2" not in folded
 
 
 def test_G_follows_the_log_as_it_grows_and_a_move_off_the_end_stops_following(tmp_path, disk):
     disk.runs, disk.bench = [live("build", build=plain("build", 50))], LIVE
-
-    def grow(app):
-        disk.runs = [live("build", build=plain("build", 60))]
-        app.tick()
-
+    grow = tick(lambda: setattr(disk, "runs", [live("build", build=plain("build", 60))]))
     assert watch(tmp_path, "enter", "g", "g", "G", grow).row == (None, 59)
     assert watch(tmp_path, "enter", "g", "g", "j", grow).row == (None, 1)
-
-
-def test_a_search_finds_a_line_in_a_folded_section_unfolds_it_and_n_N_step_between(tmp_path, disk):
-    bodies = {1: ("needle one",), 4: ("needle two",)}
-    disk.runs = [run(target_suite=suite("target_suite", ["passed"] * 6, bodies, state="failed"))]
-    disk.bench = DISABLED
-    find = ["slash", *"needle", "enter"]
-    seen = watch(tmp_path, *find)
-    assert seen.row == ("case_01", 1) and "needle one" in seen.text
-    assert isinstance(seen.focused, status.StageLog)
-    assert watch(tmp_path, *find, "n").row == ("case_04", 1)
-    assert watch(tmp_path, *find, "n", "n", "N").row == ("case_04", 1)
-
-
-def test_brackets_step_through_older_runs_named_in_the_tab_and_1_returns_to_the_newest(
-    tmp_path, disk
-):
-    disk.runs = [run(), run(record=OLDER, result="failed")]
-    seen = watch(tmp_path, "left_square_bracket")
-    assert f"1 Run  {OLDER}" in seen.text and "failed  ended" in seen.text
-    assert watch(tmp_path, "left_square_bracket", "right_square_bracket").record == STAMP
-    seen = watch(tmp_path, "left_square_bracket", "3", "1")
-    assert (seen.record, seen.shown) == (STAMP, "run")
-
-
-@pytest.mark.parametrize(
-    ("keys", "shown"),
-    [
-        (["tab"], "queue"),
-        (["tab", "tab", "tab"], "run"),
-        (["shift+tab"], "history"),
-        (["3"], "history"),
-        (["question_mark"], "helpview"),
-        (["3", "question_mark", "escape"], "history"),
-    ],
-)
-def test_tab_and_shift_tab_go_round_the_views_and_number_keys_jump(
-    tmp_path, disk, queue, keys, shown
-):
-    assert watch(tmp_path, *keys).shown == shown
-
-
-def test_a_pair_key_shows_in_the_status_bar_while_its_second_key_is_awaited(tmp_path, disk):
-    assert watch(tmp_path, "z").text.splitlines()[-1].rstrip().endswith("z  ? keys")
-
-
-def test_history_lists_every_run_and_enter_opens_the_selected_one_in_run(tmp_path, disk):
-    disk.runs = [run(), failing_at(OLDER, "host_suite")]
-    seen = watch(tmp_path, "3")
-    assert "host suite" in seen.text and "2 records in" in seen.text
-    seen = watch(tmp_path, "3", "j", "enter")
-    assert (seen.record, seen.shown) == (OLDER, "run")
 
 
 def test_entering_the_queue_reads_it_once_and_again_every_30_seconds_while_it_shows(
     tmp_path, disk, queue, monkeypatch
 ):
-    clock = SimpleNamespace(now=1000.0)
-    monkeypatch.setattr(status.time, "monotonic", lambda: clock.now)
+    clock = SimpleNamespace(at=datetime(2026, 11, 10, 10, tzinfo=UTC))
+    monkeypatch.setattr(status, "datetime", SimpleNamespace(now=lambda tz: clock.at))
 
     def wait(seconds):
         """A step that moves the clock on and refreshes."""
-        return lambda app: (setattr(clock, "now", clock.now + seconds), app.tick())
+        return tick(lambda: setattr(clock, "at", clock.at + timedelta(seconds=seconds)))
 
-    seen = watch(tmp_path, "2", wait(29))
+    watch(tmp_path, "2", wait(29))
     assert queue.entries.call_count == 1
-    assert "by hand" in seen.text and "PR #34 Bump kernel" in seen.text
     watch(tmp_path, "2", wait(31))
     assert queue.entries.call_count == 3
     watch(tmp_path, "2", "1", wait(60))
     assert queue.entries.call_count == 4
 
 
-def test_a_failed_queue_read_shows_its_text_keeps_the_last_rows_and_the_view_goes_on(
-    tmp_path, disk, queue
-):
+def test_a_failed_queue_read_shows_its_text_and_keeps_the_last_rows(tmp_path, disk, queue):
     def fail(app):
         queue.entries.side_effect = OSError("github is down")
         app.read_queue()
 
-    seen = watch(tmp_path, "2", fail)
-    assert "github is down" in seen.text and "feat" in seen.text
+    shown = watch(tmp_path, "2", fail).text
+    assert "github is down" in shown and "feat" in shown
 
 
 def test_one_queue_read_is_in_flight_at_a_time(tmp_path, disk, queue):
-    def twice(app):
-        app.read_queue()
-        app.read_queue()
-
-    watch(tmp_path, twice)
+    watch(tmp_path, lambda app: (app.read_queue(), app.read_queue()))
     assert queue.entries.call_count == 1
 
 
-def test_run_previews_the_typed_ref_and_enter_queues_it_and_says_so(tmp_path, disk, queue):
-    seen = watch(tmp_path, "colon", *"run feat2")
-    assert 'resolves to 1234567 "Fix", clean tree' in seen.text
-    assert "joins as 2, after feat" in seen.text
+def test_run_previews_the_typed_ref_and_enter_queues_it_whatever_view_tab_shows(
+    tmp_path, disk, queue
+):
+    shown = watch(tmp_path, "colon", *"run feat2").text
+    assert 'resolves to 1234567 "Fix", clean tree' in shown and "joins as 2, after feat" in shown
     queue.preview.assert_called_with("feat2", None)
-    seen = watch(tmp_path, "colon", *"run -C ~/x feat2", "enter")
+    seen = watch(tmp_path, "colon", *"run -C ~/x fe", "tab", *"at2", "enter")
     queue.add.assert_called_once_with("feat2", None, False, [], "~/x")
-    assert "queued 5 1234567" in seen.text
+    assert "queued 5 1234567" in seen.text and seen.shown == "history"
 
 
 def test_run_of_an_unresolvable_ref_says_so_and_the_view_goes_on(tmp_path, disk, queue):
     queue.add.side_effect = subprocess.CalledProcessError(128, ["git"])
-    seen = watch(tmp_path, "colon", *"run nope", "enter")
-    assert "nope does not resolve to a commit" in seen.text
+    assert (
+        "nope does not resolve to a commit" in watch(tmp_path, "colon", *"run nope", "enter").text
+    )
 
 
-def test_dd_removes_the_selected_hand_run_and_refuses_a_merge_queue_entry(tmp_path, disk, queue):
-    assert "removed queued run 3" in watch(tmp_path, "2", "d", "d").text
+def test_dd_removes_the_selected_hand_run_at_once_and_refuses_a_merge_queue_entry(
+    tmp_path, disk, queue
+):
+    def hold(app):
+        """Keep the next `entries` read from starting, as a slow GitHub would."""
+        app.reading.add("entries")
+
+    seen = watch(tmp_path, "2", hold, "d", "d")
     queue.remove.assert_called_once_with(3)
-    seen = watch(tmp_path, "2", "j", "d", "d")
+    assert "removed queued run 3" in seen.text and "feat" not in seen.text
+    assert "only hand-queued runs can be removed" in watch(tmp_path, "2", "j", "d", "d").text
     assert queue.remove.call_count == 1
-    assert "only hand-queued runs can be removed" in seen.text
 
 
 def test_disable_stops_the_timer_and_enable_asks_then_starts_it_only_on_y(
@@ -254,13 +248,23 @@ def test_disable_stops_the_timer_and_enable_asks_then_starts_it_only_on_y(
     assert "bench disabled" in seen.text
     disabled = tmp_path / "records" / "DISABLED"
     disabled.write_text("reason\n")
-    assert status.ENABLE in watch(tmp_path, "colon", *"enable", "enter").text
-    watch(tmp_path, "colon", *"enable", "enter", "n")
+    enable = ["colon", *"enable", "enter"]
+    assert status.ENABLE in watch(tmp_path, *enable, "tab").text and disabled.exists()
+    watch(tmp_path, *enable, "n", "y")
     assert disabled.exists()
-    seen = watch(tmp_path, "colon", *"enable", "enter", "y")
-    assert not disabled.exists()
+    seen = watch(tmp_path, *enable, "tab", "y")
+    assert not disabled.exists() and "bench enabled" in seen.text
     assert systemctl.calls[-1] == ["systemctl", "--user", "start", "bench-run.timer"]
-    assert "bench enabled" in seen.text
+
+
+def test_a_disabled_bench_shows_the_failure_box_and_since_when(tmp_path, disk):
+    disk.runs, disk.bench = [failing_at(STAMP, "target_suite")], DISABLED
+    (tmp_path / "records").mkdir()
+    (tmp_path / "records" / "DISABLED").write_text("2026-11-10T03:14:02+00:00\nssh: no answer\n")
+    shown = watch(tmp_path).text
+    when = view.clock(view.disabled("2026-11-10T03:14:02+00:00\n")[1])
+    assert "bench failure, not the candidate's" in shown and "ssh: no answer" in shown
+    assert f"since {when}, nothing posted" in shown
 
 
 @pytest.mark.parametrize("keys", [["q"], ["colon", "q", "enter"], ["ctrl+c"]])
@@ -274,8 +278,8 @@ def test_q_colon_q_and_ctrl_c_quit_with_0(tmp_path, disk, keys):
         ([failing_at(STAMP, "build")], DISABLED, [], "✗ build", (view.RED, view.FAILED_TINT)),
         ([live("build")], LIVE, [], "● build", (view.AMBER, view.RUNNING_TINT)),
         ([run()], IDLE, ["j"], "✓ checkout", (view.GREEN, view.SELECTION)),
-        ([run()], IDLE, ["2"], "by hand", (view.BLUE, view.GROUND)),
-        ([run(build=plain("build", 3))], IDLE, list("jjj") + ["enter"], "build line 2",
+        ([run()], IDLE, ["2", "j"], "by hand", (view.BLUE, view.GROUND)),
+        ([run(build=plain("build", 3))], IDLE, [*"jjj", "enter"], "build line 2",
          (view.LOG, view.SELECTION)),
     ],
     ids=["failed red", "running amber", "passed green", "by hand blue", "selection"],
@@ -285,7 +289,8 @@ def test_each_meaning_shows_in_its_colour(tmp_path, disk, queue, runs, bench, ke
     assert colours(watch(tmp_path, *keys).screen, word) == expected
 
 
-def test_a_key_or_a_refresh_reads_only_the_log_rows_on_screen(tmp_path, disk):
+@pytest.mark.parametrize("step", ["j", "k", "ctrl+d", "G", lambda app: app.tick()])
+def test_a_key_or_a_refresh_reads_only_the_log_lines_on_screen(tmp_path, disk, step):
     reads = []
 
     class Lines(tuple):
@@ -299,11 +304,18 @@ def test_a_key_or_a_refresh_reads_only_the_log_rows_on_screen(tmp_path, disk):
             reads.append("all")
             return super().__iter__()
 
-    lines = Lines(f"line {i}" for i in range(8000))
-    disk.runs, disk.bench = [live("build", build=replace(plain("build", 0), lines=lines))], LIVE
-    for step in ["k", "ctrl+d", "G", lambda app: app.tick()]:
-        watch(tmp_path, "enter", lambda app: reads.clear(), step)
-        assert "all" not in reads and len(reads) <= 2 * 30, step
+    build = replace(plain("build", 0), lines=Lines(f"line {i}" for i in range(8000)))
+    disk.runs, disk.bench = [live("build", build=build)], LIVE
+    watch(tmp_path, "enter", lambda app: reads.clear(), step, size=(100, 30))
+    assert "all" not in reads and len(set(reads)) <= 30
+
+
+def test_a_key_in_history_draws_only_the_runs_on_screen(tmp_path, disk, monkeypatch):
+    drawn, cells = [], view.history_cells
+    monkeypatch.setattr(view, "history_cells", lambda run, *a: drawn.append(run) or cells(run, *a))
+    disk.runs = [run(record=f"2026{i:04d}") for i in range(2000, 0, -1)]
+    watch(tmp_path, "3", lambda app: drawn.clear(), "G", size=(100, 30))
+    assert 0 < len(drawn) <= 30
 
 
 def test_without_a_terminal_it_says_so_and_returns_2(tmp_path, capsys):
@@ -313,7 +325,7 @@ def test_without_a_terminal_it_says_so_and_returns_2(tmp_path, capsys):
 
 @pytest.mark.parametrize("key", [b"q", b"\x03"])
 def test_on_a_real_terminal_it_draws_keeps_the_mouse_off_and_no_log_text_drives_it(
-    tmp_path, bench_clone, key
+    bench_clone, key
 ):
     """A pty child shows a log line holding ESC, BEL and an 8-bit CSI; none reaches the terminal."""
     import fcntl
@@ -327,6 +339,7 @@ def test_on_a_real_terminal_it_draws_keeps_the_mouse_off_and_no_log_text_drives_
         "bench: 2026-11-10T03:00:01+00:00 stage checkout started\n"
         "evil \x1b]0;PWNED\x07 \x9b31m end\n"
     )
+    (bench_clone.records / "DISABLED").write_text("2026-11-10T03:01:00+00:00\nstopped\n")
     code = (
         "import sys; from wisebench import status; "
         f"sys.exit(status.watch({str(bench_clone.checkout)!r}, {str(bench_clone.records)!r}))"

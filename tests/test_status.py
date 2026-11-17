@@ -8,23 +8,23 @@ import stat
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import create_autospec
 
 import pytest
 from helpers import (
-    FakeScreen,
     add_settings,
     repo_with_one_commit,
     run_unit_settings,
     settings_file,
-    terminal,
     write_bench_toml,
     write_lg_env,
     write_suite,
 )
-from status_helpers import mark, real_run, rep
+from status_helpers import drive, mark, real_run, rep, text
 
 from wisebench import bench_state, bench_test, runlog, status
 from wisebench.lock import Lock
+from wisebench.queue import Queue
 from wisebench.records import Records
 
 STAMP = "20261110T030715Z"
@@ -637,14 +637,11 @@ def snapshot(root):
 def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_reads_and_writes(
     tmp_path, monkeypatch, systemctl, bench_clone
 ):
-    """`_loop` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes and mtimes
-    unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the timer query
-    (asserted on the `systemctl` fixture), and the only `Queue` methods called are `entries`,
-    `preview`, `add` and `remove` (stubbed)."""
-    import curses
+    """The view over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes and
+    mtimes unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the timer
+    query (asserted on the `systemctl` fixture), and the only `Queue` methods called are
+    `entries`, `preview`, `add` and `remove` (autospecced)."""
     import fcntl
-
-    from wisebench import queue
 
     records = tmp_path / "records"
     write_record(
@@ -659,19 +656,10 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     add_settings(run_unit_settings())
     (records / "DISABLED").write_text("reason\n")
     (records / "lock").touch()
-    terminal(monkeypatch, tmp_path, 0)
     before = snapshot(tmp_path)
-    forbidden, popen_argv, calls = [], [], []
-    hand = {
-        "kind": "test",
-        "id": 3,
-        "added": "2026-11-10T03:15:00+00:00",
-        "ref": "feature-a",
-        "sha": "1" * 40,
-        "set": None,
-        "skip_build": False,
-        "args": [],
-    }
+    forbidden, popen_argv = [], []
+    hand = {"kind": "test", "id": 3, "added": "2026-11-10T03:15:00+00:00", "ref": "feature-a",
+            "sha": "1" * 40, "set": None, "skip_build": False, "args": []}  # fmt: skip
 
     def refuse_lock(*args, **kwargs):
         """Fail the test: no lock may be taken."""
@@ -683,30 +671,21 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
         popen_argv.append(list(argv))
         raise FileNotFoundError(argv[0])
 
-    def stub(name, result):
-        """Replace `Queue.<name>` with a recorder returning `result`."""
-        monkeypatch.setattr(
-            queue.Queue,
-            name,
-            lambda self, *args: calls.append(name) or result,
-            raising=False,
-        )
-
-    stub("entries", [hand])
-    stub("preview", {"sha": "1" * 40, "subject": "s", "clean": True})
-    stub("add", (5, "1" * 40, 2))
-    stub("remove", True)
+    queue = create_autospec(Queue, instance=True)
+    queue.entries.return_value = [hand]
+    queue.preview.return_value = {"sha": "1" * 40, "subject": "s", "clean": True}
+    queue.add.return_value = (5, "1" * 40, 2)
+    queue.remove.return_value = True
+    monkeypatch.setattr(status, "Queue", lambda checkout, directory: queue)
     monkeypatch.setattr(fcntl, "flock", refuse_lock)
     monkeypatch.setattr(fcntl, "lockf", refuse_lock)
     monkeypatch.setattr(subprocess, "Popen", record_popen)
-    timeout = curses.error("no input")
-    keys = ["2", timeout, timeout, *":run feature-c", "\n", timeout, "d", "d", timeout, "q"]
-    window = FakeScreen(keys=keys)
     paths = [p for p in [tmp_path, *tmp_path.rglob("*")]]
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        assert status._loop(window, bench_clone.checkout, records, run=lambda work: work()) == 0
+        app = status.Watch(bench_clone.checkout, records)
+        screen = drive(app, "2", "colon", *"run feature-c", "enter", "d", "d")[0]
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -718,8 +697,9 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     assert systemctl.calls == [["systemctl", "--user", "is-active", "bench-run.timer"]] * len(
         systemctl.calls
     )
-    assert {"entries", "add", "remove"} <= set(calls) <= {"entries", "preview", "add", "remove"}
-    assert "feature-a" in "".join(window.frames[-1])
+    called = {name for name, *_ in queue.method_calls}
+    assert {"entries", "add", "remove"} <= called <= {"entries", "preview", "add", "remove"}
+    assert "removed queued run 3" in text(screen)
 
 
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")

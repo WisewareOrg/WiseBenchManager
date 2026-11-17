@@ -358,14 +358,15 @@ class LogRows:
         Returns:
             int: The row; a key in a folded body gives its section's header.
         """
+        sections = self.stage.sections
         if key is None:
-            first = next((s for s in self.stage.sections if s.outcome == "failed"), None)
-            first = first or next((s for s in self.stage.sections if s.outcome == "open"), None)
-            key = (first.id, 0) if first else (None, 0) if self.stage.sections else TAIL
+            first = next((s for s in sections if s.outcome == "failed"), None)
+            first = first or next((s for s in sections if s.outcome == "open"), None)
+            key = (first.id, 0) if first else (None, 0) if sections else TAIL
         if key == TAIL:
             return len(self) - 1
         for (section, _, _, count), start in zip(self.blocks, self.starts, strict=False):
-            if (section and section.id) == key[0]:
+            if (section and section.id) == key[0] and count:
                 return start + min(key[1], count - 1)
         return 0
 

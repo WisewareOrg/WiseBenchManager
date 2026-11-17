@@ -9,7 +9,6 @@ from wisebench import bench_state, runlog
 
 STAMP = "20261110T030715Z"
 OLDER = "20261109T030715Z"
-OLDEST = "20261108T030715Z"
 SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")
 LIVE = bench_state.Bench(live=True, disabled=False, timer="on")
@@ -132,11 +131,6 @@ def failing_at(record, name):
 TESTS = tuple(f"t.py::test_{i}" for i in range(6))
 
 
-def sid(name, stage_name="target_suite", kind="test"):
-    """The id `section` gives a section called `name`."""
-    return (stage_name, kind, name, 0)
-
-
 def target_suite(running, failed=()):
     """A target suite left open: a passed setup, then the six TESTS.
 
@@ -176,10 +170,6 @@ def building(tasks):
     return live("build", build=stage("build", "open", t(3, 10), lines=lines, progress=progress))
 
 
-LONG = run(host_suite=suite("host_suite", ["passed"] * 30, {3: ("boot one",), 7: ("boot two",)}))
-MANY = [run(record=f"2026{i:04d}") for i in range(40, 0, -1)]
-
-
 REAL_RUN = Path(__file__).parent / "fixtures" / "real_run"
 
 
@@ -199,7 +189,7 @@ def real_run():
 def drive(app, *steps, size=(100, 30), look=lambda app: None):
     """Run `app` headless through `steps`: a key name, or a function of the app called there.
 
-    After each step the app settles and every `Queue` read it started lands.
+    After each step the app settles and the `Queue` reads it started land, or a second passes.
 
     Returns:
         tuple: The screen's rows after the last step, and what `look(app)` saw then.
@@ -211,7 +201,9 @@ def drive(app, *steps, size=(100, 30), look=lambda app: None):
                 await pilot.pause()
                 step(app) if callable(step) else await pilot.press(step)
                 await pilot.pause()
-                while app.reading:
+                for _ in range(100):
+                    if not app.reading:
+                        break
                     await asyncio.sleep(0.01)
                 await pilot.pause()
             return app.screen._compositor.render_strips(), look(app)

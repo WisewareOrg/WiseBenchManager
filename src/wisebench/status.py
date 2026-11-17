@@ -10,7 +10,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -322,7 +321,13 @@ class Watch(App):
         self.directory, self.records = Path(directory), Records(directory)
         self.queue = Queue(Path(checkout), Path(directory))
         self.run_unit = read_run_unit()
-        self.runs, self.bench, self.now, self.run, self.stopped = [], None, None, None, ("", None)
+        self.runs, self.bench, self.now, self.current, self.stopped = (
+            [],
+            None,
+            None,
+            None,
+            ("", None),
+        )
         self.record = self.pattern = self.previewed = self.asked = self.log_of = None
         self.pending, self.back, self.folds = "", "run", {}
         self.entries, self.queue_rows, self.read_at, self.reading = [], [], None, set()
@@ -365,7 +370,7 @@ class Watch(App):
             yield Static(id="keys")
         yield Static(id="message")
         with Horizontal(id="commandrow"):
-            yield Input(id="command")
+            yield Input(id="command", select_on_focus=False)
             yield Static(line(("Enter queue it  Esc cancel", DIM)), id="runhint")
 
     def on_mount(self):
@@ -385,7 +390,7 @@ class Watch(App):
             with contextlib.suppress(OSError):
                 self.stopped = view.disabled((self.directory / "DISABLED").read_text())
         self.now = datetime.now(UTC)
-        due = self.read_at is None or time.monotonic() - self.read_at >= 30
+        due = self.read_at is None or (self.now - self.read_at).total_seconds() >= 30
         if self.shown() == "queue" and due:
             self.read_queue()
         self.show()
@@ -401,9 +406,13 @@ class Watch(App):
     def show(self):
         """Show the disk as last read: the tab line, the view showing, and the status bar."""
         runs, now, shown = self.runs, self.now, self.shown()
-        self.run = next((r for r in runs if r.record == self.record), runs[0] if runs else None)
-        past = self.run is not None and self.run is not runs[0]
-        labels = (f" 1 Run  {self.run.record} " if past else " 1 Run ", " 2 Queue ", " 3 History ")
+        self.current = next((r for r in runs if r.record == self.record), runs[0] if runs else None)
+        past = self.current is not None and self.current is not runs[0]
+        labels = (
+            f" 1 Run  {self.current.record} " if past else " 1 Run ",
+            " 2 Queue ",
+            " 3 History ",
+        )
         tabs = line(("bench  ", None, True))
         for label, name in zip(labels, VIEWS, strict=True):
             tab = line((label, GROUND if name == shown else DIM))
@@ -418,7 +427,9 @@ class Watch(App):
             table = self.query_one("#queuerows", Rows)
             draw = Lines([row[0] for row in rows], lambda i: view.table_row(view.QUEUE, rows[i][3]))
             table.show(
-                draw, table.cursor, [view.table_row(view.QUEUE, [(h, DIM) for h, _ in view.QUEUE])]
+                draw,
+                table.cursor or 0,
+                [view.table_row(view.QUEUE, [(h, DIM) for h, _ in view.QUEUE])],
             )
             box = self.query_one("#preview")
             ref = view.typed_ref(self.query_one("#command", Input).value)
@@ -431,7 +442,14 @@ class Watch(App):
             live = self.bench.live
 
             def draw(i):
-                """A run's History row, drawn as it scrolls into view."""
+                """Draw a run's History row as it scrolls into view.
+
+                Args:
+                    i (int): The run's row.
+
+                Returns:
+                    rich.text.Text: The row.
+                """
                 return view.table_row(
                     view.HISTORY, view.history_cells(runs[i], i == 0 and live, now)
                 )
@@ -447,11 +465,12 @@ class Watch(App):
 
     def show_run(self):
         """Show the Run view: the header, the stage list, and the pane of the stage shown."""
-        run, bench, now = self.run, self.bench, self.now
+        run, bench, now = self.current, self.bench, self.now
         title, pane = self.query_one("#title"), self.query_one("#pane")
         pane.display = run is not None
         if run is None:
-            return title.update(line((f"0 records in {os.path.relpath(self.directory)}/", DIM)))
+            title.update(line((f"0 records in {os.path.relpath(self.directory)}/", DIM)))
+            return
         newest = run is self.runs[0]
         live = bench.live and newest
         title.update(view.run_header(run, newest, bench), layout=False)
@@ -537,7 +556,7 @@ class Watch(App):
 
     def read_queue(self):
         """Read `Queue.entries` away from the screen."""
-        self.read_at = time.monotonic()
+        self.read_at = self.now
         self.background("entries", self.queue.entries)
 
     def ask_preview(self):
@@ -584,11 +603,12 @@ class Watch(App):
                 self.pending = ""
                 if pair in CHORDS:
                     await self.run_action(CHORDS[pair])
-                return self.show_state()
-            starts = any(c.startswith(pair) for c in CHORDS if c != pair)
-            if not self.pending and starts and (pair != "d" or self.shown() == "queue"):
-                self.pending = pair
-                return self.show_state()
+                self.show_state()
+                return
+            if any(len(c) == 2 and c[0] == pair for c in CHORDS):
+                self.pending = pair if pair != "d" or self.shown() == "queue" else ""
+                self.show_state()
+                return
         await super().on_event(event)
 
     def change(self, call, done):
@@ -616,11 +636,13 @@ class Watch(App):
             return
         hand = self.queue_rows[cursor][1]
         if hand is None:
-            return self.say("only hand-queued runs can be removed")
+            self.say("only hand-queued runs can be removed")
+            return
         try:
             removed = self.queue.remove(hand)
         except Exception as exc:
-            return self.say(str(exc))
+            self.say(str(exc))
+            return
         self.say(f"removed queued run {hand}" if removed else f"no queued run {hand}")
         self.entries = [e for e in self.entries if not (e["kind"] == "test" and e["id"] == hand)]
         self.read_queue()
@@ -633,7 +655,9 @@ class Watch(App):
             event (textual.widgets.Input.Changed): The change.
         """
         if not event.value:
-            return self.action_escape()
+            if self.query_one("#commandrow").display:
+                self.action_escape()
+            return
         if event.value == ":run ":
             self.action_show("queue")
         self.query_one("#runhint").display = event.value.startswith(":run ")
@@ -711,8 +735,8 @@ class Watch(App):
         Args:
             direction (int): 1 older, -1 newer.
         """
-        if self.shown() == "run" and self.run is not None:
-            index = self.runs.index(self.run) + direction
+        if self.shown() == "run" and self.current is not None:
+            index = self.runs.index(self.current) + direction
             if 0 <= index < len(self.runs):
                 self.action_open(None if index == 0 else self.runs[index].record)
 
@@ -728,9 +752,9 @@ class Watch(App):
                 rows.key, rows.cursor = None, 0
                 self.read_queue()
             if name == "history":
-                self.query_one("#historyrows", Rows).key = self.run and self.run.record
+                self.query_one("#historyrows", Rows).key = self.current and self.current.record
             self.query_one("#views", ContentSwitcher).current = name
-        if name in VIEWS and not isinstance(self.focused, Input):
+        if name in VIEWS and not self.query_one("#commandrow").display:
             self.query_one("#stages" if name == "run" else f"#{name}rows").focus()
         self.show()
 
@@ -745,10 +769,9 @@ class Watch(App):
 
     def action_help(self):
         """Show the keymap, or leave it for the view it was opened from."""
-        if self.shown() == "helpview":
-            return self.action_show(self.back)
-        self.back = self.shown()
-        self.action_show("helpview")
+        if self.shown() != "helpview":
+            self.back = self.shown()
+        self.action_show("helpview" if self.shown() != "helpview" else self.back)
 
     def action_command(self, text):
         """Open the command line.
