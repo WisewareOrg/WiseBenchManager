@@ -45,14 +45,15 @@ class Config:
     run_unit: str | None = None
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path, settings):
         """Read and parse the layer's `bench.toml` and the bench's own settings file.
 
         `[hooks]` and `[tests]` come from the layer's file; `[github]` and `[run]` come only from
-        `settings_path()`, and a missing settings file leaves them None.
+        the settings file, and a missing settings file leaves them None.
 
         Args:
             path (pathlib.Path): Path to `bench.toml` in the checkout.
+            settings (pathlib.Path): The bench's own settings file; see `settings_path()`.
 
         Returns:
             Config: The parsed configuration.
@@ -65,11 +66,11 @@ class Config:
         with open(path, "rb") as f:
             raw = tomllib.load(f)
         try:
-            with open(settings_path(), "rb") as f:
-                settings = tomllib.load(f)
+            with open(settings, "rb") as f:
+                bench = tomllib.load(f)
         except FileNotFoundError:
-            settings = {}
-        github = settings.get("github", {})
+            bench = {}
+        github = bench.get("github", {})
         return cls(
             hooks=raw["hooks"],
             host_suite=raw["tests"]["host_suite"],
@@ -78,5 +79,5 @@ class Config:
             github_app_id=github.get("app_id"),
             github_private_key=github.get("private_key"),
             github_check=github.get("check"),
-            run_unit=settings.get("run", {}).get("unit"),
+            run_unit=bench.get("run", {}).get("unit"),
         )

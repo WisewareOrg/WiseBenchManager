@@ -11,7 +11,7 @@ from pathlib import Path
 
 from wisebench.bench_test import BenchFailure
 from wisebench.check import Check
-from wisebench.config import Config
+from wisebench.config import Config, settings_path
 
 _NETWORK_TIMEOUT = 30
 
@@ -20,8 +20,8 @@ class Queue:
     """Runs queued by hand, then the GitHub merge queue's entries, for one checkout.
 
     Hand entries live in the `queue` table of `<directory>/queue.db`; the merge queue is read
-    from GitHub's GraphQL API through `Check`, built from the `[github]` table of the checkout's
-    `bench.toml`. `entries()` defines the run order and `take()` claims its first entry.
+    from GitHub's GraphQL API through `Check`, built from the `[github]` table of the bench's own
+    settings file. `entries()` defines the run order and `take()` claims its first entry.
     """
 
     def __init__(self, checkout, directory):
@@ -29,7 +29,7 @@ class Queue:
 
         Args:
             checkout (pathlib.Path): The layer's clone `git fetch` and `git rev-parse` run in,
-                and whose `bench.toml` names the repository the merge queue is read from.
+                and whose `bench.toml` holds the hooks and suites.
             directory (pathlib.Path): The records directory `queue.db` sits in; created on first
                 use.
         """
@@ -205,8 +205,8 @@ class Queue:
             `sha` None while GitHub has not built it.
 
         Raises:
-            OSError: `<checkout>/bench.toml` could not be read.
-            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+            OSError: A configuration file could not be read.
+            ValueError: The settings file has no complete `[github]` table, or the repository has no
                 merge queue on `main`.
             github.GithubException: PyGithub's own call failed.
             jwt.exceptions.InvalidKeyError: The App's private key is malformed.
@@ -218,7 +218,7 @@ class Queue:
             {"kind": "test", "id": id_, "added": added, **json.loads(entry)}
             for id_, added, entry in rows
         ]
-        config = Config.load(self.checkout / "bench.toml")
+        config = Config.load(self.checkout / "bench.toml", settings_path())
         check = Check(
             config.github_repo,
             config.github_app_id,
@@ -255,8 +255,8 @@ class Queue:
 
         Raises:
             BenchFailure: `git fetch` failed or timed out.
-            OSError: `<checkout>/bench.toml` could not be read.
-            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+            OSError: A configuration file could not be read.
+            ValueError: The settings file has no complete `[github]` table, or the repository has no
                 merge queue on `main`.
             github.GithubException: PyGithub's own call failed.
             jwt.exceptions.InvalidKeyError: The App's private key is malformed.

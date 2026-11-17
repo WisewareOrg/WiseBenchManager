@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from wisebench.config import Config
+from wisebench.config import Config, settings_path
 from wisebench.plugin import (
     _TIMESTAMP,
     BENCH_CANDIDATE_OPTION,
@@ -106,7 +106,7 @@ class BenchTest:
                 self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}")
                 with self._stage(log, "checkout") as info:
                     commit = self._checkout_commit(log)
-                    config = Config.load(self.checkout / "bench.toml")
+                    config = Config.load(self.checkout / "bench.toml", settings_path())
                     info["sha"] = commit
                 env = {
                     **os.environ,

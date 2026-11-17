@@ -96,7 +96,7 @@ def main(argv=None):
 
     checkout, directory = locate()
     if args.command == "status":
-        return status.watch(directory)
+        return status.watch(checkout, directory)
 
     if args.command == "test":
         try:
@@ -134,11 +134,8 @@ def main(argv=None):
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
         return 2
 
-    if not settings_path().is_file():
-        print(f"BENCH ERROR: {settings_path()} is missing", file=sys.stderr)
-        return 2
     try:
-        config = Config.load(checkout / "bench.toml")
+        config = Config.load(checkout / "bench.toml", settings_path())
         bench_run = BenchRun(checkout, config, directory)
     except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)

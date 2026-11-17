@@ -20,7 +20,6 @@ from queue import SimpleQueue
 
 from wisebench import screen, view
 from wisebench.bench_state import enable, read_bench, read_run_unit, stop_timer
-from wisebench.clone import locate
 from wisebench.queue import Queue
 from wisebench.records import Records
 
@@ -44,17 +43,18 @@ _KEYS = {curses.KEY_ENTER: "\n", curses.KEY_BACKSPACE: "\x7f", curses.KEY_BTAB: 
 _QUEUE_REFRESH = timedelta(seconds=30)
 
 
-def watch(directory):
+def watch(checkout, directory):
     """Run the curses view of the records and the queue until the user quits.
 
     Args:
+        checkout (pathlib.Path): The bench's layer checkout.
         directory (pathlib.Path): The records directory.
 
     Returns:
         int: 0 on quit or Ctrl-C, 2 when curses cannot start (not a terminal).
     """
     try:
-        return curses.wrapper(_loop, Path(directory))
+        return curses.wrapper(_loop, Path(checkout), Path(directory))
     except KeyboardInterrupt:
         return 0
     except curses.error as exc:
@@ -181,7 +181,7 @@ def _perform(queue, reads, state, directory, run_unit):
         reads.read_at = None
     if state.disable_request or state.enable_request:
         if run_unit is None:
-            state.message = "no [run] unit in bench.toml"
+            state.message = "no [run] unit in the bench's settings file"
         elif state.disable_request:
             state.message = stop_timer(run_unit) or "bench disabled"
         else:
@@ -189,11 +189,12 @@ def _perform(queue, reads, state, directory, run_unit):
         state.disable_request = state.enable_request = False
 
 
-def _loop(window, directory, run=_background):
+def _loop(window, checkout, directory, run=_background):
     """Draw a frame once a second and on every key; 0 on a quit key.
 
     Args:
         window: The curses window.
+        checkout (pathlib.Path): The bench's layer checkout.
         directory (pathlib.Path): The records directory.
         run (Callable): Runs a function of no arguments away from the draw path; tests pass a
             function that calls it at once.
@@ -202,8 +203,7 @@ def _loop(window, directory, run=_background):
     attributes = _attributes()
     window.bkgd(" ", attributes(screen.TEXT, None, False))
     records = Records(directory)
-    checkout, _ = locate()
-    run_unit = read_run_unit(checkout)
+    run_unit = read_run_unit()
     state = view.State()
     shown_directory = os.path.relpath(directory)
     queue, results, reads = Queue(checkout, directory), SimpleQueue(), _Reads()

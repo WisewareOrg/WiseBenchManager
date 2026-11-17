@@ -43,7 +43,7 @@ class Check:
 
         Raises:
             ValueError: `repo`, `app_id`, `private_key` or `check` is `None` (the `[github]`
-                table was absent from `bench.toml`), or `repo` is not exactly one
+                table was absent from the settings file), or `repo` is not exactly one
                 "/"-separated owner and name.
             OSError: `private_key` could not be read.
             AssertionError: `private_key`'s contents are empty.
