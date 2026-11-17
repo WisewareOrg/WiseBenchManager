@@ -21,7 +21,6 @@ from textual.app import App
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.geometry import Region, Size, Spacing
-from textual.message import Message
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
 from textual.theme import Theme
@@ -58,11 +57,12 @@ KEYS = {
     "right_square_bracket": "step(-1)",
     "n": "find(1)",
     "N": "find(-1)",
-    "j": "go('down')",
-    "k": "go('up')",
-    "G": "go('end')",
-    "ctrl+d": "go('pagedown')",
-    "ctrl+u": "go('pageup')",
+    "j,down": "go('down')",
+    "k,up": "go('up')",
+    "G,end": "go('end')",
+    "home": "go('home')",
+    "ctrl+d,pagedown": "go('pagedown')",
+    "ctrl+u,pageup": "go('pageup')",
     "enter": "enter",
     "escape": "escape",
 }
@@ -180,26 +180,6 @@ class Rows(ScrollView, can_focus=True):
         **kwargs: Passed to `ScrollView`.
     """
 
-    BINDINGS = [
-        Binding(key, f"go('{key}')") for key in ("down", "up", "pagedown", "pageup", "home", "end")
-    ]
-
-    class Moved(Message):
-        """The user moved a list's cursor.
-
-        Args:
-            rows (Rows): The list.
-        """
-
-        def __init__(self, rows):
-            """Name the list moved.
-
-            Args:
-                rows (Rows): The list.
-            """
-            super().__init__()
-            self.rows = rows
-
     def __init__(self, ground=SELECTION, blur_hides=False, **kwargs):
         """An empty list.
 
@@ -245,7 +225,7 @@ class Rows(ScrollView, can_focus=True):
             scroll = self.scroll_to_region
             self.call_after_refresh(scroll, region, spacing=head, animate=False, x_axis=False)
 
-    def action_go(self, where):
+    def move(self, where):
         """Move the cursor as the user asked and keep it on that row; `end` keeps it on the last.
 
         From no cursor, `down` goes to the first row and `up` to the last.
@@ -261,7 +241,6 @@ class Rows(ScrollView, can_focus=True):
         moves |= {"down": 0 if at is None else at + 1, "up": last if at is None else at - 1}
         self.place(moves[where])
         self.key = TAIL if where == "end" else self.rows.key(self.cursor)
-        self.post_message(self.Moved(self))
 
     def render_line(self, y):
         """Draw a screen row: a head line, or the row scrolled to it, on the cursor's ground.
@@ -283,14 +262,6 @@ class Rows(ScrollView, can_focus=True):
         if index == self.cursor and (self.has_focus or not self.blur_hides):
             style += Style(bgcolor=self.ground)
         return self.drawn[index].apply_style(style).extend_cell_length(width, style).crop(0, width)
-
-    def on_focus(self):
-        """Draw the cursor, which a log shows only while it has focus."""
-        self.refresh()
-
-    def on_blur(self):
-        """Draw the log without its cursor."""
-        self.refresh()
 
 
 class Watch(App):
@@ -694,23 +665,16 @@ class Watch(App):
             self.action_find(1)
         self.show()
 
-    def on_rows_moved(self, event):
-        """Show the stage the user moved to in the pane.
-
-        Args:
-            event (Rows.Moved): The list moved.
-        """
-        if event.rows.id == "stages":
-            self.show()
-
     def action_go(self, where):
-        """Move the cursor of the list with focus.
+        """Move the cursor of the list with focus; a move in the stage list shows that stage.
 
         Args:
-            where (str): As `Rows.action_go` takes it.
+            where (str): As `Rows.move` takes it.
         """
         if isinstance(self.focused, Rows):
-            self.focused.action_go(where)
+            self.focused.move(where)
+            if self.focused.id == "stages":
+                self.show()
 
     def action_enter(self):
         """Enter: from the stage list into its log, or from History to its run in Run."""

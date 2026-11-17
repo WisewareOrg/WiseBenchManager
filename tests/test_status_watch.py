@@ -281,8 +281,11 @@ def test_q_colon_q_and_ctrl_c_quit_with_0(tmp_path, disk, keys):
         ([run()], IDLE, ["2", "j"], "by hand", (view.BLUE, view.GROUND)),
         ([run(build=plain("build", 3))], IDLE, [*"jjj", "enter"], "build line 2",
          (view.LOG, view.SELECTION)),
+        ([run(build=plain("build", 3))], IDLE, [*"jjj", "enter", "escape"], "build line 2",
+         (view.LOG, view.GROUND)),
     ],
-    ids=["failed red", "running amber", "passed green", "by hand blue", "selection"],
+    ids=["failed red", "running amber", "passed green", "by hand blue", "selection",
+         "no selection in a log without focus"],
 )  # fmt: skip
 def test_each_meaning_shows_in_its_colour(tmp_path, disk, queue, runs, bench, keys, word, expected):
     disk.runs, disk.bench = runs, bench
