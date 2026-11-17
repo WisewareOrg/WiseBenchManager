@@ -19,7 +19,7 @@ from helpers import (
     write_lg_env,
     write_suite,
 )
-from status_helpers import mark, real_run, rep
+from status_helpers import drive, mark, real_run, rep, text, watching
 
 from wisebench import bench_state, bench_test, runlog
 from wisebench.lock import Lock
@@ -633,7 +633,7 @@ def snapshot(root):
 
 @pytest.mark.skipif(ROOT, reason="root ignores read-only modes")
 def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_reads_and_writes(
-    tmp_path, monkeypatch, systemctl, bench_clone, drive
+    tmp_path, monkeypatch, systemctl, bench_clone
 ):
     """The watch app over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes
     and mtimes unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the
@@ -698,11 +698,16 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     paths = [p for p in [tmp_path, *tmp_path.rglob("*")]]
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
+    app, _ = watching(tmp_path)
+
+    async def scenario(pilot):
+        await pilot.press("2", *":run feature-c", "enter", "d", "d")
+        shown = text(app)
+        await pilot.press("q")
+        return shown
+
     try:
-        watch = drive()
-        watch.press("2", *":run feature-c", "enter", "d", "d")
-        text = watch.text()
-        watch.press("q")
+        shown = drive(app, scenario)
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -715,8 +720,8 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
         systemctl.calls
     )
     assert {"entries", "add", "remove"} <= set(calls) <= {"entries", "preview", "add", "remove"}
-    assert watch.app.return_code == 0
-    assert "feature-a" in text
+    assert app.return_code == 0
+    assert "feature-a" in shown
 
 
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")

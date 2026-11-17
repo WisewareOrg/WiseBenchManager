@@ -12,6 +12,7 @@ from status_helpers import (
     OLDEST,
     STAMP,
     building,
+    colours,
     failing_at,
     live,
     mark,
@@ -23,7 +24,7 @@ from status_helpers import (
     t,
 )
 
-from wisebench import runlog
+from wisebench import runlog, screen
 
 HAND = run(record="20261107T030715Z", kind="test", ref="feature/x", pr=None)
 ERRORED = run(OLDEST, states=["passed", "error"] + ["not-started"] * 5, result="error")
@@ -181,7 +182,7 @@ def test_a_stage_left_open_in_a_dead_run_reads_a_question_mark_and_a_dash_for_to
     assert re.search(rf"\? build +{lc(3, 10)} +—", show([run(states=states, result=None)], IDLE))
 
 
-DIRTY = "x\x1b[0m\x07y▶é\tz"
+DIRTY = "x\x1b[0m\x07y\x9b31mz"
 SOURCES = {
     "a log line": (
         [live("build", build=stage("build", "open", t(3, 10), lines=[DIRTY]))],
@@ -189,21 +190,15 @@ SOURCES = {
         {},
     ),
     "a merge-queue title": ([run()], ["2"], {"queue": [{**MERGE_ENTRY, "title": DIRTY}]}),
-    "a preview's subject": (
-        [run()],
-        [*":run feature-c"],
-        {"preview": {**CLEAN, "subject": DIRTY}},
-    ),
+    "a message carrying an exception's text": ([run()], ["2"], {"queue": RuntimeError(DIRTY)}),
 }
 
 
 @pytest.mark.parametrize(("runs", "keys", "read"), SOURCES.values(), ids=SOURCES)
-def test_control_characters_show_as_carets_and_a_tab_as_spaces_and_other_text_unchanged(
-    show, runs, keys, read
-):
+def test_no_esc_bel_or_8_bit_csi_from_the_text_shown_reaches_the_terminal(show, runs, keys, read):
     text = show(runs, LIVE, *keys, size=(140, 24), **read)
-    assert re.search(r"x\^\[\[0m\^Gy▶é +z", text)
-    assert not {"\x1b", "\x07", "\t"} & set(text)
+    assert re.search(r"x.*0m.*y.*31mz", text)
+    assert not {"\x1b", "\x07", "\x9b"} & set(text)
 
 
 def test_a_failed_tests_crash_line_and_traceback_lines_are_drawn_under_its_output(show):
@@ -331,3 +326,38 @@ def test_a_pending_key_is_drawn_in_the_status_bar(show, keys, pending):
 
 def test_no_pending_text_is_drawn_when_no_key_waits(show):
     assert re.search(r"timer on *\n", show([run()], IDLE, "2"))
+
+
+PALETTE = {
+    screen.GROUND,
+    screen.TEXT,
+    screen.DIM,
+    screen.LOG,
+    screen.RULE,
+    screen.BRIGHT,
+    screen.GREEN,
+    screen.AMBER,
+    screen.RED,
+    screen.BLUE,
+    screen.RUNNING_TINT,
+    screen.FAILED_TINT,
+    screen.SELECTION,
+}
+SCREENS = {
+    "a suite, its log focused": ([running_test(2, failed=(1,))], ["enter"], (100, 30)),
+    "a live build": ([building(3)], [], (100, 30)),
+    "the Queue with a preview": ([live("build")], [*":run feature-c"], (100, 30)),
+    "History": (HISTORY, ["3"], (100, 30)),
+    "the command line open": ([run()], [":"], (100, 30)),
+    "Help": ([run()], ["?"], (100, 30)),
+    ":enable's question": ([run()], [*":enable", "enter"], (100, 30)),
+    "terminal too small": ([run()], [], (60, 20)),
+}
+
+
+@pytest.mark.parametrize(("runs", "keys", "size"), SCREENS.values(), ids=SCREENS)
+def test_every_colour_drawn_is_one_of_the_palettes(show, runs, keys, size):
+    drawn = show(
+        runs, LIVE, *keys, queue=[HAND_ENTRY, MERGE_ENTRY], preview=CLEAN, size=size, look=colours
+    )
+    assert drawn <= PALETTE

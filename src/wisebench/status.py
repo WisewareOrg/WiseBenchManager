@@ -387,7 +387,7 @@ class Watch(App):
             self.pop_screen()
         if opener == "/" and not (self.tab == "run" and self._q("#log").nodes):
             return
-        self._before = self.focused
+        self._before = self.tab, self.focused
         prompt = self._q("#prompt", Input)
         with self.prevent(Input.Changed):
             prompt.value = opener
@@ -399,8 +399,9 @@ class Watch(App):
     def _close_prompt(self):
         """Close the command line and give the focus back."""
         self._q("#prompt").display = False
-        if self._before is not None and self._before.display:
-            self._before.focus()
+        tab, widget = self._before
+        if tab == self.tab and widget is not None and widget.display:
+            widget.focus()
         else:
             self._focus_tab()
 
@@ -519,7 +520,7 @@ class Watch(App):
 
     def _fold(self, op, log):
         """`za` the cursor's section, landing on its header; `zR` opens all, `zM` folds all."""
-        log.chosen, log.follow = True, False
+        log.chosen = True
         if op != "a":
             for section in self.frame.stage.sections:
                 self._folds[section.id] = op == "R"
@@ -539,7 +540,7 @@ class Watch(App):
             return
         if row.kind == "body":
             self._folds[row.section.id] = True
-        log.chosen, log.follow = True, False
+        log.chosen = True
         log.focus()
         self._show()
         log.land(row.anchor)

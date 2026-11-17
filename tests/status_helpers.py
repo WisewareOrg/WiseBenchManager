@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from helpers import clone_root
 from rich.console import Console
 
 from wisebench import bench_state, runlog, status
@@ -189,75 +190,75 @@ def immediately(work):
     work()
 
 
-class Driver:
-    """A `status.Watch` run headless on a loop of its own, driven from a synchronous test.
-
-    The app runs only while a call here runs it, so what a test reads is exactly what its keys
-    and refreshes made. `now` is the clock the app reads: `tick` is the one-second refresh with
-    the clock held, `wait` the refresh after the clock moves on.
+class Clock:
+    """The time the watch app reads; a test moves `now` on.
 
     Args:
-        checkout (pathlib.Path): The bench's layer checkout.
-        directory (pathlib.Path): The records directory.
-        run (Callable): Runs the app's background work; at once by default.
-        now (datetime): The clock's first reading.
-        size (tuple[int, int]): The terminal's columns and rows.
+        now (datetime): The first reading.
     """
 
-    def __init__(self, checkout, directory, run=immediately, now=NOW, size=(80, 24)):
+    def __init__(self, now=NOW):
         self.now = now
-        self.app = status.Watch(checkout, directory, run=run, clock=lambda: self.now)
-        self._loop = asyncio.new_event_loop()
-        self._steps = asyncio.Queue()
-        self._session = self._loop.create_task(self._serve(size))
-        self._do(lambda pilot: pilot.pause())
 
-    async def _serve(self, size):
-        """Run the app and each step handed over, in one task, until a None step."""
-        async with self.app.run_test(size=size) as pilot:
-            while (step := await self._steps.get())[0] is not None:
-                call, done = step
-                try:
-                    done.set_result(await call(pilot))
-                    await pilot.pause()
-                except Exception as exc:
-                    done.set_exception(exc)
+    def __call__(self):
+        return self.now
 
-    def _do(self, call):
-        """Run the coroutine `call(pilot)` inside the app's session and return its result."""
-        done = self._loop.create_future()
-        self._steps.put_nowait((call, done))
-        return self._loop.run_until_complete(done)
 
-    def settle(self):
-        """Let the app take every message already posted."""
-        self._do(lambda pilot: pilot.pause())
+def watching(tmp_path, run=immediately, now=NOW):
+    """A watch app over the fake clone's checkout and `tmp_path/records`, and the clock it reads.
 
-    def press(self, *keys):
-        """Press each key, by Textual's name or as the character it types."""
-        self._do(lambda pilot: pilot.press(*keys))
+    Args:
+        tmp_path (pathlib.Path): The test's directory, holding the fake clone.
+        run (Callable): Runs the app's background work; at once by default.
+        now (datetime): The clock's first reading.
 
-    def tick(self):
-        """The refresh, at the clock's time."""
-        self._do(lambda pilot: pilot.pause() if self.app.tick() is None else None)
+    Returns:
+        tuple[status.Watch, Clock]: The app, not yet running, and its clock.
+    """
+    directory = tmp_path / "records"
+    directory.mkdir(exist_ok=True)
+    clock = Clock(now)
+    return status.Watch(clone_root(tmp_path) / "checkout", directory, run=run, clock=clock), clock
 
-    def wait(self, seconds):
-        """Move the clock on by `seconds`, then refresh."""
-        self.now += timedelta(seconds=seconds)
-        self.tick()
 
-    def text(self):
-        """The screen's text, a line per row."""
-        width, height = self.app.size
-        console = Console(width=width, height=height, file=io.StringIO(), record=True)
-        console.print(self.app.screen._compositor.render_update(full=True))
-        return console.export_text(styles=False)
+def drive(app, scenario, size=(80, 24)):
+    """Run the coroutine `scenario(pilot)` against `app` headless; return what it returns."""
 
-    def close(self):
-        """Stop the app and its loop."""
-        self._steps.put_nowait((None, None))
-        self._loop.run_until_complete(self._session)
-        self._loop.close()
+    async def session():
+        async with app.run_test(size=size) as pilot:
+            return await scenario(pilot)
+
+    return asyncio.run(session())
+
+
+async def tick(app, pilot, clock=None, seconds=0):
+    """The one-second refresh, after moving `clock` on by `seconds`."""
+    if seconds:
+        clock.now += timedelta(seconds=seconds)
+    app.tick()
+    await pilot.pause()
+
+
+def text(app):
+    """The screen's text, a line per row."""
+    width, height = app.size
+    console = Console(width=width, height=height, file=io.StringIO(), record=True)
+    console.print(app.screen._compositor.render_update(full=True))
+    return console.export_text(styles=False)
+
+
+def colours(app):
+    """Every colour drawn on the screen as `#rrggbb`, None for the terminal's default.
+
+    A blank cell's foreground is never seen, so only its background counts.
+    """
+    drawn = set()
+    for line in app.screen._compositor.render_update(full=True).strips:
+        for segment in (segment for strip in line for segment in strip):
+            style = segment.style
+            seen = [style and style.bgcolor] + [style and style.color] * bool(segment.text.strip())
+            drawn.update(colour.get_truecolor().hex if colour else None for colour in seen)
+    return drawn
 
 
 REAL_RUN = Path(__file__).parent / "fixtures" / "real_run"

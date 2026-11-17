@@ -151,13 +151,16 @@ _HELP = (
         ],
     ),
 )
-_CONTROLS = {code: "^" + chr(code ^ 64) for code in [*range(32), 127]}
+_CONTROLS = {
+    c: f"^{chr(c ^ 64)}" if c < 128 else f"<{c:x}>" for c in [*range(32), *range(127, 160)]
+}
 
 
 def clean(line):
-    """`line` with tabs expanded to the next multiple of 8 and other controls as carets.
+    """`line` with tabs expanded and C0 and C1 controls shown as text.
 
-    A terminal never sees a control character from a log, a title or an exception's text.
+    Textual passes ESC and the 8-bit CSI through to the terminal, so a log line, a title or an
+    exception's text could otherwise drive it.
     """
     return line.expandtabs(8).translate(_CONTROLS)
 
@@ -267,8 +270,8 @@ class Table(DataTable):
         Binding("j", "cursor_down"),
         Binding("k", "cursor_up"),
         Binding("G", "scroll_bottom"),
-        Binding("ctrl+d", "half(1)"),
-        Binding("ctrl+u", "half(-1)"),
+        Binding("ctrl+d", "page_down"),
+        Binding("ctrl+u", "page_up"),
     ]
 
     def __init__(self, *columns, show_header=True, **kwargs):
@@ -285,10 +288,6 @@ class Table(DataTable):
     def on_mount(self):
         """Add the columns."""
         self.add_columns(*self._labels)
-
-    def action_half(self, direction):
-        """`^d` or `^u`: move half the table's height."""
-        self.move_cursor(row=self.cursor_row + direction * max(1, self.size.height // 2))
 
     def action_top(self):
         """`gg`: the first row."""
@@ -340,16 +339,16 @@ class Log(Tree):
 
     The cursor stays on its row as lines arrive and sections fold, falling back to its section's
     header when folded away. Until the user moves it, it lands where `view.default_anchor` says;
-    after `G` it follows the last row.
+    on the last row it follows the rows that arrive.
     """
 
     ICON_NODE, ICON_NODE_EXPANDED = "▸ ", "▾ "
     BINDINGS = [
         Binding("j", "move('cursor_down')"),
         Binding("k", "move('cursor_up')"),
-        Binding("G", "follow"),
-        Binding("ctrl+d", "half(1)"),
-        Binding("ctrl+u", "half(-1)"),
+        Binding("G", "move('scroll_end')"),
+        Binding("ctrl+d", "move('page_down')"),
+        Binding("ctrl+u", "move('page_up')"),
     ]
 
     def __init__(self, *args, **kwargs):
@@ -360,7 +359,6 @@ class Log(Tree):
         self.nodes = {}
         self.stage = None
         self.chosen = False
-        self.follow = False
 
     def render_label(self, node, base_style, style):
         """A row's label, keeping its own colours under the cursor's ground."""
@@ -368,19 +366,8 @@ class Log(Tree):
 
     def action_move(self, action):
         """A move the user made: the cursor stays where they put it."""
-        self.chosen, self.follow = True, False
+        self.chosen = True
         getattr(self, f"action_{action}")()
-
-    def action_half(self, direction):
-        """`^d` or `^u`: move half the log's height."""
-        self.chosen, self.follow = True, False
-        half = max(1, self.size.height // 2)
-        self.cursor_line = max(0, min(self.cursor_line + direction * half, self.last_line))
-
-    def action_follow(self):
-        """`G`: the last row, followed as rows arrive."""
-        self.follow = True
-        self.action_scroll_end()
 
     def action_top(self):
         """`gg`: the first row."""
@@ -412,6 +399,7 @@ class Log(Tree):
         if stage is None:
             return
         at = self.cursor_node.data.anchor if self.cursor_node and self.cursor_node.data else None
+        follow = self.chosen and self.cursor_line == self.last_line >= 0
         running = frame.live and stage.state == "open"
         first_section = None
         for row in view.rows(stage):
@@ -432,7 +420,7 @@ class Log(Tree):
                 where = {"before": first_section} if row.kind == "line" and first_section else {}
                 label = styled((row.text, LOG, False))
                 self.nodes[row.anchor] = parent.add_leaf(label, row, **where)
-        if self.follow:
+        if follow:
             self.action_scroll_end()
         elif self.chosen and at is not None:
             self.land(at)
