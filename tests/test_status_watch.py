@@ -115,11 +115,19 @@ def test_watch_returns_2_and_says_it_needs_a_terminal_when_not_on_one(
     assert capsys.readouterr().err == "BENCH ERROR: bench status --watch needs a terminal\n"
 
 
-@pytest.mark.parametrize("key", [b"q", b"\x03"], ids=["q", "ctrl-c"])
-def test_the_real_shell_on_a_pty_shows_the_first_screen_and_exits_0_with_the_mouse_left_off(
-    tmp_path, bench_clone, key
+TRUECOLOR_HINTS = ("COLORTERM", "WT_SESSION", "WT_PROFILE_ID", "ConEmuANSI", "ConEmuPID")
+
+
+@pytest.mark.parametrize(
+    ("key", "colorterm", "sgr"),
+    [(b"q", "truecolor", b"38;2;"), (b"\x03", None, b"38;5;")],
+    ids=["q, 24-bit", "ctrl-c, 256 colours"],
+)
+def test_the_real_shell_on_a_pty_shows_the_first_screen_in_its_colours_and_exits_0_mouse_off(
+    tmp_path, bench_clone, key, colorterm, sgr
 ):
-    """A real terminal: the first screen, `q` or Ctrl-C exit 0, and no mouse reporting turned on."""
+    """A real terminal: the first screen in the colours the terminal has, `q` or Ctrl-C exit 0,
+    and no mouse reporting turned on."""
     import pty
 
     rows, cols = 24, 80
@@ -132,6 +140,10 @@ def test_the_real_shell_on_a_pty_shows_the_first_screen_and_exits_0_with_the_mou
         try:
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
             os.environ["TERM"] = "xterm-256color"
+            for name in (*TRUECOLOR_HINTS, "TERM_PROGRAM", "FORCE_COLOR", "NO_COLOR"):
+                os.environ.pop(name, None)
+            if colorterm:
+                os.environ["COLORTERM"] = colorterm
             os.execv(sys.executable, [sys.executable, "-c", code])
         finally:
             os._exit(127)
@@ -173,6 +185,8 @@ def test_the_real_shell_on_a_pty_shows_the_first_screen_and_exits_0_with_the_mou
     assert b"1 Run" in output
     assert b"0 records" in output
     assert b"\x1b[?1000h" not in output
+    assert sgr in output
+    assert (b"38;2;" in output) is (sgr == b"38;2;")
 
 
 # -- the Queue tab through the shell -------------------------------------------------------

@@ -42,9 +42,9 @@ def watch(checkout, directory):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print(_NO_TERMINAL, file=sys.stderr)
         return 2
-    shell = Shell(checkout, directory)
     terminal = urwid.display.raw.Screen()
-    terminal.set_terminal_properties(colors=2**24)
+    screen.COLOURS = terminal.colors
+    shell = Shell(checkout, directory)
     loop = urwid.MainLoop(shell.widget, screen=terminal, handle_mouse=False)
     shell.start(loop)
     try:

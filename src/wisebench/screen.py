@@ -28,6 +28,9 @@ RUNNING_TINT = "#2a2614"
 FAILED_TINT = "#3a1d20"
 SELECTION = "#1f2a36"
 
+COLOURS = 2**24
+"""How many colours the terminal shows, as urwid detects it; urwid reduces each hex colour to it."""
+
 MIN_ROWS, MIN_COLS = 24, 80
 KEYS = {
     "j": Command.DOWN,
@@ -97,10 +100,15 @@ command_map.bind_readline()
 command_map.update(KEYS)
 
 
-@functools.cache
 def _attr(fg, bg=None, bold=False):
-    """`fg` on `bg` (None: the ground), bold if `bold`, in 24-bit colour."""
-    return urwid.AttrSpec(fg + ",bold" * bold, bg or GROUND, 2**24)
+    """`fg` on `bg` (None: the ground), bold if `bold`, in the terminal's `COLOURS`."""
+    return _spec(fg + ",bold" * bold, bg or GROUND, COLOURS)
+
+
+@functools.cache
+def _spec(fg, bg, colours):
+    """The urwid attribute for `fg` on `bg` in `colours` colours."""
+    return urwid.AttrSpec(fg, bg, colours)
 
 
 class MinimumSize(urwid.WidgetWrap):
@@ -110,8 +118,8 @@ class MinimumSize(urwid.WidgetWrap):
         """Render the wrapped widget at `size`, or the too-small text when `size` is below it."""
         cols, rows = size
         if cols < MIN_COLS or rows < MIN_ROWS:
-            small = urwid.Text("terminal too small", wrap="clip")
-            return urwid.Filler(small, "top").render(size, focus)
+            small = urwid.Filler(urwid.Text("terminal too small", wrap="clip"), "top")
+            return urwid.AttrMap(small, _attr(TEXT)).render(size, focus)
         return super().render(size, focus)
 
 
@@ -147,10 +155,10 @@ class Screen(urwid.WidgetWrap):
         self._run = urwid.WidgetPlaceholder(urwid.SolidFill(" "))
         self._queue_tab = urwid.WidgetPlaceholder(self._queue)
         self._tabs = urwid.Tabs(
-            [(self._run_label, self._run), (" 2 Queue ", self._queue_tab)]
-            + [(" 3 History ", self._history)],
-            attr_map=_attr(DIM),
-            selected_map=_attr(GROUND, TEXT),
+            [(self._run_label, self._run), ([(dim, " 2 Queue ")], self._queue_tab)]
+            + [([(dim, " 3 History ")], self._history)],
+            attr_map=_attr(RULE),
+            selected_map={dim: _attr(GROUND, TEXT), None: _attr(RULE)},
             underline=("─", "─"),
             dividechars=0,
         )
@@ -201,7 +209,7 @@ class Screen(urwid.WidgetWrap):
         if frame.tab in view.TABS:
             self._tabs.focus_position = view.TABS.index(frame.tab)
         record = "" if frame.run is None or frame.newest else f" {frame.run.record} "
-        self._run_label.set_text(f" 1 Run {record}")
+        self._run_label.set_text([(_attr(DIM), f" 1 Run {record}")])
         if frame.tab == "history":
             self._fill_history(frame)
         elif frame.tab == "queue":

@@ -24,8 +24,9 @@ from status_helpers import (
     suite,
     t,
 )
+from urwid.testing import render_runs, resolve_runs
 
-from wisebench import runlog, view
+from wisebench import runlog, screen, view
 
 pytestmark = pytest.mark.usefixtures("local_zone")
 
@@ -203,7 +204,7 @@ def test_a_stage_left_open_in_a_dead_run_reads_a_question_mark_and_a_dash_for_to
     assert re.search(rf"\? build +{lc(3, 10)} +—", text)
 
 
-DIRTY = "x\x1b[0m\x07y▶é\tz"
+DIRTY = "x\x1b[0m\x07y\x9b31mz▶é"
 SOURCES = {
     "a log line": lambda: frame(
         [live("build", build=stage("build", "open", t(3, 10), lines=[DIRTY]))], LIVE
@@ -216,10 +217,10 @@ SOURCES = {
 
 
 @pytest.mark.parametrize("source", SOURCES.values(), ids=SOURCES)
-def test_control_sequences_are_dropped_a_tab_shows_as_spaces_and_other_text_unchanged(source):
+def test_no_esc_bel_or_csi_from_drawn_text_reaches_the_screen(source):
     text = shown(source(), cols=120)
-    assert re.search(r"xy▶é +z", text)
-    assert not {"\x1b", "\x07", "\t"} & set(text)
+    assert "z▶é" in text
+    assert not {"\x1b", "\x07", "\x9b"} & set(text)
 
 
 def test_a_failed_tests_crash_line_and_traceback_lines_are_drawn_under_its_output():
@@ -364,3 +365,53 @@ def test_a_pending_key_is_drawn_in_the_status_bar_before_the_keys_box(tab, pendi
 
 def test_no_pending_text_is_drawn_when_no_key_waits():
     assert re.search(rf"timer \w+ +{lc(10, 7, 30)} +\? keys", shown(frame([run()], tab="queue")))
+
+
+CANVAS = {
+    screen.GROUND,
+    screen.TEXT,
+    screen.DIM,
+    screen.LOG,
+    screen.RULE,
+    screen.BRIGHT,
+    screen.GREEN,
+    screen.AMBER,
+    screen.RED,
+    screen.BLUE,
+    screen.RUNNING_TINT,
+    screen.FAILED_TINT,
+    screen.SELECTION,
+}
+SCREENS = {
+    "a live build": lambda: frame([building(3)], LIVE),
+    "a suite's log in focus": lambda: frame([running_test(2)], LIVE, focus="log"),
+    "a failed stage": lambda: frame([failing_at(OLDER, "bundle")], IDLE),
+    "the queue, a preview and the command line": lambda: frame(
+        [live("build")],
+        LIVE,
+        queue=[HAND_ENTRY, MERGE_ENTRY],
+        preview=("feature-c", CLEAN),
+        tab="queue",
+        prompt=":run feature-c",
+    ),
+    "history and a message": lambda: frame(HISTORY, DISABLED, tab="history", message="hi"),
+    "help": lambda: frame([run()], tab="help"),
+}
+
+
+def colours(attr):
+    """The foreground and background a screen draws `attr` with, as `#rrggbb` or `default`."""
+    rgb = attr.get_rgb_values()
+    return {
+        "default" if None in part else "#{:02x}{:02x}{:02x}".format(*part)
+        for part in (rgb[:3], rgb[3:])
+    }
+
+
+@pytest.mark.parametrize("size", [(80, 24), (79, 24)], ids=["80x24", "too small"])
+@pytest.mark.parametrize("make", SCREENS.values(), ids=SCREENS)
+def test_every_cell_is_drawn_in_the_canvas_colours(make, size):
+    drawn = screen.Screen(view.State())
+    drawn.update(make())
+    runs = resolve_runs(render_runs(drawn, size), [], colors=2**24)
+    assert set().union(*(colours(attr) for row in runs for attr, _ in row)) <= CANVAS

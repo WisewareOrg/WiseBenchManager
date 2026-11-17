@@ -599,6 +599,8 @@ def test_moving_onto_the_last_log_row_follows_the_tail():
     state = view.State(stage="host_suite", focus="log", cursor=host_rows()[28].anchor)
     press(state, [LONG], "j")
     assert state.cursor == view.TAIL
+    press(state, [LONG], "k")
+    assert state.cursor == host_rows()[28].anchor
 
 
 @pytest.mark.parametrize("keys", [ENTER, "j", "k", "G", "gg", HALF_DOWN, HALF_UP])
