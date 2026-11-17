@@ -14,9 +14,28 @@ import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import COLS, ROWS, FakeScreen, start_argv, stop_argv, terminal, write_bench_toml
+from helpers import (
+    COLS,
+    ROWS,
+    FakeScreen,
+    add_settings,
+    clone_root,
+    has_commit,
+    run_unit_settings,
+    source_repo,
+    start_argv,
+    stop_argv,
+    stub_merge_queue,
+    terminal,
+    write_bench_toml,
+)
 
 from wisebench import queue, screen, status
+
+
+def _checkout(tmp_path):
+    """The fake clone's layer checkout the `bench_clone` fixture makes under `tmp_path`."""
+    return clone_root(tmp_path) / "checkout"
 
 
 def test_watch_returns_0_on_ctrl_c(monkeypatch, tmp_path):
@@ -25,14 +44,14 @@ def test_watch_returns_0_on_ctrl_c(monkeypatch, tmp_path):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(curses, "wrapper", interrupted)
-    assert status.watch(tmp_path) == 0
+    assert status.watch(_checkout(tmp_path), tmp_path) == 0
 
 
 def test_watch_returns_2_and_names_the_error_when_curses_cannot_start(
     monkeypatch, tmp_path, capsys
 ):
     monkeypatch.delenv("TERM", raising=False)
-    assert status.watch(tmp_path) == 2
+    assert status.watch(_checkout(tmp_path), tmp_path) == 2
     assert "BENCH ERROR:" in capsys.readouterr().err
 
 
@@ -46,24 +65,24 @@ def test_a_write_into_the_bottom_right_cell_is_tolerated_and_one_on_another_row_
 ):
     terminal(monkeypatch, tmp_path, 0)
     corner = FakeScreen(keys=["q"])
-    assert status._loop(corner, tmp_path) == 0
+    assert status._loop(corner, _checkout(tmp_path), tmp_path) == 0
     assert corner.corner > 0
     with pytest.raises(curses.error):
-        status._loop(FakeScreen(keys=["q"], fail_on_row=0), tmp_path)
+        status._loop(FakeScreen(keys=["q"], fail_on_row=0), _checkout(tmp_path), tmp_path)
 
 
 def test_the_loop_redraws_after_the_one_second_timeout_and_returns_0_on_q(monkeypatch, tmp_path):
     terminal(monkeypatch, tmp_path, 0)
     fake = FakeScreen(keys=[curses.error("no input"), "q"])
 
-    assert status._loop(fake, tmp_path) == 0
+    assert status._loop(fake, _checkout(tmp_path), tmp_path) == 0
     assert fake.events == ["frame", "key", "frame", "key"]
 
 
 def test_256_colours_draw_each_canvas_colour_as_its_fixed_xterm_pair(monkeypatch, tmp_path):
     pairs, touched = terminal(monkeypatch, tmp_path, 256)
     fake = FakeScreen(keys=["q"])
-    status._loop(fake, tmp_path)
+    status._loop(fake, _checkout(tmp_path), tmp_path)
 
     assert pairs[(attribute(fake, "1 Run") >> 8) & 0xFF] == (232, 252)
     assert pairs[(attribute(fake, "IDLE") >> 8) & 0xFF] == (231, 237)
@@ -75,7 +94,7 @@ def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_ex
 ):
     pairs, touched = terminal(monkeypatch, tmp_path, 256, redefinable=True)
     fake = FakeScreen(keys=["q"])
-    status._loop(fake, tmp_path)
+    status._loop(fake, _checkout(tmp_path), tmp_path)
 
     expected = [
         (16, 48, 48, 48),
@@ -100,7 +119,7 @@ def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_ex
 def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkeypatch, tmp_path):
     terminal(monkeypatch, tmp_path, 8)
     fake = FakeScreen(keys=["q"])
-    status._loop(fake, tmp_path)
+    status._loop(fake, _checkout(tmp_path), tmp_path)
 
     assert attribute(fake, "1 Run") & curses.A_REVERSE
     assert attribute(fake, "IDLE") & curses.A_REVERSE
@@ -126,7 +145,7 @@ def test_a_surface_write_is_clipped_at_the_right_edge_and_dropped_past_it():
     assert fake.writes == [(0, COLS - 10, "x" * 10, 7)]
 
 
-def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_path):
+def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_path, bench_clone):
     """Real curses on a pty: the corner-cell behaviour the fake window imitates."""
     if (
         shutil.which("infocmp") is None
@@ -135,7 +154,10 @@ def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_pa
         pytest.skip("no xterm-256color terminfo entry")
     import pty
 
-    code = f"import sys; from wisebench import status; sys.exit(status.watch({str(tmp_path)!r}))"
+    code = (
+        "import sys; from wisebench import status; "
+        f"sys.exit(status.watch({str(bench_clone.checkout)!r}, {str(tmp_path)!r}))"
+    )
     pid, fd = pty.fork()
     if pid == 0:
         try:
@@ -242,13 +264,14 @@ def stub_queue(monkeypatch, clock=None, entries=None, preview=None, add=None, re
         record("entries")
         return entries() if entries else []
 
-    def show(self, ref):
+    def show(self, ref, source=None):
         record("preview", ref)
         if preview:
             return preview(ref)
         return {"sha": SHA, "subject": f"subject of {ref}", "clean": True}
 
-    def queue_up(self, *arguments):
+    def queue_up(self, ref, set_name, skip_build, pytest_args, source=None):
+        arguments = (ref, set_name, skip_build, pytest_args)
         record("add", *arguments)
         return add(*arguments) if add else (5, SHA, 1)
 
@@ -269,7 +292,7 @@ def watch_with(monkeypatch, tmp_path, keys):
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir(exist_ok=True)
-    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
     return fake
 
 
@@ -283,8 +306,8 @@ def last_frame(fake):
     return "\n".join(fake.frames[-1])
 
 
-def test_entering_the_queue_reads_it_once_through_a_queue_over_the_cwd_and_the_directory(
-    monkeypatch, tmp_path
+def test_entering_the_queue_reads_it_once_through_a_queue_over_the_clones_checkout(
+    monkeypatch, tmp_path, bench_clone
 ):
     owners = []
     calls = stub_queue(monkeypatch, entries=lambda: [HAND])
@@ -296,7 +319,7 @@ def test_entering_the_queue_reads_it_once_through_a_queue_over_the_cwd_and_the_d
     )
     fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
     assert calls == [("entries",)]
-    assert owners == [(tmp_path, tmp_path / "records")]
+    assert owners == [(bench_clone.checkout, tmp_path / "records")]
     assert "feature-a" in last_frame(fake)
 
 
@@ -382,7 +405,11 @@ def test_a_preview_of_a_ref_no_longer_typed_is_never_drawn(monkeypatch, tmp_path
     clock = Clock(monkeypatch)
     stub_queue(
         monkeypatch,
-        preview=lambda ref: {"sha": SHA, "subject": f"result for {ref}", "clean": True},
+        preview=lambda ref, source=None: {
+            "sha": SHA,
+            "subject": f"result for {ref}",
+            "clean": True,
+        },
     )
     settle = [clock.wait(1)] * 5
     fake_keys = ["2", TIMEOUT, *":run alpha", *settle]
@@ -399,7 +426,7 @@ def test_a_preview_of_a_ref_no_longer_typed_is_never_drawn(monkeypatch, tmp_path
     fake = FakeScreen(keys=fake_keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
     before = "\n".join("\n".join(frame) for frame in fake.frames[: seen[0]])
     after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] + 1 :])
     assert "result for alpha" in before
@@ -504,7 +531,7 @@ def test_at_most_one_preview_is_in_flight_and_the_newest_typed_ref_follows_its_r
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, run=held.append) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
     assert [call[1] for call in calls if call[0] == "preview"] == ["m", "main"]
 
 
@@ -518,7 +545,7 @@ def test_no_second_preview_is_asked_when_the_ref_typed_is_back_to_the_one_reques
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, run=held.append) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
     assert [call[1] for call in calls if call[0] == "preview"] == ["m"]
 
 
@@ -531,7 +558,7 @@ def test_one_entries_read_is_in_flight_at_a_time_however_long_it_takes(monkeypat
     keys = ["2", stall, stall, stall, release, stall, release, "q"]
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(FakeScreen(keys=keys), directory, run=held.append) == 0
+    assert status._loop(FakeScreen(keys=keys), _checkout(tmp_path), directory, run=held.append) == 0
     assert [call for call in calls if call[0] == "entries"] == [("entries",)] * 2
 
 
@@ -545,7 +572,7 @@ def test_a_failed_read_while_the_command_line_is_open_leaves_no_message_behind_a
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
     after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] :])
     assert "remote is down" not in after
 
@@ -577,7 +604,6 @@ def test_background_work_runs_in_order_on_one_thread_that_is_not_the_callers():
     assert len(set(threads)) == 1 and threading.get_ident() not in threads
 
 
-UNIT_TABLE = '\n[run]\nunit = "bench-run"\n'
 ASK = "Enable the bench?"
 
 
@@ -589,9 +615,9 @@ def bench_command(monkeypatch, tmp_path, keys, *, unit=True, disabled=True):
     directory = tmp_path / "records"
     directory.mkdir(exist_ok=True)
     if unit:
-        write_bench_toml(tmp_path)
-        with open(tmp_path / "bench.toml", "a") as f:
-            f.write(UNIT_TABLE)
+        checkout = clone_root(tmp_path) / "checkout"
+        write_bench_toml(checkout)
+        add_settings(run_unit_settings())
     if disabled:
         (directory / "DISABLED").write_text("2026-11-13T00:00:00+00:00\nboom\n")
     return watch_with(monkeypatch, tmp_path, keys), directory
@@ -651,9 +677,9 @@ def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_show
 ):
     stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(RuntimeError("remote is down")))
     held, release = held_work()
-    write_bench_toml(tmp_path)
-    with open(tmp_path / "bench.toml", "a") as f:
-        f.write(UNIT_TABLE)
+    checkout = clone_root(tmp_path) / "checkout"
+    write_bench_toml(checkout)
+    add_settings(run_unit_settings())
     terminal(monkeypatch, tmp_path, 0)
     seen = []
     keys = [
@@ -669,7 +695,7 @@ def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_show
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, run=held.append) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
     assert ASK in seen[0]
     assert "remote is down" not in seen[0]
     assert changes(systemctl) == []
@@ -691,7 +717,7 @@ def test_disable_with_no_run_unit_says_so_and_calls_nothing(monkeypatch, tmp_pat
     keys = [*":disable", "\n", TIMEOUT, "q"]
     fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
     assert systemctl.calls == []
-    assert "no [run] unit in bench.toml" in last_frame(fake)
+    assert "no [run] unit in the bench's settings file" in last_frame(fake)
     assert (directory / "DISABLED").exists()
 
 
@@ -701,7 +727,7 @@ def test_enable_with_no_run_unit_says_so_and_leaves_disabled_in_place(
     keys = [*":enable", "\n", "y", TIMEOUT, "q"]
     fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
     assert systemctl.calls == []
-    assert "no [run] unit in bench.toml" in last_frame(fake)
+    assert "no [run] unit in the bench's settings file" in last_frame(fake)
     assert (directory / "DISABLED").exists()
 
 
@@ -738,3 +764,62 @@ def test_enable_that_cannot_remove_disabled_shows_why_and_does_not_start(
     fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
     assert changes(systemctl) == []
     assert "cannot remove DISABLED:" in last_frame(fake)
+
+
+def watch_source(
+    monkeypatch, tmp_path, bench_clone, after_typing, dirty_checkout=False, typed_dir=None
+):
+    """Type `:run -C <src> HEAD` over a real `Queue`, then feed `after_typing` and a `q`.
+
+    Returns:
+        tuple: The source's tip commit, and one `(frame text, whether the checkout holds the
+        commit)` pair per snapshot key `after_typing` is given.
+    """
+    stub_merge_queue(monkeypatch, bench_clone.checkout)
+    sha = source_repo(tmp_path / "src")
+    if dirty_checkout:
+        (bench_clone.checkout / "tracked.txt").write_text("changed\n")
+    seen = []
+
+    def snap():
+        seen.append((last_frame(fake), has_commit(bench_clone.checkout, sha)))
+
+    terminal(monkeypatch, tmp_path, 0)
+    typed = [*f":run -C {typed_dir or tmp_path / 'src'} HEAD", TIMEOUT, TIMEOUT, snap]
+    fake = FakeScreen(keys=["2", TIMEOUT, *typed, *after_typing(snap), "q"])
+    directory = tmp_path / "records"
+    directory.mkdir(exist_ok=True)
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
+    return sha, seen
+
+
+def test_the_preview_of_a_directory_reports_the_state_of_the_checkout_not_of_the_directory(
+    monkeypatch, tmp_path, bench_clone
+):
+    """The run builds in the checkout, so its uncommitted change is the one to warn of."""
+    _, seen = watch_source(
+        monkeypatch, tmp_path, bench_clone, lambda snap: ["\x1b"], dirty_checkout=True
+    )
+    frame, _ = seen[0]
+    assert "uncommitted changes in the checkout" in frame
+    assert "clean tree" not in frame
+
+
+def test_run_with_a_home_relative_directory_previews_and_queues_its_commit(
+    monkeypatch, tmp_path, bench_clone
+):
+    """`~/src` is typed, HOME is `tmp_path`: the preview resolves in `src` and Enter queues it."""
+    sha, seen = watch_source(
+        monkeypatch,
+        tmp_path,
+        bench_clone,
+        lambda snap: ["\n", TIMEOUT, TIMEOUT, snap],
+        typed_dir="~/src",
+    )
+    (preview, fetched_by_preview), (queued, fetched) = seen
+    assert f'resolves to {sha[:7]} "unpushed work"' in preview
+    assert not fetched_by_preview
+    assert f"queued 1 {sha[:7]}" in queued
+    assert fetched
+    held = queue.Queue(bench_clone.checkout, tmp_path / "records").entries()
+    assert [(e["ref"], e["sha"]) for e in held] == [("HEAD", sha)]

@@ -7,10 +7,11 @@ import signal
 import sqlite3
 import subprocess
 from contextlib import closing
+from pathlib import Path
 
 from wisebench.bench_test import BenchFailure
 from wisebench.check import Check
-from wisebench.config import Config
+from wisebench.config import Config, settings_path
 
 _NETWORK_TIMEOUT = 30
 
@@ -19,8 +20,8 @@ class Queue:
     """Runs queued by hand, then the GitHub merge queue's entries, for one checkout.
 
     Hand entries live in the `queue` table of `<directory>/queue.db`; the merge queue is read
-    from GitHub's GraphQL API through `Check`, built from the `[github]` table of the checkout's
-    `bench.toml`. `entries()` defines the run order and `take()` claims its first entry.
+    from GitHub's GraphQL API through `Check`, built from the `[github]` table of the bench's own
+    settings file. `entries()` defines the run order and `take()` claims its first entry.
     """
 
     def __init__(self, checkout, directory):
@@ -28,7 +29,7 @@ class Queue:
 
         Args:
             checkout (pathlib.Path): The layer's clone `git fetch` and `git rev-parse` run in,
-                and whose `bench.toml` names the repository the merge queue is read from.
+                and whose `bench.toml` holds the hooks and suites.
             directory (pathlib.Path): The records directory `queue.db` sits in; created on first
                 use.
         """
@@ -51,14 +52,16 @@ class Queue:
         )
         return db
 
-    def _git(self, args, network=False):
-        """Run one git command in the checkout, silent and detached from the terminal.
+    def _git(self, args, network=False, cwd=None):
+        """Run one git command, silent and detached from the terminal.
 
         Args:
             args (list[str]): The command line after `git`.
-            network (bool): Whether the command reaches `origin`. A network call is bounded by
+            network (bool): Whether the command reaches another repository (`origin`, or the
+                directory `bench test -C` names). A network call is bounded by
                 `_NETWORK_TIMEOUT`; a timeout kills git and every process it started. Its failure
                 or timeout is raised as `BenchFailure("git <command>: <first stderr line>")`.
+            cwd (pathlib.Path | None): Where to run it; None runs it in the checkout.
 
         Returns:
             str: The command's standard output.
@@ -69,7 +72,7 @@ class Queue:
         """
         with subprocess.Popen(
             ["git", *args],
-            cwd=self.checkout,
+            cwd=cwd or self.checkout,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -92,56 +95,89 @@ class Queue:
             raise subprocess.CalledProcessError(process.returncode, ["git", *args], out, err)
         return out
 
-    def _resolve(self, ref):
+    @staticmethod
+    def _source_dir(source):
+        """The directory `source` names: `~` expanded, made absolute against the working directory.
+
+        Args:
+            source (str | None): The directory as typed, or None.
+
+        Returns:
+            pathlib.Path | None: The absolute directory; None when `source` is None.
+        """
+        if source is None:
+            return None
+        return Path(os.path.abspath(os.path.expanduser(source)))
+
+    def _resolve(self, ref, source=None):
         """Resolve `ref` to the commit sha it names.
 
         Args:
             ref (str): The git ref, as typed.
+            source (pathlib.Path | None): The directory to resolve in; None resolves in the
+                checkout.
 
         Returns:
             str: The commit sha.
 
         Raises:
-            subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
+            subprocess.CalledProcessError: `ref` does not resolve to a commit there.
         """
-        return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"]).strip()
+        return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=source).strip()
 
-    def preview(self, ref):
+    def preview(self, ref, source=None):
         """Describe what queueing `ref` would run, without queueing it.
 
         Args:
             ref (str): The git ref, as typed.
+            source (str | None): A directory to resolve `ref` in, as typed (`~` is expanded and a
+                relative path is taken against the working directory); nothing is fetched from
+                it. None resolves in the checkout.
 
         Returns:
             dict: `{sha, subject, clean}`: the commit `ref` resolves to, its subject line, and
-            whether the checkout has no uncommitted change to a tracked file (untracked files
-            are ignored).
+            whether the checkout, where the run builds, has no uncommitted change to a tracked
+            file (untracked files are ignored).
 
         Raises:
-            subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
+            subprocess.CalledProcessError: `ref` does not resolve to a commit there.
         """
-        sha = self._resolve(ref)
-        subject = self._git(["log", "-1", "--format=%s", sha]).strip()
+        directory = self._source_dir(source)
+        sha = self._resolve(ref, directory)
+        subject = self._git(["log", "-1", "--format=%s", sha], cwd=directory).strip()
         status = self._git(["--no-optional-locks", "status", "--porcelain", "--untracked-files=no"])
         return {"sha": sha, "subject": subject, "clean": not status.strip()}
 
-    def add(self, ref, set_name, skip_build, pytest_args):
+    def add(self, ref, set_name, skip_build, pytest_args, source=None):
         """Queue a run of `ref` by hand, pinned to the commit `ref` names now.
+
+        With `source`, `ref` resolves there and its commit is fetched into the checkout, writing
+        objects only: no ref and no `FETCH_HEAD`, so it cannot contend with `take()`'s own fetch.
 
         Args:
             ref (str): The git ref to run, as typed.
             set_name (str | None): The replay set name, or None.
             skip_build (bool): Whether the run skips `build`, `bundle` and the host suite.
             pytest_args (list[str]): Arguments for the target suite.
+            source (str | None): A directory to resolve `ref` in, as typed (`~` is expanded and a
+                relative path is taken against the working directory); None resolves in the
+                checkout.
 
         Returns:
             tuple[int, str, int]: The new entry's id, the commit sha `ref` resolved to, and its
             place: the number of hand entries queued up to and including this one.
 
         Raises:
-            subprocess.CalledProcessError: `ref` does not resolve to a commit in the checkout.
+            subprocess.CalledProcessError: `ref` does not resolve to a commit there.
+            BenchFailure: Fetching the commit from `source` failed or timed out.
         """
-        sha = self._resolve(ref)
+        directory = self._source_dir(source)
+        sha = self._resolve(ref, directory)
+        if directory is not None:
+            self._git(
+                ["fetch", "--no-write-fetch-head", "--no-auto-maintenance", str(directory), sha],
+                network=True,
+            )
         entry = {
             "ref": ref,
             "sha": sha,
@@ -169,8 +205,8 @@ class Queue:
             `sha` None while GitHub has not built it.
 
         Raises:
-            OSError: `<checkout>/bench.toml` could not be read.
-            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+            OSError: A configuration file could not be read.
+            ValueError: The settings file has no complete `[github]` table, or the repository has no
                 merge queue on `main`.
             github.GithubException: PyGithub's own call failed.
             jwt.exceptions.InvalidKeyError: The App's private key is malformed.
@@ -182,7 +218,7 @@ class Queue:
             {"kind": "test", "id": id_, "added": added, **json.loads(entry)}
             for id_, added, entry in rows
         ]
-        config = Config.load(self.checkout / "bench.toml")
+        config = Config.load(self.checkout / "bench.toml", settings_path())
         check = Check(
             config.github_repo,
             config.github_app_id,
@@ -219,8 +255,8 @@ class Queue:
 
         Raises:
             BenchFailure: `git fetch` failed or timed out.
-            OSError: `<checkout>/bench.toml` could not be read.
-            ValueError: `bench.toml` has no complete `[github]` table, or the repository has no
+            OSError: A configuration file could not be read.
+            ValueError: The settings file has no complete `[github]` table, or the repository has no
                 merge queue on `main`.
             github.GithubException: PyGithub's own call failed.
             jwt.exceptions.InvalidKeyError: The App's private key is malformed.

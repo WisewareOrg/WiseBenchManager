@@ -14,9 +14,9 @@ from pathlib import Path
 from wisebench import status
 from wisebench.bench_run import BenchRun
 from wisebench.bench_test import BenchFailure
-from wisebench.config import Config
+from wisebench.clone import locate
+from wisebench.config import Config, settings_path
 from wisebench.lock import Lock
-from wisebench.plugin import BENCH_RESULT_DIR, DEFAULT_RESULT_DIR
 from wisebench.queue import Queue
 
 
@@ -31,6 +31,29 @@ def _raise_on_sigterm(signum, frame):
         BenchFailure: Always.
     """
     raise BenchFailure("terminated: the job exceeded TimeoutStartSec")
+
+
+def _load_bench_env():
+    """Read `~/.config/wisebench/bench.env` into `os.environ`, its values over the caller's.
+
+    Blank lines and `#` lines are skipped; every other line splits at its first `=`, and one pair
+    of double quotes around the value is removed.
+
+    Raises:
+        BenchFailure: The file cannot be read.
+    """
+    path = Path.home() / ".config" / "wisebench" / "bench.env"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as exc:
+        raise BenchFailure(f"cannot read {path}: {exc}") from exc
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, _, value = line.strip().partition("=")
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        os.environ[key.strip()] = value
 
 
 def main(argv=None):
@@ -63,6 +86,7 @@ def main(argv=None):
     test_parser.add_argument("ref")
     test_parser.add_argument("--set", dest="set_name", default=None)
     test_parser.add_argument("--skip-build", action="store_true")
+    test_parser.add_argument("-C", dest="source", default=None)
     unqueue_parser = subparsers.add_parser("unqueue")
     unqueue_parser.add_argument("entry_id", type=int)
     subparsers.add_parser("run")
@@ -70,14 +94,14 @@ def main(argv=None):
     status_parser.add_argument("--watch", action="store_true", required=True)
     args = parser.parse_args(own_args)
 
-    directory = Path.cwd() / os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
+    checkout, directory = locate()
     if args.command == "status":
-        return status.watch(directory)
+        return status.watch(checkout, directory)
 
     if args.command == "test":
         try:
-            entry_id, sha, place = Queue(Path.cwd(), directory).add(
-                args.ref, args.set_name, args.skip_build, pytest_args
+            entry_id, sha, place = Queue(checkout, directory).add(
+                args.ref, args.set_name, args.skip_build, pytest_args, args.source
             )
         except subprocess.CalledProcessError:
             print(f"BENCH ERROR: {args.ref} does not resolve to a commit", file=sys.stderr)
@@ -90,7 +114,7 @@ def main(argv=None):
 
     if args.command == "unqueue":
         try:
-            removed = Queue(Path.cwd(), directory).remove(args.entry_id)
+            removed = Queue(checkout, directory).remove(args.entry_id)
         except Exception as exc:
             print(f"BENCH ERROR: {exc}", file=sys.stderr)
             return 2
@@ -100,14 +124,19 @@ def main(argv=None):
         print(f"removed {args.entry_id}")
         return 0
 
+    try:
+        _load_bench_env()
+    except BenchFailure as exc:
+        print(f"BENCH ERROR: {exc}", file=sys.stderr)
+        return 2
     lg_env = os.environ.get("LG_ENV")
     if not lg_env:
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
         return 2
 
     try:
-        config = Config.load(Path.cwd() / "bench.toml")
-        bench_run = BenchRun(Path.cwd(), config, directory)
+        config = Config.load(checkout / "bench.toml", settings_path())
+        bench_run = BenchRun(checkout, config, directory)
     except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2

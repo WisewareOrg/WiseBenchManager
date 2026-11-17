@@ -1,10 +1,18 @@
 """Helpers shared by the runner tests: a throwaway git repo, a bench.toml, suites
 and the run's bench.log markers."""
 
+import contextlib
 import curses
+import fcntl
 import os
 import re
 import subprocess
+from pathlib import Path
+
+
+def clone_root(tmp_path):
+    """The fake WiseBenchManager clone the `bench_clone` fixture makes under `tmp_path`."""
+    return tmp_path / "bench"
 
 
 def git(repo, *args):
@@ -18,6 +26,32 @@ def repo_with_one_commit(path):
     (path / "tracked.txt").write_text("one\n")
     git(path, "add", "tracked.txt")
     git(path, "commit", "-q", "-m", "first")
+
+
+def source_repo(path, subject="unpushed work"):
+    """A repo at `path` with a first commit and a tip commit `subject` that no other repo holds.
+
+    Returns:
+        str: The tip commit's sha.
+    """
+    path.mkdir(parents=True)
+    repo_with_one_commit(path)
+    (path / "unpushed.txt").write_text(f"{subject}\n")
+    git(path, "add", "unpushed.txt")
+    git(path, "commit", "-q", "-m", subject)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def has_commit(repo, sha):
+    """Whether `repo` holds the commit `sha`."""
+    return (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo, capture_output=True
+        ).returncode
+        == 0
+    )
 
 
 def write_bench_toml(
@@ -41,6 +75,34 @@ target_suite = "{target_suite}"
 """)
 
 
+GITHUB_SETTINGS = """
+[github]
+repo = "acme/layer"
+app_id = 7
+private_key = "/outside/app.pem"
+check = "bench"
+"""
+
+
+def settings_file():
+    """The bench's own settings file under the test's HOME."""
+    return Path.home() / ".config" / "wisebench" / "bench.toml"
+
+
+def add_settings(table):
+    """Add `table` to the settings file, unless a table of that header is there already."""
+    path = settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text() if path.exists() else ""
+    if table.strip().splitlines()[0] not in text:
+        path.write_text(text + table)
+
+
+def run_unit_settings(unit="bench-run"):
+    """The settings `[run]` table naming `unit`."""
+    return f'\n[run]\nunit = "{unit}"\n'
+
+
 def write_lg_env(repo):
     """Write a minimal, valid labgrid env file; no target named `main`."""
     path = repo / "env.yaml"
@@ -51,6 +113,9 @@ def write_lg_env(repo):
 def write_suite(repo, name, *, passing=True):
     suite = repo / name
     suite.mkdir(parents=True)
+    pyproject = repo / "pyproject.toml"
+    if not pyproject.exists():
+        pyproject.write_text('[project]\nname = "layer"\nversion = "0"\n')
     body = "assert True" if passing else "assert False"
     (suite / "test_one.py").write_text(f"def test_one():\n    {body}\n")
 
@@ -248,12 +313,11 @@ class FakeScreen:
 
 
 def terminal(monkeypatch, tmp_path, colours, redefinable=False):
-    """Fake a terminal of `colours` colours (0: none) with no `bench.toml` in the working directory.
+    """Fake a terminal of `colours` colours (0: none).
 
     Returns the colour pairs initialised, number to (fg, bg), and the `init_color` calls.
     """
     pairs, touched = {}, []
-    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(curses, "has_colors", lambda: colours > 0)
     monkeypatch.setattr(curses, "COLORS", colours, raising=False)
     monkeypatch.setattr(curses, "start_color", lambda: None)
@@ -287,7 +351,7 @@ class FakeMergeQueueCheck:
 
 
 def stub_merge_queue(monkeypatch, checkout, entries=()):
-    """Give `checkout` a `bench.toml` with a `[github]` table and put `FakeMergeQueueCheck` in.
+    """Write `checkout`'s `bench.toml` and the settings `[github]`; put `FakeMergeQueueCheck` in.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Restores `wisebench.queue.Check` at teardown.
@@ -300,12 +364,40 @@ def stub_merge_queue(monkeypatch, checkout, entries=()):
     from wisebench import queue
 
     write_bench_toml(checkout)
-    with (checkout / "bench.toml").open("a") as toml:
-        toml.write(
-            '\n[github]\nrepo = "acme/layer"\napp_id = 7\n'
-            'private_key = "/outside/app.pem"\ncheck = "bench"\n'
-        )
+    add_settings(GITHUB_SETTINGS)
     monkeypatch.setattr(queue, "Check", FakeMergeQueueCheck)
     FakeMergeQueueCheck.constructed = []
     FakeMergeQueueCheck.result = list(entries)
     return FakeMergeQueueCheck
+
+
+@contextlib.contextmanager
+def holding(directory):
+    """Hold the lock `main` tries to take at `directory/lock`, on a second fd."""
+    with open(directory / "lock", "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
+
+
+class FakeBenchRun:
+    """Stand-in for `wisebench.bench_run.BenchRun` that records what `main` built and ran.
+
+    `outcome`, when an exception, is raised by every `run`. A test resets `instances` and
+    `outcome` before use.
+    """
+
+    instances = []
+    outcome = None
+
+    def __init__(self, checkout, config, result_dir):
+        self.checkout, self.config, self.result_dir = checkout, config, result_dir
+        self.lg_envs = []
+        FakeBenchRun.instances.append(self)
+
+    def run(self, lg_env):
+        self.lg_envs.append(lg_env)
+        if isinstance(FakeBenchRun.outcome, Exception):
+            raise FakeBenchRun.outcome

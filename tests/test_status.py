@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 from helpers import (
     FakeScreen,
+    add_settings,
     repo_with_one_commit,
+    run_unit_settings,
+    settings_file,
     terminal,
     write_bench_toml,
     write_lg_env,
@@ -589,22 +592,15 @@ def stub_systemctl(monkeypatch, returncode=None, raises=None):
     return calls
 
 
-def test_read_run_unit_is_the_run_tables_unit_and_none_without_a_table_a_file_or_valid_toml(
-    tmp_path,
-):
-    for name in ("with_unit", "no_run", "missing", "invalid"):
-        (tmp_path / name).mkdir()
-    write_bench_toml(tmp_path / "with_unit")
-    with open(tmp_path / "with_unit" / "bench.toml", "a") as f:
-        f.write('\n[run]\nunit = "bench-run"\n')
-    write_bench_toml(tmp_path / "no_run")
-    (tmp_path / "invalid" / "bench.toml").write_text("[run\nunit = ")
-
-    units = {
-        n: bench_state.read_run_unit(tmp_path / n)
-        for n in ("with_unit", "no_run", "missing", "invalid")
-    }
-    assert units == {"with_unit": "bench-run", "no_run": None, "missing": None, "invalid": None}
+def test_read_run_unit_is_the_settings_run_unit_and_none_without_one_a_file_or_valid_toml():
+    assert bench_state.read_run_unit() is None
+    settings_file().parent.mkdir(parents=True, exist_ok=True)
+    settings_file().write_text("[run\nunit = ")
+    assert bench_state.read_run_unit() is None
+    settings_file().write_text('[github]\nrepo = "a/b"\n')
+    assert bench_state.read_run_unit() is None
+    settings_file().write_text(run_unit_settings())
+    assert bench_state.read_run_unit() == "bench-run"
 
 
 def test_read_bench_combines_disabled_presence_liveness_and_timer(tmp_path, monkeypatch):
@@ -639,7 +635,7 @@ def snapshot(root):
 
 @pytest.mark.skipif(ROOT, reason="root ignores read-only modes")
 def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_reads_and_writes(
-    tmp_path, monkeypatch, systemctl
+    tmp_path, monkeypatch, systemctl, bench_clone
 ):
     """`_loop` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes and mtimes
     unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the timer query
@@ -659,9 +655,8 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
             "host_suite": [rep("t.py::h", "call", "passed")],
         },
     )
-    write_bench_toml(tmp_path)
-    with open(tmp_path / "bench.toml", "a") as f:
-        f.write('\n[run]\nunit = "bench-run"\n')
+    write_bench_toml(bench_clone.checkout)
+    add_settings(run_unit_settings())
     (records / "DISABLED").write_text("reason\n")
     (records / "lock").touch()
     terminal(monkeypatch, tmp_path, 0)
@@ -711,7 +706,7 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        assert status._loop(window, records, run=lambda work: work()) == 0
+        assert status._loop(window, bench_clone.checkout, records, run=lambda work: work()) == 0
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -826,7 +821,13 @@ def test_a_log_written_by_a_real_bench_test_run_parses_into_the_model(
     write_bench_toml(tmp_path, precondition=options.get("precondition", "true"))
     setup(tmp_path)
     runner = bench_test.BenchTest(
-        tmp_path, "HEAD", None, skip_build=options.get("skip_build", False), kind="run", pr=7
+        tmp_path,
+        "HEAD",
+        None,
+        result_dir=tmp_path / "records",
+        skip_build=options.get("skip_build", False),
+        kind="run",
+        pr=7,
     )
     post = None if options.get("post") is False else (lambda failure: None)
     try:

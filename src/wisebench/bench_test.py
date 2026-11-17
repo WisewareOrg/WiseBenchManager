@@ -7,17 +7,15 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from wisebench.config import Config
+from wisebench.config import Config, settings_path
 from wisebench.plugin import (
     _TIMESTAMP,
     BENCH_CANDIDATE_OPTION,
     BENCH_RECORD_DIR,
-    BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
     BENCH_SKIP_BUILD,
     BENCH_TREE,
-    DEFAULT_RESULT_DIR,
     write_mark,
 )
 
@@ -36,7 +34,18 @@ class CandidateFailure(Exception):
 class BenchTest:
     """One run of a ref: the checkout, ref, replay set name and skip-build flag."""
 
-    def __init__(self, checkout, ref, set_name, skip_build=False, kind="test", pr=None, sha=None):
+    def __init__(
+        self,
+        checkout,
+        ref,
+        set_name,
+        *,
+        result_dir,
+        skip_build=False,
+        kind="test",
+        pr=None,
+        sha=None,
+    ):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
         Args:
@@ -44,6 +53,7 @@ class BenchTest:
             ref (str): The git ref to resolve, check out and test; with `sha` given, only the name
                 the record shows.
             set_name (str | None): The replay set name from `--set`, or None.
+            result_dir (pathlib.Path): The records directory the run's folder goes in.
             skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
                 with `bench_candidate` `None`, against the board as it is.
             kind (str): `"test"` or `"run"`, for the run-started line only; set by `BenchRun`.
@@ -53,6 +63,7 @@ class BenchTest:
                 name the record shows. None resolves `ref` at run time.
         """
         self.checkout = checkout
+        self.result_dir = Path(result_dir)
         self.ref = ref
         self.set_name = set_name or ""
         self.skip_build = skip_build
@@ -63,13 +74,13 @@ class BenchTest:
     def run(self, lg_env, pytest_args, post=None):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
 
-        Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`,
-        `BENCH_RESULT_DIR`, and `BENCH_SKIP_BUILD` when skipping the build; each suite also gets
+        Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`
+        and `BENCH_SKIP_BUILD` when skipping the build; each suite also gets
         `BENCH_RECORD_DIR` and `PYTHONUNBUFFERED` (see `_run_suite`). Runs
         `precondition`; unless skipping the build, runs `build`, `bundle` and the host suite,
         and passes the commit to the target suite as `--bench-candidate`. Every hook's and
         suite's output, and a `bench:` marker line per stage, land in
-        `records/<stamp>/bench.log`; nothing prints to the terminal.
+        `<result_dir>/<stamp>/bench.log`; nothing prints to the terminal.
 
         Args:
             lg_env (str): Path to the labgrid env file (`LG_ENV`).
@@ -87,8 +98,7 @@ class BenchTest:
             Exception: Any other step raised (a dirty tree, git itself), or `post` raised (the
                 run ends as `run error`), propagated unwrapped.
         """
-        result_dir = os.environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR)
-        run_dir, log = self._open_log(result_dir)
+        run_dir, log = self._open_log(self.result_dir)
         outcome = "error"
         try:
             try:
@@ -96,14 +106,13 @@ class BenchTest:
                 self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}")
                 with self._stage(log, "checkout") as info:
                     commit = self._checkout_commit(log)
-                    config = Config.load(self.checkout / "bench.toml")
+                    config = Config.load(self.checkout / "bench.toml", settings_path())
                     info["sha"] = commit
                 env = {
                     **os.environ,
                     BENCH_SHA: commit,
                     BENCH_TREE: str(self.checkout),
                     BENCH_SET: self.set_name,
-                    BENCH_RESULT_DIR: result_dir,
                 }
                 if self.skip_build:
                     env[BENCH_SKIP_BUILD] = "true"
@@ -290,6 +299,8 @@ class BenchTest:
             "-m",
             "pytest",
             suite,
+            "--rootdir",
+            str(self.checkout),
             "-o",
             "addopts=",
             "--capture=tee-sys",

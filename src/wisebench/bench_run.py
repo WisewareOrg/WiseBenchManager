@@ -1,22 +1,23 @@
 """BenchRun: one `bench run` cycle -- the next queue entry, through `BenchTest`."""
 
-import os
 import sys
 from datetime import UTC, datetime
 
 from wisebench.bench_state import DISABLED, stop_timer
 from wisebench.bench_test import BenchTest, CandidateFailure
 from wisebench.check import Check
+from wisebench.config import settings_path
 from wisebench.queue import Queue
 
 
 class BenchRun:
     """One `bench run` cycle: the next queue entry, through `BenchTest` in-process.
 
-    Holds the checkout, the loaded `Config` and the result directory `DISABLED` sits in. Knows
-    nothing about the lock `bench run` holds -- the CLI holds that for this call's whole
-    duration. A merge-queue entry's verdict is posted by `BenchTest`'s `posted` stage, through a
-    callable this class passes to `BenchTest.run`; a run queued by hand posts nothing.
+    Holds the checkout, the loaded `Config` and the result directory, where `DISABLED` sits and
+    every run's folder goes. Knows nothing about the lock `bench run` holds -- the CLI holds that
+    for this call's whole duration. A merge-queue entry's verdict is posted by `BenchTest`'s
+    `posted` stage, through a callable this class passes to `BenchTest.run`; a run queued by hand
+    posts nothing.
     """
 
     def __init__(self, checkout, config, result_dir):
@@ -25,15 +26,16 @@ class BenchRun:
         Args:
             checkout (pathlib.Path): The layer's clone this run reads the queue against,
                 and tests.
-            config (wisebench.config.Config): `bench.toml`, already loaded; `config.run_unit`
+            config (wisebench.config.Config): the configuration, already loaded; `config.run_unit`
                 names the systemd unit this run stops on the bench's own failure.
-            result_dir (pathlib.Path): The directory `DISABLED` sits in; the CLI's own value.
+            result_dir (pathlib.Path): The records directory: `DISABLED` sits in it and every run's
+                folder goes in it; the CLI's own value.
 
         Raises:
-            ValueError: `config.run_unit` is None (`bench.toml` has no `[run] unit`).
+            ValueError: `config.run_unit` is None (the settings file has no `[run] unit`).
         """
         if config.run_unit is None:
-            raise ValueError("bench.toml is missing [run] unit, required for bench run")
+            raise ValueError(f"{settings_path()} is missing [run] unit, required for bench run")
         self.checkout = checkout
         self.config = config
         self._result_dir = result_dir
@@ -74,7 +76,7 @@ class BenchRun:
                 self.config.github_private_key,
                 self.config.github_check,
             )
-            summary = os.path.relpath(self._result_dir, self.checkout)
+            summary = self._result_dir.name
 
             def post(failure):
                 """Post the check: success without a failure, else failure with its first line.
@@ -88,9 +90,14 @@ class BenchRun:
                     check.post(sha, "failure", str(failure).splitlines()[0], summary)
 
             try:
-                BenchTest(self.checkout, sha, None, kind=entry["kind"], pr=pr).run(
-                    lg_env, [], post=post
-                )
+                BenchTest(
+                    self.checkout,
+                    sha,
+                    None,
+                    result_dir=self._result_dir,
+                    kind=entry["kind"],
+                    pr=pr,
+                ).run(lg_env, [], post=post)
             except CandidateFailure:
                 return
         except Exception as exc:
@@ -111,6 +118,7 @@ class BenchRun:
             self.checkout,
             entry["ref"],
             entry["set"],
+            result_dir=self._result_dir,
             skip_build=entry["skip_build"],
             kind=entry["kind"],
             sha=entry["sha"],

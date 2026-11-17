@@ -8,7 +8,6 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 from mitmproxy import exceptions
@@ -225,10 +224,9 @@ def test_start_kills_a_process_that_never_starts_listening(har, tmp_path, monkey
 
 
 def test_proxy_fixture_yields_a_proxy_and_records_the_recordings_sha256_and_counts(
-    pytester, monkeypatch, har
+    pytester, monkeypatch, har, bench_clone
 ):
     """The fixture yields a `Proxy`, and records the sha256, served_count and killed_count."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.request
 
@@ -244,7 +242,7 @@ def test_proxy_fixture_yields_a_proxy_and_records_the_recordings_sha256_and_coun
     result = pytester.runpytest()
     result.assert_outcomes(passed=1)
 
-    run_dir = next(Path("records").iterdir())
+    run_dir = next(bench_clone.records.iterdir())
     with open(har, "rb") as f:
         expected_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
     report = (run_dir / "report.jsonl").read_text()
@@ -258,10 +256,9 @@ def test_proxy_fixture_yields_a_proxy_and_records_the_recordings_sha256_and_coun
 
 
 def test_proxy_fixture_records_served_count_as_a_sum_of_replays_not_a_count_of_requests(
-    pytester, monkeypatch, har
+    pytester, monkeypatch, har, bench_clone
 ):
     """`served_count` sums every replay, not the count of distinct recorded requests."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.request
 
@@ -278,14 +275,15 @@ def test_proxy_fixture_records_served_count_as_a_sum_of_replays_not_a_count_of_r
     result = pytester.runpytest()
     result.assert_outcomes(passed=1)
 
-    run_dir = next(Path("records").iterdir())
+    run_dir = next(bench_clone.records.iterdir())
     report = (run_dir / "report.jsonl").read_text()
     assert '"served_count", 2]' in report
 
 
-def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkeypatch, har):
+def test_proxy_fixture_records_a_kill_and_the_session_continues(
+    pytester, monkeypatch, har, bench_clone
+):
     """A kill never fails the test or ends the session; served_count counts only replays."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import urllib.error
         import urllib.request
@@ -307,17 +305,16 @@ def test_proxy_fixture_records_a_kill_and_the_session_continues(pytester, monkey
     assert result.ret == 0
     result.assert_outcomes(passed=2)
 
-    run_dir = next(Path("records").iterdir())
+    run_dir = next(bench_clone.records.iterdir())
     report = (run_dir / "report.jsonl").read_text()
     assert '"served_count", 0]' in report
     assert '"killed_count", 1]' in report
 
 
 def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
-    pytester, monkeypatch, har
+    pytester, monkeypatch, har, bench_clone
 ):
     """A non-HTTP flow is counted into killed_count, and the session continues past it."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(f"""
         import socket
 
@@ -350,13 +347,12 @@ def test_proxy_fixture_records_a_tcp_flow_as_killed_and_the_session_continues(
     assert result.ret == 0
     result.assert_outcomes(passed=2)
 
-    run_dir = next(Path("records").iterdir())
+    run_dir = next(bench_clone.records.iterdir())
     report = (run_dir / "report.jsonl").read_text()
     assert '"killed_count", 1]' in report
 
 
 def test_proxy_fixture_exits_2_on_an_unreadable_recording(pytester, monkeypatch, tmp_path):
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     bad_har = tmp_path / "not_a_har_file"
     bad_har.write_text("not a har file")
     pytester.makepyfile(f"""

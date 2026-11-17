@@ -9,7 +9,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from wisebench.config import Config
+from wisebench.config import settings_path
 
 DASH = "—"
 DISABLED = "DISABLED"
@@ -142,18 +142,16 @@ def enable(directory, run_unit):
     return _change_timer("start", run_unit)
 
 
-def read_run_unit(cwd):
-    """The `[run] unit` of `cwd/bench.toml`, or None when it is absent or does not load.
-
-    Args:
-        cwd (pathlib.Path): The directory holding `bench.toml`.
+def read_run_unit():
+    """The `[run] unit` of the bench's settings file, or None when it is absent or does not load.
 
     Returns:
         str | None: The unit base name.
     """
     try:
-        return Config.load(Path(cwd) / "bench.toml").run_unit
-    except (OSError, tomllib.TOMLDecodeError, KeyError):
+        with open(settings_path(), "rb") as f:
+            return tomllib.load(f).get("run", {}).get("unit")
+    except (OSError, tomllib.TOMLDecodeError):
         return None
 
 
