@@ -38,8 +38,7 @@ entry cannot be removed (ADR 0005 rev 1).
 `checkout/` first. With `-C <dir>` the ref resolves in `<dir>` (`~` is expanded, a relative path is
 taken against the caller's directory) and the commit is fetched from it into `checkout/` as objects
 only, no ref and no `FETCH_HEAD`; an unpushed commit is queueable. Nothing checks that `<dir>` is
-the same project, and nothing pins the fetched commit but git's two-week prune grace, which covers a
-queued wait. In the watch, `:run -C <dir> <ref>` previews the commit in `<dir>` and fetches on
+the same project. In the watch, `:run -C <dir> <ref>` previews the commit in `<dir>` and fetches on
 `Enter`.
 
 A queued run builds the commit resolved when it was queued -- unless `--skip-build`, which skips the

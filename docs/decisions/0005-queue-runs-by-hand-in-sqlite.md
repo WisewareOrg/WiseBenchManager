@@ -88,6 +88,9 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
   on ref locks with the tick's `git fetch origin`.
 - **Fetching from `<dir>` when the entry is taken.** Rejected: the source tree would have to still
   hold the commit when the entry runs.
+- **Keeping `[github]` and `[run]` in the layer's `bench.toml`.** Rejected: the layer's tracked file
+  then carries the bench host's App id, key path and unit; the bench owns its own settings in
+  `~/.config/wisebench/bench.toml`.
 - **Accepting the collision risk.** Rejected: a watch could then disable the bench.
 
 ## Consequences
