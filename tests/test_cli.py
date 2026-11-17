@@ -6,7 +6,18 @@ import signal
 import subprocess
 
 import pytest
-from helpers import FakeBenchRun, holding, stop_argv, stub_fetch, stub_merge_queue
+from helpers import (
+    GITHUB_SETTINGS,
+    FakeBenchRun,
+    add_settings,
+    holding,
+    run_unit_settings,
+    settings_file,
+    stop_argv,
+    stub_fetch,
+    stub_merge_queue,
+    write_bench_toml,
+)
 
 from wisebench import bench_run, bench_test, cli, queue
 from wisebench.lock import Lock
@@ -129,25 +140,9 @@ def test_main_unqueue_of_a_run_already_taken_exits_2(monkeypatch, tmp_path, caps
 
 
 def _write_bench_toml(repo):
-    (repo / "bench.toml").write_text("""
-[hooks]
-precondition = "true"
-build = "true"
-bundle = "true"
-
-[tests]
-host_suite = "host_suite"
-target_suite = "target_suite"
-
-[github]
-repo = "acme/layer"
-app_id = 1
-private_key = "/outside/the/tree/app.pem"
-check = "bench"
-
-[run]
-unit = "bench-run"
-""")
+    write_bench_toml(repo)
+    add_settings(GITHUB_SETTINGS)
+    add_settings(run_unit_settings())
 
 
 @pytest.fixture
@@ -188,26 +183,24 @@ def test_main_run_returns_2_when_lg_env_is_not_set(monkeypatch):
     assert cli.main(["run"]) == 2
 
 
-def test_main_run_returns_2_when_bench_toml_has_no_run_table(monkeypatch, bench_clone):
-    """main returns 2 for bench run when bench.toml has no [run] table."""
-    (bench_clone.checkout / "bench.toml").write_text("""
-[hooks]
-precondition = "true"
-build = "true"
-bundle = "true"
-
-[tests]
-host_suite = "host_suite"
-target_suite = "target_suite"
-
-[github]
-repo = "acme/layer"
-app_id = 1
-private_key = "/outside/the/tree/app.pem"
-check = "bench"
-""")
+def test_main_run_returns_2_when_the_settings_have_no_run_table(monkeypatch, bench_clone):
+    """main returns 2 for bench run when the bench's settings have no [run] table."""
+    write_bench_toml(bench_clone.checkout)
+    add_settings(GITHUB_SETTINGS)
     monkeypatch.setenv("LG_ENV", "unused.yaml")
     assert cli.main(["run"]) == 2
+
+
+def test_main_run_returns_2_naming_the_settings_file_when_it_is_missing(
+    monkeypatch, bench_clone, capsys
+):
+    write_bench_toml(bench_clone.checkout)
+    monkeypatch.setenv("LG_ENV", "unused.yaml")
+    assert not settings_file().exists()
+
+    assert cli.main(["run"]) == 2
+
+    assert f"BENCH ERROR: {settings_file()} is missing" in capsys.readouterr().err
 
 
 def test_main_run_returns_2_when_bench_toml_is_missing(monkeypatch):

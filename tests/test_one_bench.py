@@ -6,8 +6,11 @@ import subprocess
 import helpers
 import pytest
 from helpers import (
+    GITHUB_SETTINGS,
     FakeBenchRun,
     FakeScreen,
+    add_settings,
+    run_unit_settings,
     stub_merge_queue,
     terminal,
     write_bench_toml,
@@ -27,20 +30,10 @@ def fake_run(monkeypatch):
 
 
 def layer_checkout_with_unit(checkout, unit="bench-run"):
-    """Give `checkout` a `bench.toml` with the `[github]` and `[run]` tables."""
-    stub_merge_queue_toml(checkout)
-    with (checkout / "bench.toml").open("a") as toml:
-        toml.write(f'\n[run]\nunit = "{unit}"\n')
-
-
-def stub_merge_queue_toml(checkout):
-    """Write the `bench.toml` `stub_merge_queue` writes, without replacing `Queue.Check`."""
+    """Give `checkout` its `bench.toml`, and the bench's settings a `[github]` and a `[run]`."""
     write_bench_toml(checkout)
-    with (checkout / "bench.toml").open("a") as toml:
-        toml.write(
-            '\n[github]\nrepo = "acme/layer"\napp_id = 7\n'
-            'private_key = "/outside/app.pem"\ncheck = "bench"\n'
-        )
+    add_settings(GITHUB_SETTINGS)
+    add_settings(run_unit_settings(unit))
 
 
 def head(repo):

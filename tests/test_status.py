@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 from helpers import (
     FakeScreen,
+    add_settings,
     repo_with_one_commit,
+    run_unit_settings,
     terminal,
     write_bench_toml,
     write_lg_env,
@@ -589,22 +591,20 @@ def stub_systemctl(monkeypatch, returncode=None, raises=None):
     return calls
 
 
-def test_read_run_unit_is_the_run_tables_unit_and_none_without_a_table_a_file_or_valid_toml(
+def test_read_run_unit_is_the_settings_run_unit_and_none_without_one_a_file_or_valid_toml(
     tmp_path,
 ):
-    for name in ("with_unit", "no_run", "missing", "invalid"):
+    for name in ("layer", "missing", "invalid"):
         (tmp_path / name).mkdir()
-    write_bench_toml(tmp_path / "with_unit")
-    with open(tmp_path / "with_unit" / "bench.toml", "a") as f:
-        f.write('\n[run]\nunit = "bench-run"\n')
-    write_bench_toml(tmp_path / "no_run")
+    write_bench_toml(tmp_path / "layer")
     (tmp_path / "invalid" / "bench.toml").write_text("[run\nunit = ")
 
-    units = {
-        n: bench_state.read_run_unit(tmp_path / n)
-        for n in ("with_unit", "no_run", "missing", "invalid")
-    }
-    assert units == {"with_unit": "bench-run", "no_run": None, "missing": None, "invalid": None}
+    def units():
+        return {n: bench_state.read_run_unit(tmp_path / n) for n in ("layer", "missing", "invalid")}
+
+    assert units() == {"layer": None, "missing": None, "invalid": None}
+    add_settings(run_unit_settings())
+    assert units() == {"layer": "bench-run", "missing": None, "invalid": None}
 
 
 def test_read_bench_combines_disabled_presence_liveness_and_timer(tmp_path, monkeypatch):
@@ -660,8 +660,7 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
         },
     )
     write_bench_toml(bench_clone.checkout)
-    with open(bench_clone.checkout / "bench.toml", "a") as f:
-        f.write('\n[run]\nunit = "bench-run"\n')
+    add_settings(run_unit_settings())
     (records / "DISABLED").write_text("reason\n")
     (records / "lock").touch()
     terminal(monkeypatch, tmp_path, 0)

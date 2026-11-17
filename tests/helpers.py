@@ -7,6 +7,7 @@ import fcntl
 import os
 import re
 import subprocess
+from pathlib import Path
 
 
 def clone_root(tmp_path):
@@ -72,6 +73,34 @@ bundle = "{bundle}"
 host_suite = "{host_suite}"
 target_suite = "{target_suite}"
 """)
+
+
+GITHUB_SETTINGS = """
+[github]
+repo = "acme/layer"
+app_id = 7
+private_key = "/outside/app.pem"
+check = "bench"
+"""
+
+
+def settings_file():
+    """The bench's own settings file under the test's HOME."""
+    return Path.home() / ".config" / "wisebench" / "bench.toml"
+
+
+def add_settings(table):
+    """Add `table` to the settings file, unless a table of that header is there already."""
+    path = settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text() if path.exists() else ""
+    if table.strip().splitlines()[0] not in text:
+        path.write_text(text + table)
+
+
+def run_unit_settings(unit="bench-run"):
+    """The settings `[run]` table naming `unit`."""
+    return f'\n[run]\nunit = "{unit}"\n'
 
 
 def write_lg_env(repo):
@@ -322,7 +351,7 @@ class FakeMergeQueueCheck:
 
 
 def stub_merge_queue(monkeypatch, checkout, entries=()):
-    """Give `checkout` a `bench.toml` with a `[github]` table and put `FakeMergeQueueCheck` in.
+    """Write `checkout`'s `bench.toml` and the settings `[github]`; put `FakeMergeQueueCheck` in.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Restores `wisebench.queue.Check` at teardown.
@@ -335,11 +364,7 @@ def stub_merge_queue(monkeypatch, checkout, entries=()):
     from wisebench import queue
 
     write_bench_toml(checkout)
-    with (checkout / "bench.toml").open("a") as toml:
-        toml.write(
-            '\n[github]\nrepo = "acme/layer"\napp_id = 7\n'
-            'private_key = "/outside/app.pem"\ncheck = "bench"\n'
-        )
+    add_settings(GITHUB_SETTINGS)
     monkeypatch.setattr(queue, "Check", FakeMergeQueueCheck)
     FakeMergeQueueCheck.constructed = []
     FakeMergeQueueCheck.result = list(entries)

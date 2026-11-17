@@ -518,9 +518,7 @@ def test_take_returns_none_when_no_merge_queue_entry_has_a_sha(hand, github):
     assert hand.take() is None
 
 
-def test_the_merge_queue_is_read_through_a_check_built_from_the_checkouts_github_table(
-    hand, github
-):
+def test_the_merge_queue_is_read_through_a_check_built_from_the_settings_github_table(hand, github):
     hand.entries()
     assert github.constructed == [("acme/layer", 7, "/outside/app.pem", "bench")]
 

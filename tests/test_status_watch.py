@@ -18,8 +18,10 @@ from helpers import (
     COLS,
     ROWS,
     FakeScreen,
+    add_settings,
     clone_root,
     has_commit,
+    run_unit_settings,
     source_repo,
     start_argv,
     stop_argv,
@@ -598,7 +600,6 @@ def test_background_work_runs_in_order_on_one_thread_that_is_not_the_callers():
     assert len(set(threads)) == 1 and threading.get_ident() not in threads
 
 
-UNIT_TABLE = '\n[run]\nunit = "bench-run"\n'
 ASK = "Enable the bench?"
 
 
@@ -612,8 +613,7 @@ def bench_command(monkeypatch, tmp_path, keys, *, unit=True, disabled=True):
     if unit:
         checkout = clone_root(tmp_path) / "checkout"
         write_bench_toml(checkout)
-        with open(checkout / "bench.toml", "a") as f:
-            f.write(UNIT_TABLE)
+        add_settings(run_unit_settings())
     if disabled:
         (directory / "DISABLED").write_text("2026-11-13T00:00:00+00:00\nboom\n")
     return watch_with(monkeypatch, tmp_path, keys), directory
@@ -675,8 +675,7 @@ def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_show
     held, release = held_work()
     checkout = clone_root(tmp_path) / "checkout"
     write_bench_toml(checkout)
-    with open(checkout / "bench.toml", "a") as f:
-        f.write(UNIT_TABLE)
+    add_settings(run_unit_settings())
     terminal(monkeypatch, tmp_path, 0)
     seen = []
     keys = [
