@@ -55,7 +55,9 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    tree when it starts, and its record reads `kind=test ref=<as typed>`. A run queued by hand may
    carry `--skip-build`; a merge-queue run never skips the build. With `-C <dir>`, the ref resolves
    in `<dir>` instead and the commit is fetched from `<dir>` into the checkout by
-   `git fetch --no-write-fetch-head <dir> <sha>`, which writes objects only.
+   `git fetch --no-write-fetch-head --no-auto-maintenance <dir> <sha>`, which writes objects only;
+   `--no-auto-maintenance` keeps the fetch from starting a background gc that would hold ref locks
+   during the tick's fetch.
 7. **A run queued by hand posts nothing and builds no check client.** A failing hook or test in it
    is recorded and is not the bench's fault; any other failure, including a checkout that fails, is
    the bench's and writes `DISABLED`.

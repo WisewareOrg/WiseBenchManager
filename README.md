@@ -281,8 +281,10 @@ effect on a `Type=oneshot` service; `TimeoutStartSec` is what bounds one); renam
 `contrib/bench-run.service` and `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if the
 settings file's `[run] unit` is not `bench-run`. Create `~/.config/wisebench/bench.toml` with
 `[github]` and `[run]` (see "What a layer provides"). Write `LG_ENV` and `LG_BENCH_ADDRESS` into
-`~/.config/wisebench/bench.env`. Link and start both units straight from this checkout: `systemctl
---user enable --now <this clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
+`~/.config/wisebench/bench.env`. Set the unit's `EnvironmentFile=` to
+`%h/.config/wisebench/bench.env`, because the template's `env` path stops the unit starting when
+that file is absent. Link and start both units straight from this checkout: `systemctl --user enable
+--now <this clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
 
 A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`, writes
 `DISABLED` beside the records and stops that timer. Clearing it is not something `bench run` does
