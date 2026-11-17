@@ -138,9 +138,11 @@ A one-time, by-hand step, before `[github]` can be filled in:
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE` and
 `BENCH_SET` in its environment, output appended to that run's `bench.log`; its exit status is pass
 or fail. The suites are ordinary pytest directories, run under the runner's own interpreter, so a
-layer's test helpers may import only labgrid, pytest, pytest-reportlog, tenacity, mitmproxy, the
-standard library and whatever the layer's own `pythonpath` adds. The checkout's own `pyproject.toml`
-`addopts` never reach that run.
+layer's test helpers may import only labgrid, pytest, pytest-reportlog, tenacity, the standard
+library and whatever the layer's own `pythonpath` adds. The checkout's own `pyproject.toml`
+`addopts` never reach that run. mitmproxy is not among them, yet the `proxy` fixture and `mitmdump`
+serve the layer the same way: the fixture runs `mitmdump` from mitmproxy's own environment, and
+`mitmdump` is on `PATH` for recording (see "Running it").
 
 The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
 `NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
@@ -210,6 +212,8 @@ git clone https://github.com/WisewareOrg/WiseBenchManager.git
 git -C WiseBenchManager checkout <tag>
 uv sync --project WiseBenchManager --frozen
 ln -s "$PWD/WiseBenchManager/.venv/bin/bench" ~/.local/bin/bench
+uv sync --project WiseBenchManager/tools/mitmproxy --frozen
+ln -s "$PWD/WiseBenchManager/tools/mitmproxy/.venv/bin/mitmdump" ~/.local/bin/mitmdump
 git clone <the layer repository> WiseBenchManager/checkout
 ```
 
@@ -222,6 +226,14 @@ is `KEY=value` lines, blank lines and `#` comments.
 
 `uv sync --frozen` installs exactly the versions in `uv.lock`. The package's version is derived from
 the checked-out tag by hatch-vcs when uv builds it; `run.json` carries that version.
+
+mitmproxy has its own locked environment, the uv project `tools/mitmproxy/`, so that its pins never
+set the runner's; the second link puts its `mitmdump` on `PATH`. The `proxy` fixture runs that
+`mitmdump`, and reads the HAR and the flow file back with `tools/mitmproxy/flows.py` in the same
+environment. No maintained tool prints a flow file's replay marks outside mitmproxy: its `hardump`
+output carries no `is_replay`, holds HTTP flows only and is written at shutdown, and an addon of
+ours inside mitmproxy is what ADR 0002 rev 1 rejects; so `flows.py` runs mitmproxy's own
+`FlowReader` and prints one JSON line per flow.
 
 Three facts from labgrid 26.0 are the contract between this runner and the layer's env file:
 
@@ -296,7 +308,7 @@ the runs queued by hand in it are lost.
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 
 ```sh
-mitmdump --listen-host 127.0.0.1 --listen-port <port> --set hardump=<path>.har
+<this clone>/tools/mitmproxy/.venv/bin/mitmdump --listen-host 127.0.0.1 --listen-port <port> --set hardump=<path>.har
 ```
 
 Point a client at the running `mitmdump` as its HTTP(S) proxy and exercise whatever the set
