@@ -6,7 +6,6 @@ Argument parsing for `bench test`/`bench unqueue`/`bench run`/`bench status` and
 import argparse
 import contextlib
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -34,34 +33,27 @@ def _raise_on_sigterm(signum, frame):
     raise BenchFailure("terminated: the job exceeded TimeoutStartSec")
 
 
-_ENV_LINE = re.compile(r"""([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\\]*)"|((?:[^"'\\\s][^"\\\s]*)?))""")
-
-
 def _load_bench_env():
     """Read `~/.config/wisebench/bench.env` into `os.environ`, its values over the caller's.
 
-    Only the form systemd's `EnvironmentFile` reads the same everywhere is accepted: `KEY=value`
-    or `KEY="value"` lines, blank lines and `#` comment lines.
+    Blank lines and `#` lines are skipped; every other line splits at its first `=`, and one pair
+    of double quotes around the value is removed.
 
     Raises:
-        BenchFailure: The file is missing or unreadable, or a line is any other form, holds a
-            backslash, or has text after a closing quote.
+        BenchFailure: The file cannot be read.
     """
     path = Path.home() / ".config" / "wisebench" / "bench.env"
     try:
         lines = path.read_text().splitlines()
     except OSError as exc:
         raise BenchFailure(f"cannot read {path}: {exc}") from exc
-    values = {}
-    for number, line in enumerate(lines, 1):
-        text = line.strip()
-        if not text or text.startswith("#"):
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        match = _ENV_LINE.fullmatch(text)
-        if match is None:
-            raise BenchFailure(f'{path} line {number} is not KEY=value or KEY="value"')
-        values[match[1]] = match[2] if match[2] is not None else match[3]
-    os.environ.update(values)
+        key, _, value = line.strip().partition("=")
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        os.environ[key.strip()] = value
 
 
 def main(argv=None):
@@ -102,11 +94,7 @@ def main(argv=None):
     status_parser.add_argument("--watch", action="store_true", required=True)
     args = parser.parse_args(own_args)
 
-    try:
-        checkout, directory = locate()
-    except BenchFailure as exc:
-        print(f"BENCH ERROR: {exc}", file=sys.stderr)
-        return 2
+    checkout, directory = locate()
     if args.command == "status":
         return status.watch(directory)
 

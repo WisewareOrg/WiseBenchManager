@@ -121,13 +121,8 @@ class Queue:
             str: The commit sha.
 
         Raises:
-            subprocess.CalledProcessError: `ref` does not resolve to a commit there, or `source`
-                is not a directory.
+            subprocess.CalledProcessError: `ref` does not resolve to a commit there.
         """
-        if source is not None and not source.is_dir():
-            raise subprocess.CalledProcessError(
-                128, ["git", "rev-parse"], "", f"{source} is not a directory"
-            )
         return self._git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=source).strip()
 
     def preview(self, ref, source=None):

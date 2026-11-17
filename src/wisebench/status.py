@@ -9,6 +9,7 @@ the Queue tab reads `Queue.entries` and `Queue.preview` on a background thread, 
 import curses
 import functools
 import math
+import os
 import subprocess
 import sys
 import threading
@@ -204,7 +205,7 @@ def _loop(window, directory, run=_background):
     checkout, _ = locate()
     run_unit = read_run_unit(checkout)
     state = view.State()
-    shown_directory = str(directory.resolve())
+    shown_directory = os.path.relpath(directory)
     queue, results, reads = Queue(checkout, directory), SimpleQueue(), _Reads()
     while True:
         _collect(results, reads, state)
