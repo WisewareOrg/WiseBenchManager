@@ -1,7 +1,8 @@
 """Status: `bench status --watch`, the urwid main loop around `view` and `screen`.
 
-Once a second, and after every key, `Shell.tick` reads the records and the bench once, resolves a
-frame and refills the screen from it. Nothing here takes a lock of its own: the Queue tab reads
+Once a second, `Shell.tick` reads the records and the bench once, resolves a frame and refills the
+screen from it; after a key, `Shell.show` does the same over the records last read, and a key that
+wrote reads them again. Nothing here takes a lock of its own: the Queue tab reads
 `Queue.entries` and `Queue.preview` on a background thread, whose results come back through
 `MainLoop.call_from_thread`; `:run` and `dd` call `Queue.add` and `Queue.remove`, and `:disable` and
 `:enable` call `stop_timer` and `enable`.
@@ -129,7 +130,13 @@ def _request(queue, run, land, reads, state, now):
 
 
 def _perform(queue, reads, state, directory, run_unit):
-    """Carry out the `:run`, `dd`, `:disable` and `:enable` the view asked for."""
+    """Carry out the `:run`, `dd`, `:disable` and `:enable` the view asked for.
+
+    Returns:
+        bool: Whether any was asked for.
+    """
+    asked = state.run_ref is not None or state.remove_id is not None
+    asked = asked or state.disable_request or state.enable_request
     if state.run_ref is not None:
         ref, state.run_ref = state.run_ref, None
         source, name = view.split_run(ref)
@@ -161,6 +168,7 @@ def _perform(queue, reads, state, directory, run_unit):
         else:
             state.message = enable(directory, run_unit) or "bench enabled"
         state.disable_request = state.enable_request = False
+    return asked
 
 
 class Shell:
@@ -191,6 +199,7 @@ class Shell:
         self._queue = Queue(Path(checkout), directory)
         self._run, self._clock = run, clock
         self._reads = _Reads()
+        self._disk = [], None
         self._loop = None
 
     def start(self, loop):
@@ -211,15 +220,20 @@ class Shell:
         loop.set_alarm_in(1, refresh)
 
     def tick(self):
-        """Read the records and the bench, ask for the reads due, and show the frame for now."""
-        now = self._clock()
+        """Read the records and the bench, then `show`."""
         runs = self._records.runs()
         bench = read_bench(
             self._directory, runs[0] if runs else None, self._run_unit, Path("/proc")
         )
+        self._disk = runs, bench
+        self.show()
+
+    def show(self):
+        """Ask for the reads due, and show the frame for now over the records last read."""
+        now = self._clock()
         _request(self._queue, self._run, self._land, self._reads, self._state, now)
         reads = self._reads
-        snap = view.Snapshot(runs, bench, now, self._shown_directory, reads.entries, reads.preview)
+        snap = view.Snapshot(*self._disk, now, self._shown_directory, reads.entries, reads.preview)
         self.frame = view.resolve(self._state, snap)
         self.widget.update(self.frame)
 
@@ -242,9 +256,15 @@ class Shell:
                 state.message = str(outcome)
         else:
             reads.entries = outcome
-        self.tick()
+        self.show()
 
     def _after_key(self):
-        """Carry out what the key asked for, and refresh."""
-        _perform(self._queue, self._reads, self._state, self._directory, self._run_unit)
-        self.tick()
+        """Carry out what the key asked for and show it, over the records read again after a write.
+
+        Only the one-second refresh and a write read the disk, so a key costs the same whatever the
+        size of the records directory.
+        """
+        if _perform(self._queue, self._reads, self._state, self._directory, self._run_unit):
+            self.tick()
+        else:
+            self.show()

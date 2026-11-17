@@ -8,6 +8,7 @@ back into `State` as the row it is on. Keys are named as urwid names them. A fie
 left None means "derive it every frame"; a value means the user chose it.
 """
 
+import functools
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -167,7 +168,7 @@ class Frame:
         stage (Stage | None): The stage shown; None is the run's summary.
         pane_head (str): "build", "suite", "plain" or "summary".
         tasks (tuple[Task, ...]): Every running build task, oldest first.
-        rows (list[Row]): The stage's log rows with folds applied.
+        rows (tuple[Row, ...]): The stage's log rows with folds applied.
         cursor (int | None): Index of the log cursor in `rows`; None without rows.
         history (list[Run]): Every run, newest first.
         history_cursor (int): Index of the History selection.
@@ -192,7 +193,7 @@ class Frame:
     stage: Stage | None
     pane_head: str
     tasks: tuple[Task, ...]
-    rows: list[Row]
+    rows: tuple[Row, ...]
     cursor: int | None
     history: list[Run]
     history_cursor: int
@@ -220,8 +221,8 @@ def resolve(state, snap):
     live = snap.bench.live and newest
     stage = _stage(state.stage, run, newest, snap.bench) if run is not None else None
     pane_head, tasks = _head(stage, live)
-    log = _rows(stage, state.folds) if stage is not None else []
-    cursor = _cursor(state.cursor, stage, log)
+    log, at = _rows(stage, state.folds) if stage is not None else ((), {})
+    cursor = _cursor(state.cursor, stage, log, at)
     history_cursor = 0
     if run is not None:
         records = [r.record for r in runs]
@@ -441,14 +442,24 @@ def _is_open(folds, section):
 def _rows(stage, folds, expand=False):
     """The log rows of a stage: its own lines, then each section's header and open body.
 
+    The rows of the last few (stage, folds) asked for are kept, so a key or a refresh over an
+    unchanged log does not lay out its every line again.
+
     Args:
         stage (Stage): The stage.
         folds (dict): Section id to True (open) or False (folded).
         expand (bool): List the bodies of folded sections too, for search.
 
     Returns:
-        list[Row]: The rows in display order.
+        tuple[tuple[Row, ...], dict]: The rows in display order, and each row's index by anchor.
     """
+    return _laid_out(stage, tuple(folds.items()), expand)
+
+
+@functools.lru_cache(maxsize=4)
+def _laid_out(stage, folds, expand):
+    """`_rows` for `folds` given as its items."""
+    folds = dict(folds)
     rows = [
         Row((stage.name, None, i), "line", _LOG_PREFIX.sub("", line))
         for i, line in enumerate(stage.lines)
@@ -462,7 +473,7 @@ def _rows(stage, folds, expand=False):
                 Row((stage.name, section.id, i), "body", line, section)
                 for i, line in enumerate(body, 1)
             )
-    return rows
+    return tuple(rows), {row.anchor: index for index, row in enumerate(rows)}
 
 
 def _section_ends(stage):
@@ -479,7 +490,7 @@ def _section_ends(stage):
     return ends[::-1]
 
 
-def _cursor(chosen, stage, rows):
+def _cursor(chosen, stage, rows, at):
     """Index of the log cursor among `rows`, or None without rows.
 
     TAIL is the last row. An anchor is its row, else its section's header when folded away, else
@@ -490,19 +501,16 @@ def _cursor(chosen, stage, rows):
         return None
     if chosen == TAIL:
         return len(rows) - 1
-    anchors = [row.anchor for row in rows]
-    if chosen in anchors:
-        return anchors.index(chosen)
-    if chosen is not None and chosen[1] is not None:
-        header = (chosen[0], chosen[1], 0)
-        if header in anchors:
-            return anchors.index(header)
+    if chosen in at:
+        return at[chosen]
+    if chosen is not None and chosen[1] is not None and (chosen[0], chosen[1], 0) in at:
+        return at[(chosen[0], chosen[1], 0)]
     if not stage.sections:
         return len(rows) - 1
     wanted = next((s for s in stage.sections if s.outcome == "failed"), None) or next(
         (s for s in stage.sections if s.outcome == "open"), None
     )
-    return anchors.index((stage.name, wanted.id, 0)) if wanted else 0
+    return at[(stage.name, wanted.id, 0)] if wanted else 0
 
 
 def handle(state, key, frame):
@@ -721,9 +729,8 @@ def _search(state, frame, direction):
     """
     if state.tab != "run" or not frame.rows or not state.pattern:
         return
-    rows = _rows(frame.stage, state.folds, expand=True)
-    current = frame.rows[frame.cursor].anchor
-    at = next(i for i, row in enumerate(rows) if row.anchor == current)
+    rows, anchors = _rows(frame.stage, state.folds, expand=True)
+    at = anchors[frame.rows[frame.cursor].anchor]
     for step in range(1, len(rows) + 1):
         row = rows[(at + direction * step) % len(rows)]
         if state.pattern in row.text:

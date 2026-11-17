@@ -47,6 +47,7 @@ KEYS = {
 
 _BAR_CELLS = 33
 _TASK_ROWS = 8
+_RUN_WIDTHS = (16, 20, 7, 11, 5)
 _WHAT_WIDTH = 20
 _PROMPT_HINT = "Enter queue it  Esc cancel"
 _BODY_INDENT = " " * 6
@@ -139,24 +140,21 @@ class Screen(urwid.WidgetWrap):
         self._stages = urwid.Table(
             [column("stage"), column("start"), column("took")], header_attr=dim
         )
-        self._log = urwid.Table([column()], header=False)
+        self._log = urwid.ListBox(_Lazy())
         self._tasks = urwid.Table([column()] * 3, header=False, max_rows=_TASK_ROWS)
         self._queue = urwid.Table(
             [column(""), column("source"), column("what", (urwid.WEIGHT, 1))]
             + [column("sha"), column("added"), column("")],
             header_attr=dim,
         )
-        self._history = urwid.Table(
-            [column("record"), column("what", _WHAT_WIDTH), column("sha"), column("result")]
-            + [column("took", align="right"), column("")],
-            header_attr=dim,
-        )
+        self._history = urwid.ListBox(_Lazy())
+        self._history_tab = urwid.WidgetPlaceholder(self._history)
         self._run_label = urwid.Text("")
         self._run = urwid.WidgetPlaceholder(urwid.SolidFill(" "))
         self._queue_tab = urwid.WidgetPlaceholder(self._queue)
         self._tabs = urwid.Tabs(
             [(self._run_label, self._run), ([(dim, " 2 Queue ")], self._queue_tab)]
-            + [([(dim, " 3 History ")], self._history)],
+            + [([(dim, " 3 History ")], self._history_tab)],
             attr_map=_attr(RULE),
             selected_map={dim: _attr(GROUND, TEXT), None: _attr(RULE)},
             underline=("─", "─"),
@@ -264,8 +262,9 @@ class Screen(urwid.WidgetWrap):
         """The pane of the stage shown: the summary, a suite's sections, or a plain stage's log."""
         if frame.pane_head == "summary":
             return urwid.Filler(urwid.Pile(_summary(frame)), "top")
-        rows = [_log_row(self._log, row, index, frame) for index, row in enumerate(frame.rows)]
-        _fill(self._log, rows, frame.cursor)
+        self._log.body.fill(
+            len(frame.rows), lambda at: _log_row(frame.rows[at], at, frame), frame.cursor
+        )
         if frame.pane_head == "suite":
             hint = _row([(_HINT, DIM, False)])
             return urwid.Pile([("pack", _suite_head(frame)), self._log, ("pack", hint)])
@@ -295,14 +294,75 @@ class Screen(urwid.WidgetWrap):
         self._queue_tab.original_widget = urwid.Pile([self._queue, ("pack", box)])
 
     def _fill_history(self, frame):
-        """The History tab: a row per run, then the record count."""
-        rows = [
-            _history_row(self._history, run, index, frame)
-            for index, run in enumerate(frame.history)
+        """The History tab: the column labels, a row per run, then the record count."""
+        runs = frame.history
+        row = functools.partial(_history_row, frame=frame)
+        self._history.body.fill(len(runs), lambda at: row(runs[at], at), frame.history_cursor)
+        labels = [
+            [(label, DIM, False)] for label in ("record", "what", "sha", "result", "took", "")
         ]
-        _fill(self._history, rows, frame.history_cursor)
-        count = [(_attr(DIM), _record_count(frame))]
-        self._history.footer = urwid.TableRow(self._history.layout, [count], span=True)
+        self._history_tab.original_widget = urwid.Pile(
+            [("pack", _run_row(labels)), self._history]
+            + [("pack", _row([(_record_count(frame), DIM, False)]))],
+            focus_item=1,
+        )
+
+
+class _Lazy(urwid.ListWalker):
+    """A list of rows whose widgets are built only as urwid draws or moves to them.
+
+    urwid's own walkers hold a widget for every row, built in advance, and a log or the History
+    runs to thousands of rows, refilled every second.
+    """
+
+    def __init__(self):
+        """An empty list."""
+        self.focus, self._count, self._make = 0, 0, None
+
+    def fill(self, count, make, focus):
+        """`count` rows, row `at` being `make(at)`, with row `focus` (None: the first) in focus."""
+        self._count, self._make = count, functools.cache(make)
+        self.focus = focus or 0
+        self._modified()
+
+    def __len__(self):
+        """The number of rows."""
+        return self._count
+
+    def __getitem__(self, at):
+        """The widget of row `at`, built on first use."""
+        if not 0 <= at < self._count:
+            raise IndexError(at)
+        return self._make(at)
+
+    def next_position(self, at):
+        """The row after `at`."""
+        return self.positions()[at + 1]
+
+    def prev_position(self, at):
+        """The row before `at`."""
+        if at < 1:
+            raise IndexError(at)
+        return at - 1
+
+    def positions(self, reverse=False):
+        """Every row, last first if `reverse`."""
+        return range(self._count)[:: -1 if reverse else 1]
+
+    def set_focus(self, at):
+        """Put the focus on row `at`."""
+        self.focus = at
+        self._modified()
+
+
+class _Line(urwid.Text):
+    """A row of text a list can put its focus on."""
+
+    _selectable = True
+
+    def keypress(self, size, key):
+        """A row takes no key."""
+        return key
 
 
 def _fill(table, rows, focus):
@@ -317,9 +377,9 @@ def _markup(parts, bg=None):
     return [(_attr(fg, bg, bold), text) for text, fg, bold in parts if text]
 
 
-def _row(parts, bg=None):
+def _row(parts, bg=None, kind=urwid.Text):
     """One row of `(text, fg, bold)` parts, clipped at its edge, on `bg` across its width."""
-    row = urwid.Text(_markup(parts, bg), wrap="clip")
+    row = kind(_markup(parts, bg), wrap="clip")
     return urwid.AttrMap(row, _attr(TEXT, bg)) if bg else row
 
 
@@ -544,15 +604,16 @@ def _build_head(frame):
 def _task_row(table, task, frame):
     """One `running now` row: recipe, task and elapsed time."""
     took = _duration(frame.now - task.started) if task.started else DASH
-    return _table_row(table, [[(text, TEXT, False)] for text in (task.recipe, task.task, took)])
+    cells = [[(text, TEXT, False)] for text in (task.recipe, task.task, took)]
+    return _table_row(table, cells)
 
 
-def _log_row(table, row, index, frame):
+def _log_row(row, index, frame):
     """One log row; the cursor's row is selected only while the log has focus."""
     bg = SELECTION if frame.focus == "log" and index == frame.cursor else None
     if row.kind != "head":
         indent = _BODY_INDENT if row.kind == "body" else ""
-        return _table_row(table, [[(indent + row.text, LOG, False)]], bg)
+        return _row([(indent + row.text, LOG, False)], bg, _Line)
     section = row.section
     running = _running(frame, frame.stage)
     has_body = section.lines or section.failure
@@ -565,7 +626,7 @@ def _log_row(table, row, index, frame):
     if section.started is not None:
         took = _took(section.started, row.end, running and section.outcome == "open", frame.now)
         parts.append((f"  {took}", DIM, False))
-    return _table_row(table, [parts], bg)
+    return _row(parts, bg, _Line)
 
 
 def _queue_row(table, row, selected):
@@ -587,7 +648,18 @@ def _queue_row(table, row, selected):
     return _table_row(table, cells, bg)
 
 
-def _history_row(table, run, index, frame):
+def _run_row(cells, bg=None):
+    """A History row of `cells`, each a list of `(text, fg, bold)` parts, on `bg`.
+
+    A cell for each of `_RUN_WIDTHS`, the last aligned right, then one for the rest of the row.
+    """
+    *fixed, rest = [_Line(_markup(parts, bg), wrap="clip") for parts in cells]
+    fixed[-1].set_align_mode("right")
+    row = urwid.Columns([*zip(_RUN_WIDTHS, fixed, strict=True), rest], dividechars=1)
+    return urwid.AttrMap(row, _attr(TEXT, bg)) if bg else row
+
+
+def _history_row(run, index, frame):
     """One History row: record, what, sha, result, took, then the failing stage or `by hand`."""
     running = index == 0 and frame.bench.live
     word, colour = ("running", AMBER) if running else _RESULT_WORDS[run.result]
@@ -605,7 +677,7 @@ def _history_row(table, run, index, frame):
         [(_run_took(run, running, frame.now), TEXT, False)],
         trailing,
     ]
-    return _table_row(table, cells, SELECTION if index == frame.history_cursor else None)
+    return _run_row(cells, SELECTION if index == frame.history_cursor else None)
 
 
 def _help():

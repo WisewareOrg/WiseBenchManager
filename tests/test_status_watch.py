@@ -28,7 +28,7 @@ from helpers import (
 from status_helpers import shown
 from urwid.testing import ScriptedScreen, VirtualClockEventLoop
 
-from wisebench import queue, status
+from wisebench import queue, records, status
 
 START = datetime(2026, 11, 10, 10, 0, 0, tzinfo=UTC)
 
@@ -473,6 +473,22 @@ def test_a_batch_of_keys_acts_key_by_key_so_jdd_removes_the_row_j_moved_to(monke
     watch.tick()
     watch.loop.process_input(["j", "d", "d"])
     assert removals(calls) == [("remove", 4)]
+
+
+def test_a_key_shows_its_frame_without_reading_the_records_and_a_write_reads_them_again(
+    monkeypatch, tmp_path
+):
+    stub_queue(monkeypatch, entries=lambda: [HAND, HAND2])
+    watch = Watch(tmp_path)
+    watch.press("2")
+    watch.tick()
+    reads, runs = [], records.Records.runs
+    monkeypatch.setattr(records.Records, "runs", lambda self: reads.append(1) or runs(self))
+    watch.press("j", "k", "j")
+    assert reads == []
+    assert "feature-b" in watch.text()
+    watch.press("d", "d")
+    assert reads == [1]
 
 
 def test_a_successful_dd_says_which_run_was_removed(monkeypatch, tmp_path):

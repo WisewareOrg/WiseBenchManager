@@ -3,6 +3,7 @@
 import re
 
 import pytest
+import urwid
 from status_helpers import (
     DIRECTORY,
     DISABLED,
@@ -415,3 +416,69 @@ def test_every_cell_is_drawn_in_the_canvas_colours(make, size):
     drawn.update(make())
     runs = resolve_runs(render_runs(drawn, size), [], colors=2**24)
     assert set().union(*(colours(attr) for row in runs for attr, _ in row)) <= CANVAS
+
+
+ENDLESS = {
+    "a 5000-line log": (
+        [
+            run(
+                build=stage(
+                    "build", "passed", t(3, 10), t(3, 40), lines=[f"line {i}" for i in range(5000)]
+                )
+            )
+        ],
+        {"stage": "build", "focus": "log"},
+    ),
+    "5000 runs in History": ([run(record=f"2026{i:06d}") for i in range(5000)], {"tab": "history"}),
+}
+
+
+@pytest.mark.parametrize(("runs", "chosen"), ENDLESS.values(), ids=ENDLESS)
+def test_a_key_and_a_refresh_build_widgets_only_for_the_rows_on_screen(monkeypatch, runs, chosen):
+    """The text widgets made for one `j` and the refresh after it number a few per screen row
+    (a History row has six cells), however long the list."""
+    state = view.State(**chosen)
+    drawn = screen.Screen(state)
+    snap = view.Snapshot(runs, IDLE, NOW, DIRECTORY)
+
+    def refresh():
+        drawn.update(view.resolve(state, snap))
+        render_runs(drawn, (80, 24))
+
+    refresh()
+    made = []
+    text_init = urwid.Text.__init__
+    monkeypatch.setattr(
+        urwid.Text, "__init__", lambda *a, **k: made.append(1) or text_init(*a, **k)
+    )
+    drawn.keypress((80, 24), "j")
+    refresh()
+    assert 0 < len(made) <= 8 * 24
+
+
+def test_the_log_cursor_row_is_drawn_on_the_selection_and_follows_j():
+    state = view.State(stage="build", focus="log", cursor=("build", None, 0))
+    runs, _ = ENDLESS["a 5000-line log"]
+    drawn = screen.Screen(state)
+    snap = view.Snapshot(runs, IDLE, NOW, DIRECTORY)
+
+    def selected():
+        """The log lines drawn on the selection ground, right of the stage list's divider."""
+        drawn.update(view.resolve(state, snap))
+        lines = []
+        for row in resolve_runs(render_runs(drawn, (80, 24)), [], colors=2**24):
+            text = "".join(part for _, part in row)
+            if "│" not in text:
+                continue
+            start, column, grounds = text.index("│") + 1, 0, set()
+            for attr, part in row:
+                if column >= start and part.strip():
+                    grounds |= colours(attr)
+                column += len(part)
+            if screen.SELECTION in grounds:
+                lines.append(text[start:].strip())
+        return lines
+
+    assert selected() == ["line 0"]
+    drawn.keypress((80, 24), "j")
+    assert selected() == ["line 1"]
