@@ -2,16 +2,14 @@
 
 **Status:** accepted
 **Decided:** 2026-11-16 (WisewareOrg/WiseBenchManager #72 Queue tab shows the whole merge queue)
-**Rev:** 2
+**Rev:** 1
 
 ## Revisions
 
-- **rev 2** — 2026-11-16 — the queue lives in the clone `bench` is installed from, and the ref
-  resolves in that clone's `checkout/`, or in a directory named with `-C`, from any directory
-  (decisions 3, 6 and 10; the "never taken" consequence removed; three alternatives added; #74
-  one-bench defect).
 - **rev 1** — 2026-11-16 — first written (#60 Queue behaviour; #23 Queue view; #72 Queue tab shows
-  the whole merge queue).
+  the whole merge queue; #74 one-bench defect: the queue lives in the clone `bench` is installed
+  from, and the ref resolves in that clone's `checkout/` or in a directory named with `-C`, from any
+  directory).
 
 ## Context
 

@@ -2,17 +2,16 @@
 
 **Status:** accepted
 **Decided:** 2026-10-11 (the runner survey that founded this repository; built in WisewareOrg/WiseBenchManager#6 `bench run`)
-**Rev:** 3
+**Rev:** 2
 
 ## Revisions
 
-- **rev 3** — 2026-11-16 — the lock, the records and `DISABLED` live in the WiseBenchManager clone
-  that `bench` is installed from, whatever directory it starts in (ADR 0005 rev 2); the decision is
-  unchanged.
 - **rev 2** — 2026-11-16 — a tick takes a run queued by hand before the merge queue's entries, read
   from GitHub's GraphQL API, and the lock is the tick's alone; the timer is turned off with
   `systemctl --user stop`, never `disable` (ADR 0005 rev 1; #60 Queue behaviour; #24 `:enable` and
-  `:disable`; #72 Queue tab shows the whole merge queue); the decision is unchanged.
+  `:disable`; #72 Queue tab shows the whole merge queue), and the lock, the records and `DISABLED`
+  live in the WiseBenchManager clone that `bench` is installed from, whatever directory it starts in
+  (#74 one-bench defect); the decision is unchanged.
 - **rev 1** — 2026-10-29 — first written (WisewareOrg/WiseBenchManager PR #31 ADR 0001 as trade studies).
 
 ## Context
