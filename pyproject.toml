@@ -12,6 +12,7 @@ dependencies = [
     "pytest>=9.1.1",
     "pytest-reportlog>=1.0",
     "tenacity>=9.0",
+    "urwid>=5.1.3",
 ]
 
 [project.entry-points.pytest11]
