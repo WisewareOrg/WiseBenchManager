@@ -280,7 +280,7 @@ def _preview_lines(prompt, preview, rows):
     entries come after it.
     """
     ref = typed_ref(prompt)
-    if ref is None or preview is None or preview[0] != ref:
+    if preview is None or preview[0] != ref:
         return None
     result = preview[1]
     if isinstance(result, str):

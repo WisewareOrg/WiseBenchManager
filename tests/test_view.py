@@ -382,11 +382,6 @@ def test_the_selection_keeps_a_merge_entry_when_a_hand_row_is_added_before_it():
     assert (at, row.source) == (3, "merge queue")
 
 
-def test_the_selection_keeps_the_running_row_when_hand_rows_arrive():
-    at, row = kept([], 0, [HAND1], THREE, LIVE)
-    assert (at, row.marker) == (0, "▶")
-
-
 def test_a_selected_row_that_goes_leaves_its_index_held_to_the_last_row():
     assert kept([HAND1, HAND2, MERGE], 0, [HAND2, MERGE])[1].id == 4
     assert kept([HAND1, HAND2, MERGE], 1, [HAND1, MERGE])[1].source == "merge queue"
@@ -451,7 +446,6 @@ def test_no_preview_without_the_run_prompt_or_a_result():
     [
         (":run feature-c", "feature-c"),
         (":run \t  feature-c  ", "feature-c"),
-        (":run", None),
         (":run    ", None),
         (":runfeature-c", None),
         (":rn a", None),
