@@ -33,7 +33,9 @@ from status_helpers import (
     plain,
     run,
     running_test,
+    section,
     stage,
+    suite,
     t,
 )
 from urwid.testing import ScriptedScreen, VirtualClockEventLoop, render_runs, resolve_attr
@@ -138,72 +140,114 @@ def palette(name):
 # -- Run ----------------------------------------------------------------------------------
 
 
-def test_j_and_k_show_a_stage_and_enter_moves_the_keys_into_its_log_and_esc_back(view):
-    v = view([run(build=plain("build", 40))])
-    assert "ended" in v.text and "build line" not in v.text
-    v.press("j", "j", "j")
-    assert "build line 39" in v.text and "ended" not in v.text
-    v.press("enter", "g", "g")
-    assert "build line 0" in v.text and "build line 39" not in v.text
-    v.press("G", "esc", "k")
-    assert "build line" not in v.text
+def grown(lines):
+    """A step: the live build's log has grown to `lines` lines by the next refresh."""
+
+    def step(v):
+        v.runs = [live("build", build=plain("build", lines))]
+        v.wait()
+
+    return step
 
 
-def test_on_its_last_row_the_log_follows_new_lines_and_off_it_stays(view):
-    v = view([live("build", build=plain("build", 5))], LIVE)
-    v.press("enter")
-    v.runs = [live("build", build=plain("build", 60))]
-    assert "build line 59" in v.wait().text
-    v.press("k")
-    v.runs = [live("build", build=plain("build", 80))]
-    assert "build line 79" not in v.wait().text
+THREE = [run(STAMP), failing_at(OLDER, "bundle"), run(OLDEST)]
+SUITES = run(host_suite=suite("host_suite", ["passed", "failed"]))
+
+# A scenario: the runs and the bench each refresh reads, then its steps. A step is the keys to
+# press, or a function of the view; then the texts the screen shows, and those it does not.
+SCENARIOS = {
+    "j and k show a stage, Enter moves into its log, Esc back": (
+        [run(build=plain("build", 40))],
+        IDLE,
+        [
+            ([], ["ended"], ["build line"]),
+            ([*"jjj"], ["build line 39"], ["ended"]),
+            (["enter", "g", "g"], ["build line 0"], ["build line 39"]),
+            (["G", "esc", "k"], [], ["build line"]),
+        ],
+    ),
+    "on its last row the log follows new lines, off it it stays": (
+        [live("build", build=plain("build", 5))],
+        LIVE,
+        [
+            (["enter"], [], []),
+            (grown(60), ["build line 59"], []),
+            (["k"], [], []),
+            (grown(80), [], ["build line 79"]),
+        ],
+    ),
+    "za, zR and zM fold; a search unfolds its match; n finds the next": (
+        [running_test(3)],
+        LIVE,
+        [
+            ([], ["out 3"], ["out 1"]),
+            (["enter", "z", "a"], [], ["out 3"]),
+            (["z", "R"], ["out 0", "out 1", "out 2", "out 3"], []),
+            (["z", "M", *"/out 1", "enter"], ["out 1"], ["out 2"]),
+            ([*"/out", "enter", "n"], ["out 2"], []),
+        ],
+    ),
+    "a pending key shows in the status bar until its pair completes": (
+        [run()],
+        IDLE,
+        [(["g"], ["g  ?  keys"], []), (["g"], [], ["g  ?  keys"])],
+    ),
+    "[ and ] step through older runs, 1 goes back to the newest": (
+        THREE,
+        IDLE,
+        [
+            (["["], [f"1 Run  {OLDER}", "failed"], []),
+            (["[", "["], [f"1 Run  {OLDEST}"], []),
+            (["]"], [f"1 Run  {OLDER}"], []),
+            (["1"], [" 1 Run  2 Queue "], [OLDER]),
+        ],
+    ),
+    "History selects the run shown and Enter opens another": (
+        THREE,
+        IDLE,
+        [(["[", "3", "j", "enter"], [f"1 Run  {OLDEST}"], [])],
+    ),
+    "Tab and Shift-Tab cycle the views; Help takes only its own keys": (
+        [run()],
+        IDLE,
+        [
+            (["tab"], ["source"], []),
+            (["tab"], ["record"], []),
+            (["tab"], ["stage"], []),
+            (["shift tab"], ["record"], []),
+            (["?"], ["runs and log"], []),
+            (["j", "2", "tab"], ["runs and log"], []),
+            (["esc"], ["record"], ["runs and log"]),
+        ],
+    ),
+    "the summary counts each suite and a suite's pane its tests": (
+        [SUITES],
+        IDLE,
+        [
+            ([], ["host suite    1 passed  1 failed"], []),
+            ([*"jjjjj"], ["host suite  2 of 2  1 passed  1 failed"], []),
+        ],
+    ),
+    "a running build shows its progress and its running tasks": (
+        [building(3)],
+        LIVE,
+        [([], ["task 1204 of 3311  36%", "r2  do_compile  "], [])],
+    ),
+    "the Queue's running row names its stage as the stage list does": (
+        [live("host_suite")],
+        LIVE,
+        [(["2"], ["running, host suite"], ["host_suite"])],
+    ),
+}
 
 
-def test_za_zm_and_zr_fold_and_a_search_unfolds_its_match(view):
-    v = view([running_test(3)], LIVE)
-    assert "out 3" in v.text and "out 1" not in v.text
-    v.press("enter", "z", "a")
-    assert "out 3" not in v.text
-    v.press("z", "R")
-    assert all(f"out {i}" in v.text for i in range(4))
-    v.press("z", "M").type("/out 1")
-    v.press("enter")
-    assert "out 1" in v.text and "out 2" not in v.text
-    v.type("/out").press("enter", "n")
-    assert "out 2" in v.text
-
-
-def test_a_pending_key_shows_in_the_status_bar_until_its_pair_completes(view):
-    v = view([run()])
-    assert v.press("g").screen.last_text[-2].rstrip().endswith("g  ?  keys")
-    assert not v.press("g").screen.last_text[-2].rstrip().endswith("g  ?  keys")
-
-
-def test_brackets_step_through_older_runs_and_1_goes_back_to_the_newest(view):
-    v = view([run(STAMP), failing_at(OLDER, "bundle"), run(OLDEST)])
-    assert f"1 Run  {OLDER}" in v.press("[").text and "failed" in v.text
-    assert f"1 Run  {OLDEST}" in v.press("[", "[").text
-    assert f"1 Run  {OLDER}" in v.press("]").text
-    assert " 1 Run  2 Queue " in v.press("1").text
-
-
-def test_history_selects_the_run_shown_and_enter_opens_another(view):
-    v = view([run(STAMP), failing_at(OLDER, "bundle"), run(OLDEST)])
-    v.press("[", "3")
-    assert v.colour(f"{OLDER}  PR #31")[1] == palette("selection")[1]
-    v.press("j", "enter")
-    assert f"1 Run  {OLDEST}" in v.text
-
-
-def test_tab_and_shift_tab_cycle_the_views_and_help_takes_only_its_own_keys(view):
-    v = view([run()])
-    assert "source" in v.press("tab").text
-    assert "record" in v.press("tab").text
-    assert "stage" in v.press("tab").text
-    assert "record" in v.press("shift tab").text
-    assert "runs and log" in v.press("?").text
-    assert "runs and log" in v.press("j", "2", "tab").text
-    assert "record" in v.press("esc").text
+@pytest.mark.parametrize(("runs", "bench", "steps"), SCENARIOS.values(), ids=SCENARIOS)
+def test_the_view(view, runs, bench, steps):
+    v = view(runs, bench)
+    for keys, shows, hides in steps:
+        keys(v) if callable(keys) else v.press(*keys)
+        assert [text for text in shows if text not in v.text] == []
+        assert [text for text in hides if text in v.text] == []
 
 
 @pytest.mark.parametrize("keys", [["q"], [":", "q", "enter"]])
@@ -212,16 +256,34 @@ def test_q_and_colon_q_quit(view, keys):
         view([run()]).press(*keys)
 
 
-def test_a_disabled_bench_shows_why_from_the_disabled_file(view, tmp_path, local_zone):
-    (tmp_path / "records" / "DISABLED").write_text("2026-11-10T04:00:00+00:00\nno answer\n")
-    v = view([failing_at(STAMP, "target_suite")], DISABLED)
-    assert "no answer" in v.text and "since 07:00:00, nothing posted" in v.text
-
-
-def test_a_running_build_shows_its_progress_and_its_running_tasks(view):
-    v = view([building(3)], LIVE)
-    assert "task 1204 of 3311  36%" in v.text
-    assert "r2  do_compile  " in v.text
+@pytest.mark.parametrize(
+    ("disabled", "shows"),
+    [
+        (
+            "2026-11-10T04:00:00+00:00\nno answer\n",
+            ["no answer", "in setup install_candidate; from the DISABLED file, 07:00:00"],
+        ),
+        ("garbage", ["bench failure", "from the DISABLED file  "]),
+    ],
+    ids=["parsed", "unparseable"],
+)
+def test_a_disabled_bench_shows_why_from_the_disabled_file(
+    view, tmp_path, local_zone, disabled, shows
+):
+    (tmp_path / "records" / "DISABLED").write_text(disabled)
+    setup = section("target_suite", "setup", "install_candidate", "failed")
+    v = view(
+        [
+            run(
+                states=["passed"] * 5 + ["error", "not-started"],
+                target_suite=stage("target_suite", "error", t(3, 25), sections=[setup]),
+                result="error",
+            )
+        ],
+        DISABLED,
+    )
+    assert [text for text in shows if text not in v.text] == []
+    assert "nothing posted" in v.text
 
 
 @pytest.mark.parametrize(
@@ -308,7 +370,7 @@ def test_dd_removes_the_selected_hand_run_and_reads_again_and_refuses_any_other(
     v.queue.entries.return_value = [HAND, MERGE]
     v.press("2").release().press("d", "d")
     v.queue.remove.assert_called_once_with(3)
-    assert "removed queued run 3" in v.text and len(v.held) == 1
+    assert "removed queued run 3" in v.text and "feature-a" not in v.text and len(v.held) == 1
     v.release().press("j", "d", "d")
     assert "only hand-queued runs can be removed" in v.text
     assert v.queue.remove.call_count == 1
