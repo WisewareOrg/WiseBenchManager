@@ -15,6 +15,7 @@ from helpers import (
     add_settings,
     repo_with_one_commit,
     run_unit_settings,
+    settings_file,
     terminal,
     write_bench_toml,
     write_lg_env,
@@ -591,20 +592,15 @@ def stub_systemctl(monkeypatch, returncode=None, raises=None):
     return calls
 
 
-def test_read_run_unit_is_the_settings_run_unit_and_none_without_one_a_file_or_valid_toml(
-    tmp_path,
-):
-    for name in ("layer", "missing", "invalid"):
-        (tmp_path / name).mkdir()
-    write_bench_toml(tmp_path / "layer")
-    (tmp_path / "invalid" / "bench.toml").write_text("[run\nunit = ")
-
-    def units():
-        return {n: bench_state.read_run_unit(tmp_path / n) for n in ("layer", "missing", "invalid")}
-
-    assert units() == {"layer": None, "missing": None, "invalid": None}
-    add_settings(run_unit_settings())
-    assert units() == {"layer": "bench-run", "missing": None, "invalid": None}
+def test_read_run_unit_is_the_settings_run_unit_and_none_without_one_a_file_or_valid_toml():
+    assert bench_state.read_run_unit() is None
+    settings_file().parent.mkdir(parents=True, exist_ok=True)
+    settings_file().write_text("[run\nunit = ")
+    assert bench_state.read_run_unit() is None
+    settings_file().write_text('[github]\nrepo = "a/b"\n')
+    assert bench_state.read_run_unit() is None
+    settings_file().write_text(run_unit_settings())
+    assert bench_state.read_run_unit() == "bench-run"
 
 
 def test_read_bench_combines_disabled_presence_liveness_and_timer(tmp_path, monkeypatch):
@@ -710,7 +706,7 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        assert status._loop(window, records, run=lambda work: work()) == 0
+        assert status._loop(window, bench_clone.checkout, records, run=lambda work: work()) == 0
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)

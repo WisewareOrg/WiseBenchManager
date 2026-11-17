@@ -33,20 +33,25 @@ from helpers import (
 from wisebench import queue, screen, status
 
 
+def _checkout(tmp_path):
+    """The fake clone's layer checkout the `bench_clone` fixture makes under `tmp_path`."""
+    return clone_root(tmp_path) / "checkout"
+
+
 def test_watch_returns_0_on_ctrl_c(monkeypatch, tmp_path):
     def interrupted(*args):
         """Stand-in for curses.wrapper that raises Ctrl-C."""
         raise KeyboardInterrupt
 
     monkeypatch.setattr(curses, "wrapper", interrupted)
-    assert status.watch(tmp_path) == 0
+    assert status.watch(_checkout(tmp_path), tmp_path) == 0
 
 
 def test_watch_returns_2_and_names_the_error_when_curses_cannot_start(
     monkeypatch, tmp_path, capsys
 ):
     monkeypatch.delenv("TERM", raising=False)
-    assert status.watch(tmp_path) == 2
+    assert status.watch(_checkout(tmp_path), tmp_path) == 2
     assert "BENCH ERROR:" in capsys.readouterr().err
 
 
@@ -60,24 +65,24 @@ def test_a_write_into_the_bottom_right_cell_is_tolerated_and_one_on_another_row_
 ):
     terminal(monkeypatch, tmp_path, 0)
     corner = FakeScreen(keys=["q"])
-    assert status._loop(corner, tmp_path) == 0
+    assert status._loop(corner, _checkout(tmp_path), tmp_path) == 0
     assert corner.corner > 0
     with pytest.raises(curses.error):
-        status._loop(FakeScreen(keys=["q"], fail_on_row=0), tmp_path)
+        status._loop(FakeScreen(keys=["q"], fail_on_row=0), _checkout(tmp_path), tmp_path)
 
 
 def test_the_loop_redraws_after_the_one_second_timeout_and_returns_0_on_q(monkeypatch, tmp_path):
     terminal(monkeypatch, tmp_path, 0)
     fake = FakeScreen(keys=[curses.error("no input"), "q"])
 
-    assert status._loop(fake, tmp_path) == 0
+    assert status._loop(fake, _checkout(tmp_path), tmp_path) == 0
     assert fake.events == ["frame", "key", "frame", "key"]
 
 
 def test_256_colours_draw_each_canvas_colour_as_its_fixed_xterm_pair(monkeypatch, tmp_path):
     pairs, touched = terminal(monkeypatch, tmp_path, 256)
     fake = FakeScreen(keys=["q"])
-    status._loop(fake, tmp_path)
+    status._loop(fake, _checkout(tmp_path), tmp_path)
 
     assert pairs[(attribute(fake, "1 Run") >> 8) & 0xFF] == (232, 252)
     assert pairs[(attribute(fake, "IDLE") >> 8) & 0xFF] == (231, 237)
@@ -89,7 +94,7 @@ def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_ex
 ):
     pairs, touched = terminal(monkeypatch, tmp_path, 256, redefinable=True)
     fake = FakeScreen(keys=["q"])
-    status._loop(fake, tmp_path)
+    status._loop(fake, _checkout(tmp_path), tmp_path)
 
     expected = [
         (16, 48, 48, 48),
@@ -114,7 +119,7 @@ def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_ex
 def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkeypatch, tmp_path):
     terminal(monkeypatch, tmp_path, 8)
     fake = FakeScreen(keys=["q"])
-    status._loop(fake, tmp_path)
+    status._loop(fake, _checkout(tmp_path), tmp_path)
 
     assert attribute(fake, "1 Run") & curses.A_REVERSE
     assert attribute(fake, "IDLE") & curses.A_REVERSE
@@ -150,9 +155,8 @@ def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_pa
     import pty
 
     code = (
-        "import sys, wisebench; from wisebench import status; "
-        f"wisebench.__file__ = {str(bench_clone.root / 'src' / 'wisebench' / '__init__.py')!r}; "
-        f"sys.exit(status.watch({str(tmp_path)!r}))"
+        "import sys; from wisebench import status; "
+        f"sys.exit(status.watch({str(bench_clone.checkout)!r}, {str(tmp_path)!r}))"
     )
     pid, fd = pty.fork()
     if pid == 0:
@@ -288,7 +292,7 @@ def watch_with(monkeypatch, tmp_path, keys):
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir(exist_ok=True)
-    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
     return fake
 
 
@@ -422,7 +426,7 @@ def test_a_preview_of_a_ref_no_longer_typed_is_never_drawn(monkeypatch, tmp_path
     fake = FakeScreen(keys=fake_keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
     before = "\n".join("\n".join(frame) for frame in fake.frames[: seen[0]])
     after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] + 1 :])
     assert "result for alpha" in before
@@ -527,7 +531,7 @@ def test_at_most_one_preview_is_in_flight_and_the_newest_typed_ref_follows_its_r
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, run=held.append) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
     assert [call[1] for call in calls if call[0] == "preview"] == ["m", "main"]
 
 
@@ -541,7 +545,7 @@ def test_no_second_preview_is_asked_when_the_ref_typed_is_back_to_the_one_reques
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, run=held.append) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
     assert [call[1] for call in calls if call[0] == "preview"] == ["m"]
 
 
@@ -554,7 +558,7 @@ def test_one_entries_read_is_in_flight_at_a_time_however_long_it_takes(monkeypat
     keys = ["2", stall, stall, stall, release, stall, release, "q"]
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(FakeScreen(keys=keys), directory, run=held.append) == 0
+    assert status._loop(FakeScreen(keys=keys), _checkout(tmp_path), directory, run=held.append) == 0
     assert [call for call in calls if call[0] == "entries"] == [("entries",)] * 2
 
 
@@ -568,7 +572,7 @@ def test_a_failed_read_while_the_command_line_is_open_leaves_no_message_behind_a
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
     after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] :])
     assert "remote is down" not in after
 
@@ -691,7 +695,7 @@ def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_show
     fake = FakeScreen(keys=keys)
     directory = tmp_path / "records"
     directory.mkdir()
-    assert status._loop(fake, directory, run=held.append) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
     assert ASK in seen[0]
     assert "remote is down" not in seen[0]
     assert changes(systemctl) == []
@@ -713,7 +717,7 @@ def test_disable_with_no_run_unit_says_so_and_calls_nothing(monkeypatch, tmp_pat
     keys = [*":disable", "\n", TIMEOUT, "q"]
     fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
     assert systemctl.calls == []
-    assert "no [run] unit in bench.toml" in last_frame(fake)
+    assert "no [run] unit in the bench's settings file" in last_frame(fake)
     assert (directory / "DISABLED").exists()
 
 
@@ -723,7 +727,7 @@ def test_enable_with_no_run_unit_says_so_and_leaves_disabled_in_place(
     keys = [*":enable", "\n", "y", TIMEOUT, "q"]
     fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
     assert systemctl.calls == []
-    assert "no [run] unit in bench.toml" in last_frame(fake)
+    assert "no [run] unit in the bench's settings file" in last_frame(fake)
     assert (directory / "DISABLED").exists()
 
 
@@ -785,7 +789,7 @@ def watch_source(
     fake = FakeScreen(keys=["2", TIMEOUT, *typed, *after_typing(snap), "q"])
     directory = tmp_path / "records"
     directory.mkdir(exist_ok=True)
-    assert status._loop(fake, directory, **IMMEDIATELY) == 0
+    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
     return sha, seen
 
 

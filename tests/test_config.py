@@ -32,7 +32,7 @@ def test_config_load_reads_the_hooks_and_suites_from_the_layer_and_github_from_t
         check = "bench"
         """
     )
-    loaded = config.Config.load(tmp_path / "bench.toml")
+    loaded = config.Config.load(tmp_path / "bench.toml", settings_file())
     assert loaded.hooks == {"precondition": "true", "build": "just build", "bundle": "just bundle"}
     assert loaded.host_suite == "tests/host_suite"
     assert loaded.target_suite == "tests/target_suite"
@@ -79,7 +79,7 @@ def test_config_load_reads_the_run_unit_from_the_settings_and_ignores_the_layers
         unit = "bench-run"
         """
     )
-    loaded = config.Config.load(tmp_path / "bench.toml")
+    loaded = config.Config.load(tmp_path / "bench.toml", settings_file())
     assert loaded.run_unit == "bench-run"
     assert loaded.github_repo == "acme/layer"
 
@@ -98,7 +98,7 @@ def test_config_load_leaves_github_fields_none_when_the_settings_have_none(tmp_p
         target_suite = "tests/target_suite"
         """
     )
-    loaded = config.Config.load(tmp_path / "bench.toml")
+    loaded = config.Config.load(tmp_path / "bench.toml", settings_file())
     assert loaded.github_repo is None
     assert loaded.github_app_id is None
     assert loaded.github_private_key is None
@@ -109,7 +109,7 @@ def test_config_load_raises_keyerror_on_a_missing_table(tmp_path):
     """Config.load raises KeyError when a required table is missing."""
     (tmp_path / "bench.toml").write_text('[hooks]\nprecondition = "true"\n')
     with pytest.raises(KeyError):
-        config.Config.load(tmp_path / "bench.toml")
+        config.Config.load(tmp_path / "bench.toml", settings_file())
 
 
 def test_config_load_raises_keyerror_on_a_missing_target_suite(tmp_path):
@@ -126,4 +126,4 @@ def test_config_load_raises_keyerror_on_a_missing_target_suite(tmp_path):
         """
     )
     with pytest.raises(KeyError, match="target_suite"):
-        config.Config.load(tmp_path / "bench.toml")
+        config.Config.load(tmp_path / "bench.toml", settings_file())

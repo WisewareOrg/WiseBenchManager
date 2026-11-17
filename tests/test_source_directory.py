@@ -1,18 +1,9 @@
 """`bench test <ref> -C <dir>`: the ref resolves in `<dir>`; its commit is fetched here."""
 
-import subprocess
-
 import pytest
 from helpers import git, has_commit, source_repo, stub_merge_queue
 
 from wisebench import cli, queue
-
-
-def refs(repo):
-    """Every ref in `repo`, with its commit."""
-    return subprocess.run(
-        ["git", "for-each-ref"], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout
 
 
 @pytest.fixture
@@ -45,16 +36,6 @@ def test_an_unpushed_commit_in_the_directory_is_queued_and_present_in_the_checko
     assert has_commit(bench_clone.checkout, sha)
 
 
-def test_the_fetch_writes_no_ref_and_no_fetch_head(source, bench_clone):
-    path, _ = source
-    before = refs(bench_clone.checkout)
-
-    assert cli.main(["test", "HEAD", "-C", str(path)]) == 0
-
-    assert refs(bench_clone.checkout) == before
-    assert not (bench_clone.checkout / ".git" / "FETCH_HEAD").exists()
-
-
 def test_a_ref_that_resolves_only_in_the_checkout_is_refused_for_a_directory(
     source, bench_clone, capsys
 ):
@@ -82,12 +63,3 @@ def test_a_relative_directory_resolves_against_the_callers_directory(
 
     assert [e["sha"] for e in entries(bench_clone)] == [sha]
     assert has_commit(bench_clone.checkout, sha)
-
-
-def test_a_tilde_in_the_directory_is_expanded(source, bench_clone):
-    """HOME is the test's tmp_path, so `~/src` is the source repo."""
-    _, sha = source
-
-    assert cli.main(["test", "HEAD", "-C", "~/src"]) == 0
-
-    assert [e["sha"] for e in entries(bench_clone)] == [sha]

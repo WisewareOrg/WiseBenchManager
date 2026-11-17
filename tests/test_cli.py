@@ -12,7 +12,6 @@ from helpers import (
     add_settings,
     holding,
     run_unit_settings,
-    settings_file,
     stop_argv,
     stub_fetch,
     stub_merge_queue,
@@ -169,6 +168,24 @@ def test_main_run_returns_0_on_a_clean_cycle(made_run, monkeypatch, tmp_path, be
     assert made_run[0].lg_envs == ["unused.yaml"]
 
 
+def test_main_run_runs_the_clones_checkout_config_and_records_with_the_bench_env_variable(
+    made_run, monkeypatch, bench_clone
+):
+    """`bench run` from any directory builds its run from the clone, and `LG_ENV` from bench.env."""
+    _write_bench_toml(bench_clone.checkout)
+    write_bench_toml(bench_clone.elsewhere)
+    bench_clone.bench_env.write_text('# the timer\'s environment\n\nLG_ENV="from-file.yaml"\n')
+    monkeypatch.setattr(cli, "BenchRun", FakeBenchRun)
+
+    assert cli.main(["run"]) == 0
+
+    (instance,) = made_run
+    assert instance.checkout == bench_clone.checkout
+    assert instance.result_dir == bench_clone.records
+    assert instance.config.run_unit == "bench-run"
+    assert instance.lg_envs == ["from-file.yaml"]
+
+
 def test_main_run_returns_2_on_any_exception(made_run, monkeypatch, tmp_path, bench_clone):
     """main returns 2 when a bench run cycle raises."""
     _write_bench_toml(bench_clone.checkout)
@@ -191,22 +208,17 @@ def test_main_run_returns_2_when_the_settings_have_no_run_table(monkeypatch, ben
     assert cli.main(["run"]) == 2
 
 
-def test_main_run_returns_2_naming_the_settings_file_when_it_is_missing(
-    monkeypatch, bench_clone, capsys
-):
-    write_bench_toml(bench_clone.checkout)
+def test_main_run_returns_2_when_the_layers_bench_toml_is_missing(monkeypatch, bench_clone, capsys):
+    """main returns 2 for bench run when the checkout has no bench.toml, settings being whole."""
+    add_settings(GITHUB_SETTINGS)
+    add_settings(run_unit_settings())
     monkeypatch.setenv("LG_ENV", "unused.yaml")
-    assert not settings_file().exists()
+    assert not (bench_clone.checkout / "bench.toml").exists()
 
     assert cli.main(["run"]) == 2
 
-    assert f"BENCH ERROR: {settings_file()} is missing" in capsys.readouterr().err
-
-
-def test_main_run_returns_2_when_bench_toml_is_missing(monkeypatch):
-    """main returns 2 for bench run when bench.toml is missing."""
-    monkeypatch.setenv("LG_ENV", "unused.yaml")
-    assert cli.main(["run"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("BENCH ERROR") and "bench.toml" in err
 
 
 def test_main_run_returns_0_when_the_lock_is_already_held(
@@ -294,7 +306,7 @@ def watched(monkeypatch):
 def test_main_status_watch_reaches_the_watch_loop_without_lg_env(watched, bench_clone):
     """`bench status --watch` skips `LG_ENV`, watches the clone's records and returns its code."""
     assert cli.main(["status", "--watch"]) == 7
-    assert watched == [((bench_clone.records,), {})]
+    assert watched == [((bench_clone.checkout, bench_clone.records), {})]
 
 
 def test_main_status_without_watch_exits_2_asking_for_it(watched, capsys):
