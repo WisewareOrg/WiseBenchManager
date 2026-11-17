@@ -8,8 +8,8 @@
 
 - **rev 1** — 2026-11-16 — first written (#60 Queue behaviour; #23 Queue view; #72 Queue tab shows
   the whole merge queue; #74 one-bench defect: the queue lives in the clone `bench` is installed
-  from, and the ref resolves in that clone's `checkout/` or in a directory named with `-C`, from any
-  directory).
+  from, the ref resolves in that clone's `checkout/` or in a directory named with `-C` from any
+  directory, and `[github]` is read from the bench's own `bench.toml`).
 
 ## Context
 
@@ -45,8 +45,8 @@ run queued by hand, else the first merge-queue entry GitHub has built.**
    watch view, `preview` the watch view alone; `take` serves `bench run`. The order is defined once, in `entries()`.
 5. **The merge queue is read live and in full, from GitHub's GraphQL API.** `Queue` reads
    `repository.mergeQueue(branch: "main").entries` through PyGithub, as the bench's GitHub App of
-   `bench.toml`'s `[github]` table, and lists every entry in GitHub's order with its PR number, title
-   and merge-group commit, which GitHub gives an entry only once it builds it. `take()` reads
+   the `[github]` table of `~/.config/wisebench/bench.toml`, and lists every entry in GitHub's order
+   with its PR number, title and merge-group commit, which GitHub gives an entry only once it builds it. `take()` reads
    the queue, then runs `git fetch origin`, which brings the commit of every entry still queued or
    merged when it runs, and takes the first entry that has one; `entries()` fetches nothing. No
    snapshot of the merge queue is kept, so none can go stale during a run.

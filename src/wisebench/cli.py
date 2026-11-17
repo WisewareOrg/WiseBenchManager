@@ -15,7 +15,7 @@ from wisebench import status
 from wisebench.bench_run import BenchRun
 from wisebench.bench_test import BenchFailure
 from wisebench.clone import locate
-from wisebench.config import Config
+from wisebench.config import Config, settings_path
 from wisebench.lock import Lock
 from wisebench.queue import Queue
 
@@ -134,6 +134,9 @@ def main(argv=None):
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
         return 2
 
+    if not settings_path().is_file():
+        print(f"BENCH ERROR: {settings_path()} is missing", file=sys.stderr)
+        return 2
     try:
         config = Config.load(checkout / "bench.toml")
         bench_run = BenchRun(checkout, config, directory)

@@ -1,26 +1,38 @@
-"""Config: `bench.toml`, parsed once into a frozen dataclass."""
+"""Config: the layer's `bench.toml` and the bench's own, parsed once into a frozen dataclass."""
 
 import tomllib
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def settings_path():
+    """The bench's own settings file, `~/.config/wisebench/bench.toml`.
+
+    Returns:
+        pathlib.Path: Where `[github]` and `[run]` are read from; the file may not exist.
+    """
+    return Path.home() / ".config" / "wisebench" / "bench.toml"
 
 
 @dataclass(frozen=True)
 class Config:
-    """`bench.toml`, read once: the three hooks, the two suites.
+    """The bench's configuration, read once: the layer's hooks and suites, the bench's own settings.
 
     Args:
         hooks (dict[str, str]): Command line for "precondition", "build" and "bundle".
         host_suite (str): Path to the host-side pytest suite, relative to the checkout.
         target_suite (str): Path to the target-side pytest suite, relative to the checkout.
         github_repo (str | None): The repository the verdict is posted against, as
-            "owner/name"; None without a `[github]` table, which `bench run` requires.
+            "owner/name"; None without a `[github]` table in the settings file, which `bench run`
+            requires.
         github_app_id (int | None): The GitHub App's id; None under the same condition.
         github_private_key (str | None): Path to the App's PEM-encoded private key, outside
             the checkout; None under the same condition.
         github_check (str | None): The check run's name, as the layer's ruleset lists it; None
             under the same condition.
         run_unit (str | None): The systemd unit base name (`[run] unit`) `bench run` stops
-            on the bench's own failure; None without a `[run]` table, which `bench run` requires.
+            on the bench's own failure; None without a `[run]` table in the settings file, which
+            `bench run` requires.
     """
 
     hooks: dict
@@ -34,7 +46,10 @@ class Config:
 
     @classmethod
     def load(cls, path):
-        """Read and parse `bench.toml`.
+        """Read and parse the layer's `bench.toml` and the bench's own settings file.
+
+        `[hooks]` and `[tests]` come from the layer's file; `[github]` and `[run]` come only from
+        `settings_path()`, and a missing settings file leaves them None.
 
         Args:
             path (pathlib.Path): Path to `bench.toml` in the checkout.
@@ -43,13 +58,18 @@ class Config:
             Config: The parsed configuration.
 
         Raises:
-            OSError: `path` could not be read.
-            tomllib.TOMLDecodeError: `path` is not valid TOML.
+            OSError: `path`, or an existing settings file, could not be read.
+            tomllib.TOMLDecodeError: `path` or the settings file is not valid TOML.
             KeyError: A required table or key is missing.
         """
         with open(path, "rb") as f:
             raw = tomllib.load(f)
-        github = raw.get("github", {})
+        try:
+            with open(settings_path(), "rb") as f:
+                settings = tomllib.load(f)
+        except FileNotFoundError:
+            settings = {}
+        github = settings.get("github", {})
         return cls(
             hooks=raw["hooks"],
             host_suite=raw["tests"]["host_suite"],
@@ -58,5 +78,5 @@ class Config:
             github_app_id=github.get("app_id"),
             github_private_key=github.get("private_key"),
             github_check=github.get("check"),
-            run_unit=raw.get("run", {}).get("unit"),
+            run_unit=settings.get("run", {}).get("unit"),
         )

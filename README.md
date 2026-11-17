@@ -74,8 +74,8 @@ fixture erroring during setup or teardown is never read as the candidate's test 
 
 ## What a layer provides
 
-The runner reads `bench.toml` from the clone's `checkout/`. Board identity is never in it —
-see "Running it".
+The runner reads `bench.toml` from the clone's `checkout/`, and only its `[hooks]` and `[tests]`; a
+`[github]` or `[run]` table in it is ignored. Board identity is never in it — see "Running it".
 
 ```toml
 schema = 1
@@ -88,7 +88,12 @@ bundle       = "just bundle"
 [tests]
 host_suite   = "tests/host_suite"
 target_suite = "tests/target_suite"
+```
 
+The bench's own settings, `[github]` and `[run]`, are read from `~/.config/wisebench/bench.toml`,
+a file `bench` never writes:
+
+```toml
 [github]
 repo        = "owner/name"
 app_id      = 123456
@@ -99,13 +104,14 @@ check       = "bench"
 unit        = "bench-run"  # bench run stops bench-run.timer on the bench's own failure
 ```
 
-`[github]` names the GitHub App `bench run` (issue #6) posts a verdict through: `repo` the
-layer's own repository, `app_id` the App's id, `private_key` a filesystem path to the App's
-PEM-encoded private key outside any tree (`~` is expanded), `check` the check run's name,
-exactly as the layer's ruleset lists it as a required check. `Queue` builds a `Check` from the
-table whenever it reads the merge queue -- `bench run` on every tick and `bench status --watch` --
-so a `bench.toml` without the table fails those reads, a run queued by hand included; `bench test`
-and `bench unqueue` never read it. `Check` raises if any of the four is missing.
+`bench run` exits 2 when that file is missing. `[github]` names the GitHub App `bench run` (issue
+#6) posts a verdict through: `repo` the layer's own repository, `app_id` the App's id, `private_key`
+a filesystem path to the App's PEM-encoded private key outside any tree (`~` is expanded), `check`
+the check run's name, exactly as the layer's ruleset lists it as a required check. `Queue` builds a
+`Check` from the table whenever it reads the merge queue -- `bench run` on every tick and `bench
+status --watch` -- so a settings file without the table fails those reads, a run queued by hand
+included; `bench test` and `bench unqueue` never read it. `Check` raises if any of the four is
+missing.
 
 For a merge-queue entry, `bench run` calls:
 
@@ -130,7 +136,8 @@ A one-time, by-hand step, before `[github]` can be filled in:
 6. In the layer's repository: Settings → Rules → Rulesets → the main ruleset → Require status
    checks to pass → add the check's name. After the first check run has been posted, edit that
    entry and set its source to the App, so only the App can satisfy it.
-7. Write `[github]` `repo`, `app_id`, `private_key` and `check` into `bench.toml`.
+7. Write `[github]` `repo`, `app_id`, `private_key` and `check` into
+   `~/.config/wisebench/bench.toml`.
 
 A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
 `BENCH_SET` and `BENCH_RESULT_DIR` (the clone's `records/`, absolute) in its environment, output
@@ -263,24 +270,25 @@ you type and `Enter` queues it, and `dd` removes the selected run queued by hand
 the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes
 `DISABLED` and starts the timer. It reads `records/*/bench.log`, each suite's `report.jsonl`,
 whether `records/DISABLED` exists, the holder of the `lock` file from `/proc/locks`, the run timer's
-state from `systemctl --user`, and `bench.toml`. It takes no lock and runs no git itself. The Queue
-tab reads and changes the queue only through `Queue`, the same entry point as `bench test` and
-`bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`), and only
-`:disable` and `:enable` change the timer. No maintained viewer reads the runner's markers or joins
-them to pytest-reportlog's outcomes, so the view is the runner's own, on stdlib `curses`. Bitbake
-shows its task progress only on the terminal that ran the build, so the view reads bitbake's `NOTE:`
-lines from the log; and it asks the kernel's `/proc/locks` who holds the lock rather than `lslocks`,
-which resolves holders by path through `/proc/<pid>/fd`.
+state from `systemctl --user`, and the settings file's `[run] unit`. It takes no lock and runs no
+git itself. The Queue tab reads and changes the queue only through `Queue`, the same entry point as
+`bench test` and `bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`),
+and only `:disable` and `:enable` change the timer. No maintained viewer reads the runner's markers
+or joins them to pytest-reportlog's outcomes, so the view is the runner's own, on stdlib `curses`.
+Bitbake shows its task progress only on the terminal that ran the build, so the view reads bitbake's
+`NOTE:` lines from the log; and it asks the kernel's `/proc/locks` who holds the lock rather than
+`lslocks`, which resolves holders by path through `/proc/<pid>/fd`.
 
 ### Installing `bench run`
 
 In this clone, edit `contrib/bench-run.service`'s `ExecStart` (this clone's own `.venv/bin/bench`)
 and `TimeoutStartSec` (comfortably longer than one build-and-test cycle -- `RuntimeMaxSec` has no
 effect on a `Type=oneshot` service; `TimeoutStartSec` is what bounds one); rename both
-`contrib/bench-run.service` and `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if
-`bench.toml`'s `[run] unit` is not `bench-run`. `WorkingDirectory` must exist, but `bench` ignores
-it. Write `LG_ENV` and `LG_BENCH_ADDRESS` into the path `EnvironmentFile` names. Link and start both
-units straight from this checkout: `systemctl --user enable --now <this
+`contrib/bench-run.service` and `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if the
+settings file's `[run] unit` is not `bench-run`. `WorkingDirectory` must exist, but `bench` ignores
+it. Create `~/.config/wisebench/bench.toml` with `[github]` and `[run]` (see "What a layer
+provides"). Write `LG_ENV` and `LG_BENCH_ADDRESS` into the path `EnvironmentFile` names. Link and
+start both units straight from this checkout: `systemctl --user enable --now <this
 clone>/contrib/<unit>.service <this clone>/contrib/<unit>.timer`.
 
 A run that hits its own failure, or that `TimeoutStartSec` kills with `SIGTERM`, writes
