@@ -319,7 +319,7 @@ class WatchScreen(Screen):
         self.live = self.newest and self.bench.live
         self.run = run
         label = "1 Run" if self.newest or run is None else f"1 Run  {view.clean(run.record)}"
-        self.query_one("#run-tab", Tab).label = label
+        self.query_one("#run-tab", Tab).label = Content(label)
 
     def watch_message(self, message):
         """Show the message under the status bar, or no row for it.
@@ -328,7 +328,7 @@ class WatchScreen(Screen):
             message (str | Content | None): The message.
         """
         label = self.query_one("#message", Label)
-        label.update(view.clean(message) if isinstance(message, str) else message or "")
+        label.update(Content(view.clean(message)) if isinstance(message, str) else message or "")
         label.display = message is not None
 
     def check_action(self, action, parameters):
@@ -630,7 +630,7 @@ class Clock(Label):
 class StatusBar(Horizontal):
     """The bench's badge, its timer, and the `? keys` box."""
 
-    bench = reactive(NO_BENCH)
+    bench = var(NO_BENCH)
 
     def compose(self):
         """The badge, the timer and the keys box.
@@ -663,15 +663,15 @@ class RunView(Vertical):
 
     BINDINGS = [Binding("enter", "into_log", "Into the log")]
 
-    run = reactive(None, always_update=True)
-    newest = reactive(True)
-    live = reactive(False)
-    bench = reactive(NO_BENCH)
-    now = reactive(None)
-    disabled = reactive(None)
+    run = var(None, always_update=True)
+    newest = var(True)
+    live = var(False)
+    bench = var(NO_BENCH)
+    now = var(None)
+    disabled = var(None)
     chosen = var(None)
-    stage = reactive(None, always_update=True)
-    shown = reactive(None, always_update=True)
+    stage = var(None, always_update=True)
+    shown = var(None, always_update=True)
 
     def __init__(self, directory, **kwargs):
         """The Run view.
@@ -752,12 +752,31 @@ class RunView(Vertical):
             log.focus()
 
 
-class RunHeader(Label):
+class Drawn(Label):
+    """A label drawn from its reactive attributes, and redrawn only when what it shows changed."""
+
+    def draw(self):
+        """What the label shows.
+
+        Returns:
+            Content: The lines.
+        """
+        return Content("")
+
+    def redraw(self):
+        """Show what `draw` returns, unless it is what shows already."""
+        content = self.draw()
+        if not (isinstance(self.content, Content) and content.is_same(self.content)):
+            self.update(content)
+
+
+class RunHeader(Drawn):
     """The run's title, its sha and record; `last run` when idle; its result when past."""
 
-    run = reactive(None, always_update=True)
-    newest = reactive(True)
-    bench = reactive(NO_BENCH)
+    run = var(None, always_update=True)
+    newest = var(True)
+    bench = var(NO_BENCH)
+    watch_run = watch_newest = watch_bench = Drawn.redraw
 
     def __init__(self, directory):
         """The header.
@@ -768,7 +787,7 @@ class RunHeader(Label):
         super().__init__()
         self.directory = directory
 
-    def render(self):
+    def draw(self):
         """The header line.
 
         Returns:
@@ -776,7 +795,7 @@ class RunHeader(Label):
         """
         run = self.run
         if run is None:
-            return Content.styled(f"0 records in {self.directory}/", "$dim")
+            return Content.styled(f"0 records in {view.clean(self.directory)}/", "$dim")
         title = (view.clean(view.what(run)), "$bright bold")
         rest = f"{view.sha7(run)}  record {view.clean(run.record)}"
         if not self.newest:
@@ -801,10 +820,10 @@ class StageList(Vertical, can_focus=True):
         Binding("ctrl+u", "move(-3)", "Up half the stages"),
     ]
 
-    run = reactive(None, always_update=True)
-    stage = reactive(None, always_update=True)
-    live = reactive(False)
-    now = reactive(None)
+    run = var(None, always_update=True)
+    stage = var(None, always_update=True)
+    live = var(False)
+    now = var(None)
 
     class Chosen(Message):
         """The operator moved to a stage.
@@ -845,8 +864,10 @@ class StageList(Vertical, can_focus=True):
             if stage.started is not None and stage.state not in ("not-started", "skipped"):
                 text += view.clock(stage.started).ljust(10)
                 text += view.took(stage.started, stage.ended, running, self.now)
-            row.update(text)
-            row.set_classes(f"stage {meaning}" + (" shown" if stage is self.stage else ""))
+            classes = f"stage {meaning}" + (" shown" if stage is self.stage else "")
+            if row.content != text or row.classes != set(classes.split()):
+                row.update(Content(text))
+                row.set_classes(classes)
 
     watch_now = watch_stage
 
@@ -866,15 +887,16 @@ class StageList(Vertical, can_focus=True):
         self.post_message(self.Chosen(names[min(max(at + step, 0), len(names) - 1)]))
 
 
-class Head(Label):
+class Head(Drawn):
     """The pane's head: the summary, a suite's counts, or a build's progress and running tasks."""
 
-    run = reactive(None, always_update=True)
-    stage = reactive(None, always_update=True)
-    live = reactive(False)
-    now = reactive(None)
+    run = var(None, always_update=True)
+    stage = var(None, always_update=True)
+    live = var(False)
+    now = var(None)
+    watch_run = watch_stage = watch_live = watch_now = Drawn.redraw
 
-    def render(self):
+    def draw(self):
         """The head's lines.
 
         Returns:
@@ -939,13 +961,14 @@ class Head(Label):
         return Content("\n").join(lines)
 
 
-class FailureBox(Label):
+class FailureBox(Drawn):
     """The bench failure that disabled the bench, from `DISABLED`, in a red box."""
 
-    stage = reactive(None, always_update=True)
-    disabled = reactive(None)
+    stage = var(None, always_update=True)
+    disabled = var(None)
+    watch_stage = watch_disabled = Drawn.redraw
 
-    def render(self):
+    def draw(self):
         """The box's lines.
 
         Returns:
@@ -1102,9 +1125,9 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
         Binding("enter,space", "toggle", "Fold or unfold the section"),
     ]
 
-    shown = reactive(None, always_update=True)
-    live = reactive(False)
-    now = reactive(None)
+    shown = var(None, always_update=True)
+    live = var(False)
+    now = var(None)
 
     def __init__(self):
         """An empty log."""
@@ -1130,7 +1153,7 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
 
     def watch_now(self):
         """Redraw the running section's time."""
-        if self.live:
+        if self.live and self.rows.stage is not None and self.rows.stage.sections:
             self.refresh()
 
     def lay_out(self):
@@ -1150,8 +1173,12 @@ class LogView(ScrollView, can_focus=True, inherit_bindings=False):
             self.cursor = rows.index((section.id, 0))
         else:
             self.cursor = 0 if stage.sections else rows.count - 1
-        self.scroll_to_region(Region(0, self.cursor, 1, 1), animate=False, immediate=True)
+        self.on_resize()
         self.refresh()
+
+    def on_resize(self):
+        """Scroll as little as keeps the cursor's row on screen."""
+        self.scroll_to_region(Region(0, self.cursor, 1, 1), animate=False, immediate=True)
 
     def go(self, index):
         """Put the cursor on row `index`, clamped, and anchor it there.
@@ -1310,7 +1337,7 @@ class Table(DataTable, inherit_bindings=False):
         Args:
             **kwargs: Widget arguments.
         """
-        super().__init__(cursor_type="row", cell_padding=0, **kwargs)
+        super().__init__(cursor_type="row", cursor_foreground_priority="renderable", **kwargs)
 
     def action_half(self, step):
         """Move the cursor half a page down (1) or up (-1).
@@ -1337,11 +1364,11 @@ class Table(DataTable, inherit_bindings=False):
 class QueueView(Vertical):
     """Queue: the running run, the hand-queued runs and the merge queue; the `:run` preview."""
 
-    runs = reactive(list, always_update=True)
-    bench = reactive(NO_BENCH)
-    entries = reactive(None)
-    typed = reactive(None)
-    preview = reactive(None)
+    runs = var(list, always_update=True)
+    bench = var(NO_BENCH)
+    entries = var(None)
+    typed = var(None)
+    preview = var(None)
 
     def __init__(self, **kwargs):
         """The Queue view.
@@ -1431,9 +1458,9 @@ class QueueView(Vertical):
 class HistoryView(Vertical):
     """History: a row per run, newest first, and the count of records."""
 
-    runs = reactive(list, always_update=True)
-    bench = reactive(NO_BENCH)
-    now = reactive(None)
+    runs = var(list, always_update=True)
+    bench = var(NO_BENCH)
+    now = var(None)
 
     def __init__(self, directory, **kwargs):
         """The History view.
@@ -1495,7 +1522,7 @@ class HistoryView(Vertical):
             records = [r.record for r in runs]
             table.move_cursor(row=records.index(selected) if selected in records else 0)
             self.query_one("#history-footer", Label).update(
-                f"{len(runs)} records in {self.directory}/"
+                Content(f"{len(runs)} records in {view.clean(self.directory)}/")
             )
             return
         for index, (run, (old, old_cells)) in enumerate(zip(runs, self.filled, strict=True)):
@@ -1505,7 +1532,7 @@ class HistoryView(Vertical):
             if cells != old_cells:
                 for column, (cell, was) in enumerate(zip(cells, old_cells, strict=True)):
                     if cell != was:
-                        table.update_cell_at((index, column), cell)
+                        table.update_cell_at((index, column), cell, update_width=True)
             self.filled[index] = (run, cells)
 
     watch_bench = watch_now = watch_runs

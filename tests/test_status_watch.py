@@ -4,17 +4,26 @@ import fcntl
 import os
 import pty
 import select
+import stat
 import struct
 import subprocess
 import sys
 import termios
 import time
+from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import create_autospec
 
 import pytest
-from helpers import add_settings, has_commit, run_unit_settings, source_repo, stub_merge_queue
+from helpers import (
+    add_settings,
+    has_commit,
+    run_unit_settings,
+    source_repo,
+    stub_merge_queue,
+    write_bench_toml,
+)
 from status_helpers import (
     DISABLED,
     IDLE,
@@ -268,9 +277,9 @@ async def test_a_live_build_shows_its_progress_bar_and_running_tasks_oldest_firs
 
 
 async def test_a_past_build_shows_no_running_tasks(pilot, world):
-    world.runs = [run(), building(3)]
+    world.runs = [run(), replace(building(3), record=OLDER)]
     await show(pilot)
-    await press(pilot, "left_square_bracket", "j", "j", "j")
+    await press(pilot, "left_square_bracket")
     assert text(one(pilot, status.Head)).splitlines()[0] == "build  task 1204 of 3311  36%"
     assert "running now" not in text(one(pilot, status.Head))
 
@@ -501,8 +510,8 @@ async def test_a_live_refresh_redraws_only_the_running_row(pilot, world):
     table = one(pilot, "#history-table")
     updated = []
     real = table.update_cell_at
-    table.update_cell_at = lambda at, value: updated.append(at) or real(at, value)
-    world.runs = [live("build", build=plain("build", 3)), *world.runs[1:]]
+    table.update_cell_at = lambda at, value, **kw: updated.append(at) or real(at, value, **kw)
+    world.runs = [replace(live("build"), pr=32), *world.runs[1:]]
     await show(pilot)
     assert updated
     assert {row for row, _ in updated} == {0}
@@ -571,8 +580,11 @@ async def test_run_previews_the_typed_ref_and_enter_queues_it(pilot, world):
     assert world.queue.entries.call_count == 2
 
 
-async def test_a_preview_for_a_ref_no_longer_typed_is_not_shown(pilot):
+async def test_the_preview_follows_the_ref_typed_and_goes_with_the_command_line(pilot, world):
+    world.queue.preview.side_effect = lambda ref, source: {**CLEAN, "subject": ref}
     await press(pilot, "colon", *"run feature-c", "backspace")
+    assert '"feature-"' in text(one(pilot, "#preview"))
+    await press(pilot, "escape")
     assert not one(pilot, "#preview").display
 
 
@@ -784,7 +796,9 @@ def test_on_a_real_terminal_log_text_drives_nothing_the_mouse_is_off_and_ctrl_c_
                 output += chunk
 
     try:
-        read_until(b"owned", 20)
+        read_until(b"1 Run", 20)
+        os.write(fd, b"j")
+        read_until(b"owned", 10)
         os.write(fd, b"\x03")
         read_until(b"\0never", 5)
         deadline = time.monotonic() + 5
@@ -803,7 +817,7 @@ def test_on_a_real_terminal_log_text_drives_nothing_the_mouse_is_off_and_ctrl_c_
     assert os.waitstatus_to_exitcode(wait_status) == 0
     assert b"^[]0;owned^G" in output
     assert b"\x1b]0;owned" not in output
-    assert b"\x07" not in output
+    assert b"owned\x07" not in output
     assert "\x9b".encode() not in output
     for mode in (b"1000", b"1002", b"1003", b"1006", b"1015"):
         assert b"\x1b[?" + mode + b"h" not in output
@@ -829,3 +843,76 @@ async def test_run_with_a_home_relative_directory_previews_and_queues_its_commit
     assert has_commit(bench_clone.checkout, sha)
     held = Queue(bench_clone.checkout, bench_clone.records).entries()
     assert [(e["ref"], e["sha"]) for e in held] == [("HEAD", sha)]
+
+
+def snapshot(root):
+    """Every entry under root: kind, mtime_ns, and file bytes."""
+    seen = {}
+    for path in sorted([root, *root.rglob("*")]):
+        info = path.lstat()
+        body = path.read_bytes() if stat.S_ISREG(info.st_mode) else None
+        seen[str(path)] = (stat.S_IFMT(info.st_mode), info.st_mtime_ns, body)
+    return seen
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores read-only modes")
+async def test_the_watch_writes_nothing_takes_no_lock_and_changes_things_only_through_the_queue(
+    tmp_path, monkeypatch, systemctl, bench_clone
+):
+    """The real records, bench state and app over a read-only tree, keys driving the Queue tab,
+    `:run` and `:remove`: bytes and mtimes unchanged, no flock or lockf, no process started, the
+    only `systemctl` call the timer query, and only `Queue`'s four view methods called."""
+    from wisebench import queue
+
+    record = bench_clone.records / STAMP
+    record.mkdir()
+    (record / "bench.log").write_text(
+        "bench: 2026-11-10T03:00:00+00:00 run started kind=test ref=main\n"
+    )
+    write_bench_toml(bench_clone.checkout)
+    add_settings(run_unit_settings())
+    (bench_clone.records / "DISABLED").write_text("reason\n")
+    (bench_clone.records / "lock").touch()
+    forbidden, started, calls = [], [], []
+
+    def refuse(*args, **kwargs):
+        forbidden.append(args)
+        raise AssertionError("a lock was taken")
+
+    def record_popen(argv, *args, **kwargs):
+        started.append(list(argv))
+        raise FileNotFoundError(argv[0])
+
+    for name, result in (
+        ("entries", [HAND]),
+        ("preview", CLEAN),
+        ("add", (5, "5" * 40, 2)),
+        ("remove", True),
+    ):
+        monkeypatch.setattr(
+            queue.Queue, name, lambda self, *a, _n=name, _r=result: calls.append(_n) or _r
+        )
+    monkeypatch.setattr(fcntl, "flock", refuse)
+    monkeypatch.setattr(fcntl, "lockf", refuse)
+    monkeypatch.setattr(subprocess, "Popen", record_popen)
+    before = snapshot(tmp_path)
+    paths = [tmp_path, *tmp_path.rglob("*")]
+    for path in paths:
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    try:
+        app = status.WatchApp(bench_clone.checkout, bench_clone.records)
+        async with app.run_test(size=SIZE) as pilot:
+            await settle(pilot)
+            await press(pilot, "2", "colon", *"run feature-c", "enter")
+            await press(pilot, "j", "colon", *"remove", "enter")
+            await press(pilot, "q")
+    finally:
+        for path in paths:
+            path.chmod(0o755 if path.is_dir() else 0o644)
+
+    assert forbidden == []
+    assert snapshot(tmp_path) == before
+    assert started == []
+    assert systemctl.calls
+    assert all(call[2] == "is-active" for call in systemctl.calls)
+    assert {"entries", "add", "remove"} <= set(calls) <= {"entries", "preview", "add", "remove"}

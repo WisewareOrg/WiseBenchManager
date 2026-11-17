@@ -51,6 +51,7 @@ Clock {
 }
 
 RunHeader {
+    width: 1fr;
     height: 1;
     margin-bottom: 1;
 }
@@ -87,6 +88,7 @@ StageList {
     height: 1fr;
 
     Head {
+        width: 1fr;
         max-height: 50%;
         margin-bottom: 1;
     }
@@ -150,7 +152,7 @@ Table {
     background: $ground;
 
     & > .datatable--header { color: $dim; background: $ground; text-style: none; }
-    & > .datatable--cursor { background: $selection; color: $text; text-style: none; }
+    & > .datatable--cursor { background: $selection; text-style: none; }
     & > .table--passed { color: $green; }
     & > .table--failed { color: $red; }
     & > .table--running { color: $amber; }
