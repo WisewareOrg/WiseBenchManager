@@ -67,6 +67,7 @@ THEME = Theme(
 
 CSS = f"""
 Screen {{ background: {GROUND}; color: {TEXT}; }}
+* {{ scrollbar-size: 0 0; }}
 #small {{ display: none; }}
 Main.-narrow > *, Main.-short > * {{ display: none; }}
 Main.-narrow > #small, Main.-short > #small {{ display: block; }}
@@ -100,6 +101,8 @@ Log:blur > .tree--cursor {{ background: {GROUND}; }}
 #status, #command {{ height: 1; }}
 #prompt {{ border: none; height: 1; padding: 0; width: 1fr; background: {GROUND}; }}
 #run-hint {{ width: auto; color: {DIM}; }}
+Confirm {{ align: left bottom; background: {GROUND} 0%; }}
+#question {{ height: 1; margin-bottom: 1; background: {GROUND}; }}
 """
 
 _RUNNING_STAGE = "running, {}"
