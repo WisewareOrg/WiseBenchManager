@@ -8,9 +8,10 @@ from unittest.mock import create_autospec
 
 import pytest
 from helpers import clone_root, repo_with_one_commit
+from status_helpers import NOW, Driver
 
 import wisebench
-from wisebench import bench_run
+from wisebench import bench_run, bench_state
 from wisebench.bench_test import BenchTest
 
 
@@ -174,3 +175,76 @@ def local_zone(monkeypatch):
     yield
     monkeypatch.undo()
     time.tzset()
+
+
+@pytest.fixture
+def drive(tmp_path, bench_clone):
+    """Start the watch app headless over the fake clone's checkout; each is stopped at teardown.
+
+    Args:
+        tmp_path (pathlib.Path): The records directory is `tmp_path/records`, made if missing.
+        bench_clone (types.SimpleNamespace): The fake clone whose checkout the queue is over.
+
+    Returns:
+        Callable: Takes `status_helpers.Driver`'s keyword arguments and returns the driver.
+    """
+    drivers = []
+
+    def start(**kwargs):
+        directory = tmp_path / "records"
+        directory.mkdir(exist_ok=True)
+        drivers.append(Driver(bench_clone.checkout, directory, **kwargs))
+        return drivers[-1]
+
+    yield start
+    for driver in drivers:
+        driver.close()
+
+
+@pytest.fixture
+def disk(monkeypatch):
+    """The runs and the bench state the watch app reads, standing in for the records and `/proc`.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores the readers at teardown.
+
+    Returns:
+        types.SimpleNamespace: `runs` (newest first) and `bench`, read on every refresh.
+    """
+    from wisebench import status
+
+    read = SimpleNamespace(runs=[], bench=bench_state.Bench(live=False, disabled=False, timer="on"))
+    monkeypatch.setattr(status.Records, "runs", lambda self: read.runs)
+    monkeypatch.setattr(status, "read_bench", lambda *args: read.bench)
+    return read
+
+
+@pytest.fixture
+def show(monkeypatch, disk, drive, local_zone):
+    """The text the watch app shows over given runs, after given keys.
+
+    Args:
+        monkeypatch (pytest.MonkeyPatch): Restores `Queue`'s methods at teardown.
+        disk (types.SimpleNamespace): Where the runs and the bench are set.
+        drive (Callable): Starts the app.
+        local_zone (None): Pins the local clock text.
+
+    Returns:
+        Callable: `(runs, bench, *keys, queue=None, preview=None, size=(80, 24), now=NOW)` to
+        the screen's text. `queue` is what `Queue.entries` returns, and `preview`, when given,
+        what `Queue.preview` returns.
+    """
+    from wisebench import queue as queue_module
+
+    def shown(runs, bench, *keys, queue=None, preview=None, size=(80, 24), now=NOW):
+        disk.runs, disk.bench = runs, bench
+        monkeypatch.setattr(queue_module.Queue, "entries", lambda self: queue or [])
+        if preview is not None:
+            monkeypatch.setattr(
+                queue_module.Queue, "preview", lambda self, ref, source=None: preview
+            )
+        driver = drive(size=size, now=now)
+        driver.press(*keys)
+        return driver.text()
+
+    return shown

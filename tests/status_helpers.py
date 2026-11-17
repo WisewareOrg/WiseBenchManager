@@ -1,10 +1,14 @@
 """Builders shared by the status tests: marker text, run models and the text a frame shows."""
 
+import asyncio
+import io
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from wisebench import bench_state, runlog, screen
+from rich.console import Console
+
+from wisebench import bench_state, runlog, status
 
 STAMP = "20261110T030715Z"
 OLDER = "20261109T030715Z"
@@ -180,11 +184,80 @@ LONG = run(host_suite=suite("host_suite", ["passed"] * 30, {3: ("boot one",), 7:
 MANY = [run(record=f"2026{i:04d}") for i in range(40, 0, -1)]
 
 
-def shown(frame, cols=80, rows=24):
-    """The text `screen.Screen` shows for `frame` on a `cols` by `rows` terminal, a line per row."""
-    drawn = screen.Screen()
-    drawn.update(frame)
-    return "\n".join(line.decode() for line in drawn.widget.render((cols, rows)).text)
+def immediately(work):
+    """Run background work at once, on the caller's thread."""
+    work()
+
+
+class Driver:
+    """A `status.Watch` run headless on a loop of its own, driven from a synchronous test.
+
+    The app runs only while a call here runs it, so what a test reads is exactly what its keys
+    and refreshes made. `now` is the clock the app reads: `tick` is the one-second refresh with
+    the clock held, `wait` the refresh after the clock moves on.
+
+    Args:
+        checkout (pathlib.Path): The bench's layer checkout.
+        directory (pathlib.Path): The records directory.
+        run (Callable): Runs the app's background work; at once by default.
+        now (datetime): The clock's first reading.
+        size (tuple[int, int]): The terminal's columns and rows.
+    """
+
+    def __init__(self, checkout, directory, run=immediately, now=NOW, size=(80, 24)):
+        self.now = now
+        self.app = status.Watch(checkout, directory, run=run, clock=lambda: self.now)
+        self._loop = asyncio.new_event_loop()
+        self._steps = asyncio.Queue()
+        self._session = self._loop.create_task(self._serve(size))
+        self._do(lambda pilot: pilot.pause())
+
+    async def _serve(self, size):
+        """Run the app and each step handed over, in one task, until a None step."""
+        async with self.app.run_test(size=size) as pilot:
+            while (step := await self._steps.get())[0] is not None:
+                call, done = step
+                try:
+                    done.set_result(await call(pilot))
+                    await pilot.pause()
+                except Exception as exc:
+                    done.set_exception(exc)
+
+    def _do(self, call):
+        """Run the coroutine `call(pilot)` inside the app's session and return its result."""
+        done = self._loop.create_future()
+        self._steps.put_nowait((call, done))
+        return self._loop.run_until_complete(done)
+
+    def settle(self):
+        """Let the app take every message already posted."""
+        self._do(lambda pilot: pilot.pause())
+
+    def press(self, *keys):
+        """Press each key, by Textual's name or as the character it types."""
+        self._do(lambda pilot: pilot.press(*keys))
+
+    def tick(self):
+        """The refresh, at the clock's time."""
+        self._do(lambda pilot: pilot.pause() if self.app.tick() is None else None)
+
+    def wait(self, seconds):
+        """Move the clock on by `seconds`, then refresh."""
+        self.now += timedelta(seconds=seconds)
+        self.tick()
+
+    def text(self):
+        """The screen's text, a line per row."""
+        width, height = self.app.size
+        console = Console(width=width, height=height, file=io.StringIO(), record=True)
+        console.print(self.app.screen._compositor.render_update(full=True))
+        return console.export_text(styles=False)
+
+    def close(self):
+        """Stop the app and its loop."""
+        self._steps.put_nowait((None, None))
+        self._loop.run_until_complete(self._session)
+        self._loop.close()
 
 
 REAL_RUN = Path(__file__).parent / "fixtures" / "real_run"

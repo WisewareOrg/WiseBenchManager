@@ -1,14 +1,13 @@
-"""`screen.Screen`: what a resolved frame shows, read back as the text of the rendered widget."""
+"""What the watch view shows, read back as the text of the running app's screen."""
 
 import re
 
 import pytest
 from status_helpers import (
-    DIRECTORY,
     DISABLED,
     IDLE,
     LIVE,
-    NOW,
+    NAMES,
     OLDER,
     OLDEST,
     STAMP,
@@ -19,15 +18,12 @@ from status_helpers import (
     real_run,
     run,
     running_test,
-    shown,
     stage,
     suite,
     t,
 )
 
-from wisebench import runlog, view
-
-pytestmark = pytest.mark.usefixtures("local_zone")
+from wisebench import runlog
 
 HAND = run(record="20261107T030715Z", kind="test", ref="feature/x", pr=None)
 ERRORED = run(OLDEST, states=["passed", "error"] + ["not-started"] * 5, result="error")
@@ -55,10 +51,9 @@ def lc(hour, minute=0, second=0):
     return f"{(hour + 3) % 24:02d}:{minute:02d}:{second:02d}"
 
 
-def frame(runs, bench=IDLE, now=NOW, queue=None, preview=None, **state):
-    """`runs` resolved through a State built from `state`."""
-    snap = view.Snapshot(runs, bench, now, DIRECTORY, queue, preview)
-    return view.resolve(view.State(**state), snap)
+def to_stage(name):
+    """The keys that select the stage `name` in the stage list: `gg`, then `j` down to it."""
+    return ["g", "g", *["j"] * NAMES.index(name)]
 
 
 def spaced(text):
@@ -66,72 +61,66 @@ def spaced(text):
     return r" +".join(re.escape(word) for word in text.split())
 
 
-def lines_of(text):
-    """The rendered text as a list of lines."""
-    return text.split("\n")
-
-
 def line_holding(text, needle):
-    """The index of the first rendered line holding `needle`."""
-    return next(i for i, line in enumerate(lines_of(text)) if needle in line)
+    """The index of the first line of `text` holding `needle`."""
+    return next(i for i, line in enumerate(text.split("\n")) if needle in line)
 
 
-@pytest.mark.parametrize(
-    ("cols", "rows", "small"), [(79, 24, True), (80, 23, True), (80, 24, False)]
-)
-def test_below_80_columns_or_24_rows_the_view_says_terminal_too_small(cols, rows, small):
-    text = shown(frame([run()]), cols, rows)
+@pytest.mark.parametrize(("size", "small"), [((79, 24), True), ((80, 23), True), ((80, 24), False)])
+def test_below_80_columns_or_24_rows_the_view_says_terminal_too_small(show, size, small):
+    text = show([run()], IDLE, size=size)
     assert ("terminal too small" in text) is small
     assert ("1 Run" in text) is not small
 
 
-def test_the_tab_line_names_the_tabs_a_past_runs_record_and_the_local_clock():
-    newest = shown(frame([run(), run(OLDER)]))
-    assert re.search(r"1 Run +2 Queue +3 History", newest)
-    assert lc(10, 7, 30) in newest
-    past = shown(frame([run(), run(OLDER)], record=OLDER))
-    assert re.search(rf"1 Run +{OLDER}", past)
+def test_the_tabs_are_run_queue_and_history_and_run_names_a_past_runs_record(show):
+    assert re.search(r"1 Run +2 Queue +3 History", show([run(), run(OLDER)], IDLE))
+    assert re.search(rf"1 Run +{OLDER} +2 Queue", show([run(), run(OLDER)], IDLE, "["))
 
 
 @pytest.mark.parametrize(
     ("bench", "badge", "timer"),
     [(LIVE, "RUNNING", "on"), (IDLE, "IDLE", "on"), (DISABLED, "DISABLED", "off")],
 )
-def test_the_status_bar_is_the_badge_the_timer_and_the_keys_box(bench, badge, timer):
-    assert re.search(rf"{badge} +timer {timer}\b.*\? keys", shown(frame([run()], bench)))
+def test_the_status_bar_is_the_badge_and_the_timer_and_the_footer_offers_the_keys(
+    show, bench, badge, timer
+):
+    text = show([run()], bench)
+    assert re.search(rf"{badge} +timer {timer}\b", text)
+    assert re.search(r"\? keys", text)
 
 
 @pytest.mark.parametrize(
-    ("runs", "bench", "state", "header", "prefixed"),
+    ("runs", "bench", "keys", "header", "prefixed"),
     [
-        ([live("build")], LIVE, {}, rf"PR #31 +a1b2c3d +record {STAMP}", False),
-        ([run()], IDLE, {}, rf"last run +PR #31 +a1b2c3d +record {STAMP}", True),
+        ([live("build")], LIVE, [], rf"PR #31 +a1b2c3d +record {STAMP}", False),
+        ([run()], IDLE, [], rf"last run +PR #31 +a1b2c3d +record {STAMP}", True),
         (
             [live("build"), failing_at(OLDER, "bundle")],
             LIVE,
-            {"record": OLDER},
+            ["["],
             rf"PR #31 +a1b2c3d +record {OLDER} +failed +ended {lc(4, 2)}",
             False,
         ),
     ],
     ids=["live", "idle", "past"],
 )
-def test_the_run_header_names_the_run_and_its_state(runs, bench, state, header, prefixed):
-    text = shown(frame(runs, bench, **state))
+def test_the_run_header_names_the_run_and_its_state(show, runs, bench, keys, header, prefixed):
+    text = show(runs, bench, *keys)
     assert re.search(header, text)
     assert ("last run" in text) is prefixed
 
 
-def test_a_stage_row_is_glyph_name_start_and_took_and_a_stage_not_started_has_no_times():
-    text = shown(frame([live("host_suite")], LIVE, now=t(3, 21, 5)))
+def test_a_stage_row_is_glyph_name_start_and_took_and_a_stage_not_started_has_no_times(show):
+    text = show([live("host_suite")], LIVE, now=t(3, 21, 5))
     assert re.search(r"stage +start +took", text)
     assert re.search(rf"✓ checkout +{lc(3)} +0m02s", text)
     assert re.search(rf"● host suite +{lc(3, 20)} +1m05s", text)
     assert re.search(r"· target suite(?! +\d)", text)
 
 
-def test_a_suite_pane_is_its_counts_then_a_header_per_section_with_fold_glyphs():
-    text = shown(frame([running_test(2)], LIVE))
+def test_a_suite_pane_is_its_counts_then_a_header_per_section_with_fold_glyphs(show):
+    text = show([running_test(2)], LIVE, size=(120, 30))
     for pattern in (
         r"target suite +3 of 6 +2 passed +0 failed",
         r"▸ ✓ setup install_candidate",
@@ -143,52 +132,23 @@ def test_a_suite_pane_is_its_counts_then_a_header_per_section_with_fold_glyphs()
     assert "out 2" in text
 
 
-def test_a_live_build_pane_is_its_progress_and_its_running_tasks():
-    text = shown(frame([building(2)], LIVE, now=t(3, 15, 10)))
+def test_a_live_build_pane_is_its_progress_and_its_running_tasks(show):
+    text = show([building(2)], LIVE, now=t(3, 15, 10))
     assert re.search(r"build +task 1204 of 3311 +36%", text)
     assert "running now" in text
     assert re.search(r"r0 +do_compile +4m10s", text)
     assert re.search(r"r1 +do_compile +4m09s", text)
 
 
-def test_on_a_short_terminal_many_running_tasks_still_leave_three_log_lines():
-    tasks = tuple(runlog.Task(f"r{i:02d}", "do_compile", t(3, 11, i)) for i in range(40))
-    progress = runlog.BuildProgress(1204, 3311, tasks, phase="task")
-    lines = [f"NOTE: output line {i}" for i in range(6)]
-    build = stage("build", "open", t(3, 10), lines=lines, progress=progress)
-    text = shown(frame([live("build", build=build)], LIVE))
-    assert sum(line in text for line in lines) >= 3
-
-
-def test_a_short_plain_stage_log_sits_at_the_bottom_of_its_pane_under_its_label():
-    """With a line more, the label and the first line move up and the last line stays put."""
-
-    def rendered(count):
-        """(label line, first log line, last log line) of a plain stage with `count` lines."""
-        lines = [f"posted line {i}" for i in range(count)]
-        posted = stage("posted", "passed", t(3, 30), t(3, 31), lines=lines)
-        text = shown(frame([run(posted=posted)], IDLE, stage="posted"))
-        return (
-            line_holding(text, "this stage's output"),
-            line_holding(text, lines[0]),
-            line_holding(text, lines[-1]),
-        )
-
-    two, three = rendered(2), rendered(3)
-    assert two[0] + 1 == two[1]
-    assert three[0] + 1 == three[1]
-    assert two[2] == three[2]
-
-
-def test_the_idle_summary_is_the_result_its_end_and_length_and_a_row_per_suite():
-    text = shown(frame([FINISHED], IDLE))
+def test_the_idle_summary_is_the_result_its_end_and_length_and_a_row_per_suite(show):
+    text = show([FINISHED], IDLE)
     assert re.search(rf"passed +ended {lc(4, 2)}, took 62m", text)
     assert re.search(r"host suite +2 passed", text)
     assert re.search(r"target suite +6 passed", text)
 
 
-def test_a_history_row_is_record_what_sha_result_took_and_the_trailing_column():
-    text = shown(frame(HISTORY, LIVE, tab="history"))
+def test_a_history_row_is_record_what_sha_result_took_and_the_trailing_column(show):
+    text = show(HISTORY, LIVE, "3", size=(100, 24))
     for pattern in (
         r"record +what +sha +result +took",
         rf"{STAMP} +PR #31 +a1b2c3d +running ",
@@ -199,79 +159,79 @@ def test_a_history_row_is_record_what_sha_result_took_and_the_trailing_column():
         assert re.search(pattern, text), pattern
 
 
-def test_the_history_footer_counts_the_records_and_names_the_directory():
-    text = shown(frame(HISTORY, LIVE, tab="history"))
-    assert f"{len(HISTORY)} records in {DIRECTORY}/" in text
+def test_the_history_footer_counts_the_records_and_names_the_directory_from_where_it_runs(show):
+    assert f"{len(HISTORY)} records in ../records/" in show(HISTORY, LIVE, "3")
 
 
-def test_a_parsed_real_record_draws_its_stages_summary_and_target_suite():
+def test_a_parsed_real_record_draws_its_stages_summary_and_target_suite(show):
     parsed = real_run()
-    summary = shown(frame([parsed], IDLE))
+    summary = show([parsed], IDLE)
     for name in ("checkout", "precondition", "build", "bundle", "host suite", "target suite"):
         assert re.search(rf"✓ {name} ", summary), name
     assert re.search(r"host suite +2 passed", summary)
     assert re.search(r"target suite +4 passed", summary)
 
-    target = shown(frame([parsed], IDLE, stage="target_suite"))
+    target = show([parsed], IDLE, *to_stage("target_suite"))
     assert re.search(r"target suite +4 of 4 +4 passed +0 failed", target)
     assert "✓ setup install_candidate" in target
 
 
-def test_a_stage_left_open_in_a_dead_run_reads_a_question_mark_and_a_dash_for_took():
+def test_a_stage_left_open_in_a_dead_run_reads_a_question_mark_and_a_dash_for_took(show):
     states = ["passed", "passed", "open"] + ["not-started"] * 4
-    text = shown(frame([run(states=states, result=None)], IDLE))
-    assert re.search(rf"\? build +{lc(3, 10)} +—", text)
+    assert re.search(rf"\? build +{lc(3, 10)} +—", show([run(states=states, result=None)], IDLE))
 
 
 DIRTY = "x\x1b[0m\x07y▶é\tz"
 SOURCES = {
-    "a log line": lambda: frame(
-        [live("build", build=stage("build", "open", t(3, 10), lines=[DIRTY]))], LIVE
+    "a log line": (
+        [live("build", build=stage("build", "open", t(3, 10), lines=[DIRTY]))],
+        [],
+        {},
     ),
-    "a merge-queue title": lambda: frame(
-        [run()], IDLE, tab="queue", queue=[{**MERGE_ENTRY, "title": DIRTY}]
+    "a merge-queue title": ([run()], ["2"], {"queue": [{**MERGE_ENTRY, "title": DIRTY}]}),
+    "a preview's subject": (
+        [run()],
+        [*":run feature-c"],
+        {"preview": {**CLEAN, "subject": DIRTY}},
     ),
-    "a message carrying an exception's text": lambda: frame([run()], IDLE, message=DIRTY),
 }
 
 
-@pytest.mark.parametrize("source", SOURCES.values(), ids=SOURCES)
-def test_control_characters_show_as_carets_and_a_tab_as_spaces_and_other_text_unchanged(source):
-    text = shown(source(), cols=120)
+@pytest.mark.parametrize(("runs", "keys", "read"), SOURCES.values(), ids=SOURCES)
+def test_control_characters_show_as_carets_and_a_tab_as_spaces_and_other_text_unchanged(
+    show, runs, keys, read
+):
+    text = show(runs, LIVE, *keys, size=(140, 24), **read)
     assert re.search(r"x\^\[\[0m\^Gy▶é +z", text)
     assert not {"\x1b", "\x07", "\t"} & set(text)
 
 
-def test_a_failed_tests_crash_line_and_traceback_lines_are_drawn_under_its_output():
+def test_a_failed_tests_crash_line_and_traceback_lines_are_drawn_under_its_output(show):
     failed = suite(
         "host_suite",
         ["passed", "failed"],
         {1: ("out line",)},
         {1: ("t.py:88: AssertionError", "E   boom")},
     )
-    text = shown(frame([run(host_suite=failed)], IDLE, stage="host_suite"))
-    output = line_holding(text, "out line")
-    crash = line_holding(text, "t.py:88: AssertionError")
-    boom = line_holding(text, "E   boom")
-    assert output < crash < boom
+    text = show([run(host_suite=failed)], IDLE, *to_stage("host_suite"))
+    assert (
+        line_holding(text, "out line")
+        < line_holding(text, "t.py:88: AssertionError")
+        < line_holding(text, "E   boom")
+    )
 
 
-def test_a_failed_test_with_only_failure_lines_still_shows_its_fold_glyph():
+def test_a_failed_test_with_only_failure_lines_still_shows_its_fold_glyph(show):
     failed = suite("host_suite", ["failed"], failures={0: ("t.py:1: AssertionError",)})
-    assert "▾ ✗ case_00" in shown(frame([run(host_suite=failed)], IDLE, stage="host_suite"))
+    assert "▾ ✗ case_00" in show([run(host_suite=failed)], IDLE, *to_stage("host_suite"))
 
 
-def past_build(lines=2):
-    """A run whose build passed, with bitbake progress and `lines` output lines."""
+def test_a_past_build_labels_its_output(show):
     tasks = tuple(runlog.Task(f"r{i}", "do_compile", t(3, 11, i)) for i in range(3))
     progress = runlog.BuildProgress(1204, 3311, tasks, phase="task")
-    output = [f"NOTE: line {i}" for i in range(lines)]
-    done = stage("build", "passed", t(3, 10), t(3, 40), lines=output, progress=progress)
-    return run(build=done)
-
-
-def test_a_past_build_labels_its_output():
-    assert "this stage's output" in shown(frame([past_build(lines=80)], IDLE, stage="build"))
+    lines = [f"NOTE: line {i}" for i in range(80)]
+    done = stage("build", "passed", t(3, 10), t(3, 40), lines=lines, progress=progress)
+    assert "this stage's output" in show([run(build=done)], IDLE, *to_stage("build"))
 
 
 def parsed_build(*lines):
@@ -307,21 +267,19 @@ HEADS = {
 
 
 @pytest.mark.parametrize(("lines", "phase"), HEADS.values(), ids=HEADS)
-def test_a_builds_head_is_its_phase_text_until_the_first_count(lines, phase):
-    text = shown(frame([parsed_build(*lines)], LIVE))
+def test_a_builds_head_is_its_phase_text_until_the_first_count(show, lines, phase):
+    text = show([parsed_build(*lines)], LIVE)
     assert re.search(r"build +" + spaced(phase) + r"(?!\S)", text)
 
 
-def test_the_queue_draws_its_rows_and_the_preview():
-    text = shown(
-        frame(
-            [live("build")],
-            LIVE,
-            queue=[HAND_ENTRY],
-            preview=("feature-c", CLEAN),
-            tab="queue",
-            prompt=":run feature-c",
-        )
+def test_the_queue_draws_its_rows_and_the_preview(show):
+    text = show(
+        [live("build")],
+        LIVE,
+        *":run feature-c",
+        queue=[HAND_ENTRY],
+        preview=CLEAN,
+        size=(100, 24),
     )
     assert re.search(r"▶.*running, build", text)
     assert re.search(r"by hand +feature-a", text)
@@ -333,32 +291,25 @@ def test_the_queue_draws_its_rows_and_the_preview():
         assert line in text, line
 
 
-@pytest.mark.parametrize("queue", [None, []], ids=["unread", "empty"])
-def test_a_queue_with_nothing_in_it_draws_no_rows_and_no_footer(queue):
-    text = shown(frame([run()], queue=queue, tab="queue"))
+def test_a_queue_with_nothing_in_it_draws_no_rows(show):
+    text = show([run()], IDLE, "2", queue=[])
     assert "by hand" not in text and "merge queue" not in text
-    assert "updated" not in text and " ago" not in text
 
 
-def test_no_preview_box_without_a_result_for_the_typed_ref():
-    typed = frame([run()], queue=[], preview=("other", CLEAN), tab="queue", prompt=":run feature-c")
-    assert "will queue" not in shown(typed)
-
-
-def test_the_run_prompt_shows_the_hints_enter_queue_it_and_esc_cancel_and_no_tab_complete():
-    text = shown(frame([run()], queue=[], tab="queue", prompt=":run feature-c"))
+def test_the_run_prompt_shows_the_hints_enter_queue_it_and_esc_cancel(show):
+    text = show([run()], IDLE, *":run feature-c", queue=[])
     assert ":run feature-c" in text
     assert "Enter queue it  Esc cancel" in text
-    assert "Tab complete" not in text
 
 
-@pytest.mark.parametrize("tab", ["run", "queue", "history", "help"])
-def test_a_message_is_drawn_on_every_tab(tab):
-    assert "queued 5 1234567" in shown(frame([run()], tab=tab, message="queued 5 1234567"))
+@pytest.mark.parametrize("keys", [[], ["2"], ["3"]], ids=["run", "queue", "history"])
+def test_a_message_is_drawn_on_every_tab(show, keys):
+    text = show([run()], IDLE, *":disable", "enter", *keys)
+    assert "no [run] unit in the bench's settings file" in text
 
 
-def test_help_lists_the_keys_under_three_headings_and_no_longer_h_l():
-    text = shown(frame([run()], tab="help"))
+def test_help_lists_the_keys_under_three_headings(show):
+    text = show([run()], IDLE, "?", size=(100, 24))
     for heading in ("move", "runs and log", "commands"):
         assert heading in text
     for pattern in (
@@ -371,16 +322,12 @@ def test_help_lists_the_keys_under_three_headings_and_no_longer_h_l():
         r":enable +start again",
     ):
         assert re.search(pattern, text), pattern
-    assert "prev / next view" not in text
 
 
-@pytest.mark.parametrize(
-    ("tab", "pending"), [("queue", "d"), ("run", "g"), ("history", "z")], ids=["d", "g", "z"]
-)
-def test_a_pending_key_is_drawn_in_the_status_bar_before_the_keys_box(tab, pending):
-    text = shown(frame([run()], tab=tab, pending=pending))
-    assert re.search(rf"timer \w+ +{pending} +\? keys", text)
+@pytest.mark.parametrize(("keys", "pending"), [("2d", "d"), ("g", "g"), ("3z", "z")])
+def test_a_pending_key_is_drawn_in_the_status_bar(show, keys, pending):
+    assert re.search(rf"timer \w+ +{pending}\b", show([run()], IDLE, *keys))
 
 
-def test_no_pending_text_is_drawn_when_no_key_waits():
-    assert re.search(r"timer \w+ +\? keys", shown(frame([run()], tab="queue")))
+def test_no_pending_text_is_drawn_when_no_key_waits(show):
+    assert re.search(r"timer on *\n", show([run()], IDLE, "2"))

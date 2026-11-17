@@ -19,9 +19,9 @@ from helpers import (
     write_lg_env,
     write_suite,
 )
-from status_helpers import mark, real_run, rep, shown
+from status_helpers import mark, real_run, rep
 
-from wisebench import bench_state, bench_test, runlog, status
+from wisebench import bench_state, bench_test, runlog
 from wisebench.lock import Lock
 from wisebench.records import Records
 
@@ -633,9 +633,9 @@ def snapshot(root):
 
 @pytest.mark.skipif(ROOT, reason="root ignores read-only modes")
 def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_reads_and_writes(
-    tmp_path, monkeypatch, systemctl, bench_clone
+    tmp_path, monkeypatch, systemctl, bench_clone, drive
 ):
-    """A `status.Shell` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes
+    """The watch app over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes
     and mtimes unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the
     timer query (asserted on the `systemctl` fixture), and the only `Queue` methods called are
     `entries`, `preview`, `add` and `remove` (stubbed)."""
@@ -695,20 +695,14 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     monkeypatch.setattr(fcntl, "flock", refuse_lock)
     monkeypatch.setattr(fcntl, "lockf", refuse_lock)
     monkeypatch.setattr(subprocess, "Popen", record_popen)
-    now = datetime(2026, 11, 10, 10, 0, 0, tzinfo=UTC)
-    keys = ["2", *":run feature-c", "enter", "d", "d", "q"]
-    quit_on = None
     paths = [p for p in [tmp_path, *tmp_path.rglob("*")]]
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        shell = status.Shell(bench_clone.checkout, records, run=lambda work: work())
-        shell.tick(now)
-        for key in keys:
-            if shell.press(key):
-                quit_on = key
-                break
-            shell.tick(now)
+        watch = drive()
+        watch.press("2", *":run feature-c", "enter", "d", "d")
+        text = watch.text()
+        watch.press("q")
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -721,8 +715,8 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
         systemctl.calls
     )
     assert {"entries", "add", "remove"} <= set(calls) <= {"entries", "preview", "add", "remove"}
-    assert quit_on == "q"
-    assert "feature-a" in shown(shell.frame)
+    assert watch.app.return_code == 0
+    assert "feature-a" in text
 
 
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")
