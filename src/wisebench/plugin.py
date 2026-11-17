@@ -1,7 +1,7 @@
 """pytest plugin: the `bench_candidate` and `proxy` fixtures, the record and run.json.
 
 Each run writes `report.jsonl` and `run.json` directly into `BENCH_RECORD_DIR` when it is set,
-otherwise under `<BENCH_RESULT_DIR>/<UTC timestamp>/`. With `BENCH_RECORD_DIR` set it also
+otherwise under `<the clone's records>/<UTC timestamp>/`. With `BENCH_RECORD_DIR` set it also
 writes `bench:` marker lines (`test queued`, `setup`, `test started`) to stdout through
 `write_mark`.
 run.json holds `version`, `command_line`, `start`, `end`, `exit_status`, and each `BENCH_FIELDS`
@@ -18,14 +18,13 @@ from pathlib import Path
 
 import pytest
 
+from wisebench.clone import locate
 from wisebench.proxy import proxy as proxy
 
 _TIMESTAMP = "%Y%m%dT%H%M%SZ"
-DEFAULT_RESULT_DIR = "records"
 _STDOUT_FD = 1
 
 # Environment variable names.
-BENCH_RESULT_DIR = "BENCH_RESULT_DIR"
 BENCH_RECORD_DIR = "BENCH_RECORD_DIR"
 BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
@@ -65,7 +64,8 @@ def write_mark(fd, event):
 def _run_dir(config):
     """The directory this run's records go in.
 
-    BENCH_RECORD_DIR when set, otherwise BENCH_RESULT_DIR, then this run's timestamp.
+    BENCH_RECORD_DIR when set, otherwise the clone's records directory, then this run's
+    timestamp.
 
     Args:
         config (pytest.Config): The session's pytest configuration.
@@ -76,8 +76,7 @@ def _run_dir(config):
     record_dir = environ.get(BENCH_RECORD_DIR)
     if record_dir:
         return Path(record_dir)
-    base = Path(environ.get(BENCH_RESULT_DIR, DEFAULT_RESULT_DIR))
-    return base / config._wisebench_timestamp
+    return locate()[1] / config._wisebench_timestamp
 
 
 def pytest_addoption(parser):

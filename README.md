@@ -42,7 +42,6 @@ objects only, no ref and no `FETCH_HEAD`; an unpushed commit is queueable, and a
 that does not resolve exits 2. Nothing checks that `<dir>` is the same project, and nothing pins the
 fetched commit but git's two-week prune grace, which covers a queued wait. In the watch, `:run -C
 <dir> <ref>` previews the commit in `<dir>` and fetches on `Enter`, and `<dir>` holds no spaces.
-`BENCH_RESULT_DIR` in the caller's environment does not move the queue or the records.
 
 A queued run builds the commit resolved when it was queued -- unless `--skip-build`, which skips the
 build, `bundle` and the host suite entirely -- and refuses a dirty tree when it starts. A built run's
@@ -139,14 +138,12 @@ A one-time, by-hand step, before `[github]` can be filled in:
 7. Write `[github]` `repo`, `app_id`, `private_key` and `check` into
    `~/.config/wisebench/bench.toml`.
 
-A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE`,
-`BENCH_SET` and `BENCH_RESULT_DIR` (the clone's `records/`, absolute) in its environment, output
-appended to that run's `bench.log`; its exit status is pass or fail. The suites are ordinary pytest
-directories, run under the runner's own interpreter, so a layer's test helpers may import only
-labgrid, pytest, pytest-reportlog, tenacity, mitmproxy, the standard library and whatever the
-layer's own `pythonpath` adds.
-The checkout's own `pyproject.toml` `addopts` never reach that run; its `testpaths`, `pythonpath`
-and markers still do.
+A hook is a command run with the checkout as its working directory and `BENCH_SHA`, `BENCH_TREE` and
+`BENCH_SET` in its environment, output appended to that run's `bench.log`; its exit status is pass
+or fail. The suites are ordinary pytest directories, run under the runner's own interpreter, so a
+layer's test helpers may import only labgrid, pytest, pytest-reportlog, tenacity, mitmproxy, the
+standard library and whatever the layer's own `pythonpath` adds. The checkout's own `pyproject.toml`
+`addopts` never reach that run; its `testpaths`, `pythonpath` and markers still do.
 
 The board comes from labgrid's own pytest plugin and env file — a target named `main`, a
 `NetworkService` resource with the address templated from the environment, an `SSHDriver` — pointed
@@ -169,8 +166,8 @@ There is no pytest mark and no credit rule of the runner's own.
 A run writes one folder, `records/<stamp>/`. It holds `bench.log` and one folder per suite,
 `host_suite/` and `target_suite/`; each suite folder holds that suite's `report.jsonl` and
 `run.json`. The runner sets `BENCH_RECORD_DIR` to the suite's folder, and the plugin writes there
-directly. Run on its own, outside the runner, the plugin writes `$BENCH_RESULT_DIR/<UTC start
-time>/` instead (`BENCH_RESULT_DIR` defaults to `records/`) and prints no `bench:` line.
+directly. Run on its own, outside the runner, the plugin writes the clone's `records/<UTC start
+time>/` instead and prints no `bench:` line.
 
 `bench.log` holds every hook's and suite's output, and every test's output, passing or failing:
 the suites run with `--capture=tee-sys` and `PYTHONUNBUFFERED=1`, so a line is in the log as it is

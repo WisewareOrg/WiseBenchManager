@@ -12,7 +12,6 @@ from wisebench.plugin import (
     _TIMESTAMP,
     BENCH_CANDIDATE_OPTION,
     BENCH_RECORD_DIR,
-    BENCH_RESULT_DIR,
     BENCH_SET,
     BENCH_SHA,
     BENCH_SKIP_BUILD,
@@ -54,8 +53,7 @@ class BenchTest:
             ref (str): The git ref to resolve, check out and test; with `sha` given, only the name
                 the record shows.
             set_name (str | None): The replay set name from `--set`, or None.
-            result_dir (pathlib.Path): The records directory the run's folder goes in; hooks and
-                suites receive it, made absolute, as `BENCH_RESULT_DIR`.
+            result_dir (pathlib.Path): The records directory the run's folder goes in.
             skip_build (bool): Skip `build`, `bundle` and the host suite; the target suite runs
                 with `bench_candidate` `None`, against the board as it is.
             kind (str): `"test"` or `"run"`, for the run-started line only; set by `BenchRun`.
@@ -76,8 +74,8 @@ class BenchTest:
     def run(self, lg_env, pytest_args, post=None):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
 
-        Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`,
-        `BENCH_RESULT_DIR`, and `BENCH_SKIP_BUILD` when skipping the build; each suite also gets
+        Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`
+        and `BENCH_SKIP_BUILD` when skipping the build; each suite also gets
         `BENCH_RECORD_DIR` and `PYTHONUNBUFFERED` (see `_run_suite`). Runs
         `precondition`; unless skipping the build, runs `build`, `bundle` and the host suite,
         and passes the commit to the target suite as `--bench-candidate`. Every hook's and
@@ -115,7 +113,6 @@ class BenchTest:
                     BENCH_SHA: commit,
                     BENCH_TREE: str(self.checkout),
                     BENCH_SET: self.set_name,
-                    BENCH_RESULT_DIR: str(self.result_dir.resolve()),
                 }
                 if self.skip_build:
                     env[BENCH_SKIP_BUILD] = "true"
