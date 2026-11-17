@@ -5,7 +5,6 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 from helpers import (
@@ -108,25 +107,8 @@ def _stub_subprocess(monkeypatch):
     return calls
 
 
-def test_the_result_dir_hooks_receive_is_absolute_when_the_given_one_is_relative(
-    monkeypatch, tmp_path
-):
-    """`BENCH_RESULT_DIR` is exported resolved, so a hook that changes directory still finds it."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-    calls = _stub_subprocess(monkeypatch)
-    write_bench_toml(tmp_path)
-    bench = bench_test.BenchTest(tmp_path, "HEAD", None, result_dir=Path("records"))
-
-    bench.run("env.yaml", [])
-
-    precondition_env = next(env for command, env in calls if command == "true")
-    assert precondition_env["BENCH_RESULT_DIR"] == str(tmp_path.resolve() / "records")
-
-
 def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     """A normal run calls the hooks, both suites and --bench-candidate, in order."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
     monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
@@ -154,7 +136,6 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
     assert commands[7].index("--capture=tee-sys") < commands[7].index("-k")
 
     precondition_env = calls[3][1]
-    assert precondition_env["BENCH_RESULT_DIR"] == str(tmp_path / "records")
     assert "BENCH_SKIP_BUILD" not in precondition_env
 
     target_env = calls[7][1]
@@ -165,7 +146,6 @@ def test_the_happy_path_calls_everything_in_order(monkeypatch, tmp_path):
 
 def test_each_suite_gets_its_own_record_dir_inside_the_run_folder(monkeypatch, tmp_path):
     """Each suite's BENCH_RECORD_DIR is its stage's folder inside the run folder, and no hook's."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
     write_bench_toml(tmp_path)
@@ -182,7 +162,6 @@ def test_each_suite_gets_its_own_record_dir_inside_the_run_folder(monkeypatch, t
 
 def test_skip_build_skips_build_bundle_and_the_host_suite(monkeypatch, tmp_path):
     """skip_build skips build, bundle and the host suite, and passes no --bench-candidate."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     calls = _stub_subprocess(monkeypatch)
     write_bench_toml(tmp_path)

@@ -3,19 +3,17 @@ fixture."""
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 
 from wisebench.plugin import SETUP_ERROR_EXIT_STATUS, write_mark
 
 
-def _run_one_passing_test(pytester, monkeypatch):
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
+def _run_one_passing_test(pytester, monkeypatch, bench_clone):
     pytester.makepyfile("def test_pass():\n    assert True\n")
     result = pytester.runpytest()
     result.assert_outcomes(passed=1)
-    run_dirs = list(Path("records").iterdir())
+    run_dirs = list(bench_clone.records.iterdir())
     assert len(run_dirs) == 1
     return run_dirs[0]
 
@@ -27,13 +25,14 @@ def _run_one_passing_test(pytester, monkeypatch):
         ("def test_fail():\n    assert False\n", 1),
     ],
 )
-def test_run_json_has_the_named_fields(pytester, monkeypatch, body, expected_exit_status):
+def test_run_json_has_the_named_fields(
+    pytester, monkeypatch, bench_clone, body, expected_exit_status
+):
     """run.json has exactly the always-present fields, with the right exit_status."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile(body)
     result = pytester.runpytest()
     assert result.ret == expected_exit_status
-    run_dirs = list(Path("records").iterdir())
+    run_dirs = list(bench_clone.records.iterdir())
     assert len(run_dirs) == 1
     data = json.loads((run_dirs[0] / "run.json").read_text())
     assert set(data) == {"version", "command_line", "start", "end", "exit_status"}
@@ -43,18 +42,17 @@ def test_run_json_has_the_named_fields(pytester, monkeypatch, body, expected_exi
     assert data["exit_status"] == expected_exit_status
 
 
-def test_reportlog_lands_under_the_results_dir(pytester, monkeypatch):
+def test_reportlog_lands_under_the_results_dir(pytester, monkeypatch, bench_clone):
     """report.jsonl lands under the results directory."""
-    run_dir = _run_one_passing_test(pytester, monkeypatch)
+    run_dir = _run_one_passing_test(pytester, monkeypatch, bench_clone)
     assert (run_dir / "report.jsonl").is_file()
 
 
-def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
+def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch, bench_clone):
     """run.json carries test_commit and set from their env vars, and omits unset fields."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.setenv("BENCH_SHA", "deadbeef")
     monkeypatch.setenv("BENCH_SET", "scratch-set")
-    run_dir = _run_one_passing_test(pytester, monkeypatch)
+    run_dir = _run_one_passing_test(pytester, monkeypatch, bench_clone)
     data = json.loads((run_dir / "run.json").read_text())
     assert data["test_commit"] == "deadbeef"
     assert "tree" not in data
@@ -62,18 +60,16 @@ def test_run_json_carries_the_bench_fields_that_are_set(pytester, monkeypatch):
     assert "skip_build" not in data
 
 
-def test_run_json_carries_skip_build_when_set(pytester, monkeypatch):
+def test_run_json_carries_skip_build_when_set(pytester, monkeypatch, bench_clone):
     """run.json carries skip_build when BENCH_SKIP_BUILD is set."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     monkeypatch.setenv("BENCH_SKIP_BUILD", "true")
-    run_dir = _run_one_passing_test(pytester, monkeypatch)
+    run_dir = _run_one_passing_test(pytester, monkeypatch, bench_clone)
     data = json.loads((run_dir / "run.json").read_text())
     assert data["skip_build"] == "true"
 
 
-def test_a_fixture_setup_error_substitutes_the_exit_status(pytester, monkeypatch):
+def test_a_fixture_setup_error_substitutes_the_exit_status(pytester, monkeypatch, bench_clone):
     """A fixture erroring during setup substitutes SETUP_ERROR_EXIT_STATUS for pytest's own."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("""
         import pytest
 
@@ -86,14 +82,13 @@ def test_a_fixture_setup_error_substitutes_the_exit_status(pytester, monkeypatch
     """)
     result = pytester.runpytest()
     assert result.ret == SETUP_ERROR_EXIT_STATUS
-    run_dirs = list(Path("records").iterdir())
+    run_dirs = list(bench_clone.records.iterdir())
     data = json.loads((run_dirs[0] / "run.json").read_text())
     assert data["exit_status"] == SETUP_ERROR_EXIT_STATUS
 
 
 def test_bench_candidate_defaults_to_none(pytester, monkeypatch):
     """bench_candidate is None without --bench-candidate."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("""
         def test_candidate_is_none(bench_candidate):
             assert bench_candidate is None
@@ -104,7 +99,6 @@ def test_bench_candidate_defaults_to_none(pytester, monkeypatch):
 
 def test_bench_candidate_reads_the_command_line_option(pytester, monkeypatch):
     """bench_candidate reads --bench-candidate's value."""
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("""
         def test_candidate_is_the_built_commit(bench_candidate):
             assert bench_candidate == "deadbeef"
@@ -113,29 +107,31 @@ def test_bench_candidate_reads_the_command_line_option(pytester, monkeypatch):
     result.assert_outcomes(passed=1)
 
 
-def test_a_plain_run_records_under_a_stamp_folder_and_prints_no_bench_line(pytester, monkeypatch):
+def test_a_plain_run_records_under_a_stamp_folder_and_prints_no_bench_line(
+    pytester, monkeypatch, bench_clone
+):
     """With BENCH_RECORD_DIR unset, records land in records/<stamp>/ and no `bench:` line prints."""
     monkeypatch.delenv("BENCH_RECORD_DIR", raising=False)
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("def test_pass():\n    assert True\n")
     result = pytester.runpytest("-s")
     result.assert_outcomes(passed=1)
-    (stamp_dir,) = Path("records").iterdir()
+    (stamp_dir,) = bench_clone.records.iterdir()
     assert (stamp_dir / "report.jsonl").is_file()
     assert (stamp_dir / "run.json").is_file()
     assert not any(line.startswith("bench:") for line in result.outlines)
 
 
-def test_record_dir_receives_the_records_directly_with_no_stamp_folder(pytester, monkeypatch):
+def test_record_dir_receives_the_records_directly_with_no_stamp_folder(
+    pytester, monkeypatch, bench_clone
+):
     """With BENCH_RECORD_DIR set, report.jsonl and run.json land directly in it."""
     record_dir = pytester.path / "direct"
     monkeypatch.setenv("BENCH_RECORD_DIR", str(record_dir))
-    monkeypatch.delenv("BENCH_RESULT_DIR", raising=False)
     pytester.makepyfile("def test_pass():\n    assert True\n")
     result = pytester.runpytest()
     result.assert_outcomes(passed=1)
     assert sorted(p.name for p in record_dir.iterdir()) == ["report.jsonl", "run.json"]
-    assert not Path("records").exists()
+    assert list(bench_clone.records.iterdir()) == []
 
 
 def test_write_mark_starts_on_a_fresh_line_only_when_the_file_does_not_end_in_one(tmp_path):
