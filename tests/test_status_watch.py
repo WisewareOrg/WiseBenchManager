@@ -201,7 +201,8 @@ def test_tab_and_shift_tab_cycle_the_views_and_help_takes_only_its_own_keys(view
     assert "record" in v.press("tab").text
     assert "stage" in v.press("tab").text
     assert "record" in v.press("shift tab").text
-    assert "keys" in v.press("?").text and "keys" in v.press("j", "2", "tab").text
+    assert "runs and log" in v.press("?").text
+    assert "runs and log" in v.press("j", "2", "tab").text
     assert "record" in v.press("esc").text
 
 
@@ -244,11 +245,14 @@ def test_a_key_or_a_refresh_builds_no_more_rows_than_the_screen_shows(view, monk
     monkeypatch.setattr(status, "_row", lambda *args, **kwargs: built.append(1) or real(*args))
     for lines in (100, 10_000):
         v = view([live("build", build=plain("build", lines))], LIVE, size=(100, 30))
-        v.press("enter", "g", "g")
+        built.clear()
+        v.press("k", "j", "enter", "g", "g")
+        assert len(built) <= 2 * 30
         built.clear()
         v.press(*["j"] * 60)
         assert len(built) <= 60
         built.clear()
+        v.runs = [live("build", build=plain("build", lines + 1))]
         v.wait()
         assert len(built) <= 30
 
@@ -294,7 +298,7 @@ def test_the_selection_stays_on_its_row_as_rows_come_and_go(view):
     v = view([run()])
     v.queue.entries.return_value = [HAND, MERGE]
     v.press("2").release().press("j")
-    v.queue.entries.return_value = [MERGE]
+    v.queue.entries.return_value = [{**HAND, "id": 4, "ref": "feature-b"}, HAND, MERGE]
     v.wait(30).release()
     assert v.colour("PR #14")[1] == palette("selection")[1]
 
