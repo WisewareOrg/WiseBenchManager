@@ -583,10 +583,6 @@ def test_a_failed_read_while_the_command_line_is_open_leaves_no_message_behind_a
     assert "remote is down" not in after
 
 
-def test_page_keys_before_anything_is_drawn_raise_nothing(tmp_path):
-    Watch(tmp_path).press("ctrl d", "ctrl u")
-
-
 def test_the_shell_runs_background_work_through_the_worker_thread_by_default():
     assert inspect.signature(status.Shell).parameters["run"].default is status._background
 

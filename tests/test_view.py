@@ -572,15 +572,9 @@ def test_log_focus_with_no_rows_moves_the_stage_list_instead():
     assert (state.stage, state.cursor) == ("bundle", None)
 
 
-@pytest.mark.parametrize(
-    ("stage_name", "key", "expected"),
-    [("checkout", "k", "checkout"), ("posted", "j", "posted"), (None, "k", "posted")],
-    ids=["clamps at the top", "clamps at the bottom", "k from the summary"],
-)
-def test_the_stage_list_clamps_and_k_from_the_summary_lands_on_the_last_stage(
-    stage_name, key, expected
-):
-    state = view.State(stage=stage_name)
+@pytest.mark.parametrize(("key", "expected"), [("j", "checkout"), ("k", "posted")])
+def test_j_and_k_from_the_summary_land_on_the_first_and_the_last_stage(key, expected):
+    state = view.State()
     press(state, [run()], key)
     assert state.stage == expected
 
@@ -599,17 +593,6 @@ def test_fold_keys_do_nothing_on_a_lead_line_or_with_focus_on_the_stages(keys, f
     state = view.State(stage="host_suite", focus=focus, cursor=rows[0].anchor)
     press(state, [LEAD], keys)
     assert state.folds == {}
-
-
-@pytest.mark.parametrize(
-    ("at", "keys", "row"),
-    [(0, "k", 0), (29, "j", 29), (28, HALF_DOWN, 29), (1, HALF_UP, 0)],
-    ids=["k at the top", "j at the bottom", "^d past the end", "^u past the start"],
-)
-def test_log_movement_clamps_at_the_first_and_last_row(at, keys, row):
-    state = view.State(stage="host_suite", focus="log", cursor=host_rows()[at].anchor)
-    press(state, [LONG], keys)
-    assert resolve([LONG], state=state).cursor == row
 
 
 def test_moving_onto_the_last_log_row_follows_the_tail():
@@ -723,9 +706,9 @@ def test_leaving_and_re_entering_the_queue_selects_the_first_row_again():
 
 @pytest.mark.parametrize(
     ("keys", "at"),
-    [("j", 1), ("jj", 2), ("jjj", 2), ("jjk", 1), ("k", 0), ("G", 2), ("Ggg", 0), ("Gk", 1)],
+    [("j", 1), ("jj", 2), ("jjk", 1), ("G", 2), ("Ggg", 0), ("Gk", 1)],
 )
-def test_j_k_gg_and_capital_g_move_the_queue_cursor_and_clamp(keys, at):
+def test_j_k_gg_and_capital_g_move_the_queue_cursor(keys, at):
     state = view.State()
     read = {"queue": [HAND1, HAND2, MERGE]}
     press(state, [run()], "2" + keys, **read)

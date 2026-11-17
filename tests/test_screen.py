@@ -85,10 +85,10 @@ def test_below_80_columns_or_24_rows_the_view_says_terminal_too_small(cols, rows
     assert ("1 Run" in text) is not small
 
 
-def test_the_tab_line_names_the_tabs_a_past_runs_record_and_the_local_clock():
+def test_the_tab_line_names_the_tabs_and_a_past_runs_record_and_the_status_bar_the_clock():
     newest = shown(frame([run(), run(OLDER)]))
     assert re.search(r"1 Run +2 Queue +3 History", newest)
-    assert lc(10, 7, 30) in newest
+    assert re.search(rf"{lc(10, 7, 30)} +\? keys", newest)
     past = shown(frame([run(), run(OLDER)], record=OLDER))
     assert re.search(rf"1 Run +{OLDER}", past)
 

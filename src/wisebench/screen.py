@@ -42,6 +42,7 @@ KEYS = {
     "esc": Command.MENU,
 }
 
+_BAR_CELLS = 33
 _TASK_ROWS = 8
 _WHAT_WIDTH = 20
 _PROMPT_HINT = "Enter queue it  Esc cancel"
@@ -112,14 +113,6 @@ class MinimumSize(urwid.WidgetWrap):
             small = urwid.Text("terminal too small", wrap="clip")
             return urwid.Filler(small, "top").render(size, focus)
         return super().render(size, focus)
-
-
-class _Bar(urwid.ProgressBar):
-    """A progress bar without its percentage."""
-
-    def get_text(self):
-        """No text over the bar."""
-        return ""
 
 
 class Screen(urwid.WidgetWrap):
@@ -525,12 +518,16 @@ def _build_head(frame):
     stage = frame.stage
     progress = stage.progress
     progress_line = f"  {progress.phase}"
+    filled = 0
     if progress.total:
         percent = progress.done * 100 // progress.total
+        filled = round(_BAR_CELLS * progress.done / progress.total)
         progress_line += f" {progress.done} of {progress.total}  {percent}%"
     _, colour, _ = _tone(stage.state, _running(frame, stage))
-    bar = _Bar(_attr(RULE, RULE), _attr(colour, colour), progress.done, progress.total or 1)
-    head = [_row([("build", colour, True), (progress_line, TEXT, False)]), bar]
+    head = [
+        _row([("build", colour, True), (progress_line, TEXT, False)]),
+        _row([("▉" * filled, colour, False), ("▉" * (_BAR_CELLS - filled), RULE, False)]),
+    ]
     if _running(frame, stage):
         head.append(_row([("running now", DIM, False)]))
     return head
