@@ -5,6 +5,7 @@ resolved `view.Frame`. Every string read from disk, git or the network is drawn 
 `rich.text.Text` through `clean`, never as markup. The colours are the canvas's hex values.
 """
 
+from rich.style import Style
 from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -69,8 +70,15 @@ Screen {{ background: {GROUND}; color: {TEXT}; }}
 #small {{ display: none; }}
 Main.-narrow > *, Main.-short > * {{ display: none; }}
 Main.-narrow > #small, Main.-short > #small {{ display: block; }}
-Header {{ background: {GROUND}; color: {TEXT}; text-style: bold; }}
+Header, HeaderClock {{ background: {GROUND}; color: {TEXT}; text-style: bold; }}
+HeaderClock {{ color: {DIM}; text-style: none; text-opacity: 100%; }}
+DataTable:focus, Tree:focus, Input:focus, DataTable:focus > .datatable--header {{
+    background-tint: {GROUND} 0%;
+}}
+Tab {{ color: {DIM}; }}
 Tab.-active {{ background: {TEXT}; color: {GROUND}; }}
+Underline > .underline--bar {{ color: {RULE}; background: {GROUND}; }}
+DataTable {{ background: {GROUND}; }}
 #tabs, TabPane, TabPane > Horizontal {{ height: 1fr; }}
 TabPane {{ padding: 0; }}
 .keys {{ width: auto; margin-right: 2; }}
@@ -262,7 +270,12 @@ class Table(DataTable):
 
     def __init__(self, *columns, show_header=True, **kwargs):
         """A table of `columns`, the cursor on a whole row."""
-        super().__init__(cursor_type="row", show_header=show_header, **kwargs)
+        super().__init__(
+            cursor_type="row",
+            cursor_foreground_priority="renderable",
+            show_header=show_header,
+            **kwargs,
+        )
         self._labels = columns
         self._rows = None
 
@@ -345,6 +358,10 @@ class Log(Tree):
         self.stage = None
         self.chosen = False
         self.follow = False
+
+    def render_label(self, node, base_style, style):
+        """A row's label, keeping its own colours under the cursor's ground."""
+        return super().render_label(node, base_style, Style(bgcolor=style.bgcolor))
 
     def action_move(self, action):
         """A move the user made: the cursor stays where they put it."""
