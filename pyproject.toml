@@ -12,6 +12,7 @@ dependencies = [
     "pytest>=9.1.1",
     "pytest-reportlog>=1.0",
     "tenacity>=9.0",
+    "textual>=8.2.8",
 ]
 
 [project.entry-points.pytest11]
@@ -32,12 +33,15 @@ cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true 
 
 [dependency-groups]
 dev = [
+    "pytest-asyncio>=1.5.0",
     "ruff>=0.17.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-p no:wisebench -p no:labgrid -p pytester"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100

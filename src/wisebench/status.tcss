@@ -1,0 +1,218 @@
+/* The watch view's layout and colours; the palette is the `bench` theme's variables. */
+
+Screen {
+    background: $ground;
+    color: $text;
+    layers: base;
+}
+
+Label {
+    width: auto;
+}
+
+#tabline {
+    height: 2;
+    border-bottom: solid $rule;
+}
+
+#brand {
+    text-style: bold;
+    margin-right: 1;
+}
+
+Tabs {
+    width: 1fr;
+    height: 1;
+    background: $ground;
+
+    Underline {
+        display: none;
+    }
+
+    Tab {
+        color: $dim;
+        padding: 0 1;
+        height: 1;
+
+        &.-active {
+            color: $ground;
+            background: $text;
+            text-style: none;
+        }
+    }
+}
+
+Clock {
+    color: $dim;
+}
+
+#views {
+    height: 1fr;
+}
+
+RunHeader {
+    height: 1;
+    margin-bottom: 1;
+}
+
+#run-body {
+    height: 1fr;
+}
+
+StageList {
+    width: 34;
+    height: auto;
+    margin-right: 1;
+
+    .columns {
+        color: $dim;
+    }
+
+    .stage {
+        width: 100%;
+
+        &.passed { color: $green; }
+        &.failed { color: $red; text-style: bold; }
+        &.running { color: $amber; text-style: bold; }
+        &.dim { color: $dim; }
+        &.shown { background: $selection; }
+        &.shown.running { background: $running-tint; }
+        &.shown.failed { background: $failed-tint; }
+    }
+}
+
+#pane {
+    border-left: solid $rule;
+    padding-left: 1;
+    height: 1fr;
+
+    Head {
+        max-height: 50%;
+        margin-bottom: 1;
+    }
+
+    FailureBox {
+        display: none;
+        width: 1fr;
+        border: solid $red;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+
+    #output-label, #hint {
+        color: $dim;
+    }
+
+    #hint {
+        display: none;
+    }
+
+    LogView {
+        height: 1fr;
+    }
+
+    &.summary {
+        #output-label, LogView { display: none; }
+    }
+
+    &.suite {
+        #output-label { display: none; }
+        #hint { display: block; }
+        Head { margin-bottom: 0; }
+    }
+
+    &.plain Head {
+        display: none;
+    }
+
+    &.failure {
+        Head { display: none; }
+        FailureBox { display: block; }
+    }
+}
+
+LogView {
+    scrollbar-size: 0 0;
+    background: $ground;
+
+    & > .log--line { color: $log; }
+    & > .log--dim { color: $dim; }
+    & > .log--passed { color: $green; }
+    & > .log--failed { color: $red; text-style: bold; }
+    & > .log--running { color: $amber; text-style: bold; }
+    & > .log--hand { color: $blue; }
+    & > .log--cursor { background: $selection; }
+}
+
+Table {
+    height: 1fr;
+    scrollbar-size: 0 0;
+    background: $ground;
+
+    & > .datatable--header { color: $dim; background: $ground; text-style: none; }
+    & > .datatable--cursor { background: $selection; color: $text; text-style: none; }
+    & > .table--passed { color: $green; }
+    & > .table--failed { color: $red; }
+    & > .table--running { color: $amber; }
+    & > .table--dim { color: $dim; }
+    & > .table--hand { color: $blue; }
+}
+
+#queue-table {
+    height: auto;
+    max-height: 1fr;
+}
+
+#preview {
+    dock: bottom;
+    width: auto;
+    border: solid $blue;
+    padding: 0 1;
+    display: none;
+}
+
+#history-footer {
+    color: $dim;
+}
+
+StatusBar {
+    height: 2;
+    border-top: solid $rule;
+
+    #badge {
+        text-style: bold;
+        margin-right: 2;
+
+        &.running { background: $amber; color: $ground; }
+        &.disabled { background: $red; color: $ground; }
+        &.idle { background: $rule; color: $bright; }
+    }
+
+    #timer {
+        width: 1fr;
+    }
+}
+
+#message {
+    width: 1fr;
+    display: none;
+}
+
+#command-row {
+    height: 1;
+    display: none;
+
+    Input {
+        width: 1fr;
+        height: 1;
+        border: none;
+        padding: 0;
+        background: $ground;
+        color: $text;
+    }
+
+    #run-hint {
+        color: $dim;
+        display: none;
+    }
+}

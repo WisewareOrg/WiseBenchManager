@@ -1,212 +1,47 @@
-"""`status.watch` and its curses shell: exit codes, the corner cell, the loop and the palette."""
+"""`status`: the watch view driven through Textual's Pilot, and once through a real terminal."""
 
-import curses
 import fcntl
 import os
+import pty
 import select
-import shutil
 import struct
 import subprocess
 import sys
 import termios
 import time
-import types
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import create_autospec
 
 import pytest
-from helpers import (
-    COLS,
-    ROWS,
-    FakeScreen,
-    add_settings,
-    clone_root,
-    has_commit,
-    run_unit_settings,
-    source_repo,
-    start_argv,
-    stop_argv,
-    stub_merge_queue,
-    terminal,
-    write_bench_toml,
+from helpers import add_settings, has_commit, run_unit_settings, source_repo, stub_merge_queue
+from status_helpers import (
+    DISABLED,
+    IDLE,
+    LIVE,
+    NOW,
+    OLDER,
+    OLDEST,
+    STAMP,
+    TESTS,
+    building,
+    failing_at,
+    live,
+    plain,
+    run,
+    running_test,
+    sid,
+    stage,
+    suite,
 )
+from textual.color import Color
+from textual.geometry import Region
+from textual.widgets import Label
 
-from wisebench import queue, screen, status
+from wisebench import status
+from wisebench.queue import Queue
 
-
-def _checkout(tmp_path):
-    """The fake clone's layer checkout the `bench_clone` fixture makes under `tmp_path`."""
-    return clone_root(tmp_path) / "checkout"
-
-
-def test_watch_returns_0_on_ctrl_c(monkeypatch, tmp_path):
-    def interrupted(*args):
-        """Stand-in for curses.wrapper that raises Ctrl-C."""
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(curses, "wrapper", interrupted)
-    assert status.watch(_checkout(tmp_path), tmp_path) == 0
-
-
-def test_watch_returns_2_and_names_the_error_when_curses_cannot_start(
-    monkeypatch, tmp_path, capsys
-):
-    monkeypatch.delenv("TERM", raising=False)
-    assert status.watch(_checkout(tmp_path), tmp_path) == 2
-    assert "BENCH ERROR:" in capsys.readouterr().err
-
-
-def attribute(fake, text):
-    """The attributes of the first write holding `text`."""
-    return next(attr for _, _, written, attr in fake.writes if text in written)
-
-
-def test_a_write_into_the_bottom_right_cell_is_tolerated_and_one_on_another_row_raised(
-    monkeypatch, tmp_path
-):
-    terminal(monkeypatch, tmp_path, 0)
-    corner = FakeScreen(keys=["q"])
-    assert status._loop(corner, _checkout(tmp_path), tmp_path) == 0
-    assert corner.corner > 0
-    with pytest.raises(curses.error):
-        status._loop(FakeScreen(keys=["q"], fail_on_row=0), _checkout(tmp_path), tmp_path)
-
-
-def test_the_loop_redraws_after_the_one_second_timeout_and_returns_0_on_q(monkeypatch, tmp_path):
-    terminal(monkeypatch, tmp_path, 0)
-    fake = FakeScreen(keys=[curses.error("no input"), "q"])
-
-    assert status._loop(fake, _checkout(tmp_path), tmp_path) == 0
-    assert fake.events == ["frame", "key", "frame", "key"]
-
-
-def test_256_colours_draw_each_canvas_colour_as_its_fixed_xterm_pair(monkeypatch, tmp_path):
-    pairs, touched = terminal(monkeypatch, tmp_path, 256)
-    fake = FakeScreen(keys=["q"])
-    status._loop(fake, _checkout(tmp_path), tmp_path)
-
-    assert pairs[(attribute(fake, "1 Run") >> 8) & 0xFF] == (232, 252)
-    assert pairs[(attribute(fake, "IDLE") >> 8) & 0xFF] == (231, 237)
-    assert touched == []
-
-
-def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_exactly(
-    monkeypatch, tmp_path
-):
-    pairs, touched = terminal(monkeypatch, tmp_path, 256, redefinable=True)
-    fake = FakeScreen(keys=["q"])
-    status._loop(fake, _checkout(tmp_path), tmp_path)
-
-    expected = [
-        (16, 48, 48, 48),
-        (17, 800, 800, 800),
-        (18, 546, 546, 546),
-        (19, 659, 659, 659),
-        (20, 228, 228, 228),
-        (21, 1000, 1000, 1000),
-        (22, 597, 765, 475),
-        (23, 899, 753, 483),
-        (24, 879, 424, 459),
-        (25, 381, 687, 938),
-        (26, 165, 150, 79),
-        (27, 228, 114, 126),
-        (28, 122, 165, 212),
-    ]
-    assert touched == expected
-    pair = pairs[(attribute(fake, "IDLE") >> 8) & 0xFF]
-    assert pair == (21, 20)
-
-
-def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkeypatch, tmp_path):
-    terminal(monkeypatch, tmp_path, 8)
-    fake = FakeScreen(keys=["q"])
-    status._loop(fake, _checkout(tmp_path), tmp_path)
-
-    assert attribute(fake, "1 Run") & curses.A_REVERSE
-    assert attribute(fake, "IDLE") & curses.A_REVERSE
-    assert not attribute(fake, "3 History") & curses.A_REVERSE
-
-
-def test_below_256_colours_a_selected_tinted_row_is_reverse_video_and_the_ground_is_not(
-    monkeypatch, tmp_path
-):
-    terminal(monkeypatch, tmp_path, 8)
-    attributes = status._attributes()
-
-    for filled in (screen.FAILED_TINT, screen.RUNNING_TINT, screen.SELECTION):
-        assert attributes(screen.TEXT, filled, False) & curses.A_REVERSE
-    assert not attributes(screen.TEXT, None, False) & curses.A_REVERSE
-
-
-def test_a_surface_write_is_clipped_at_the_right_edge_and_dropped_past_it():
-    fake = FakeScreen()
-    surface = status._Surface(fake, ROWS, COLS, lambda fg, bg, bold: 7)
-    surface.put(0, COLS - 10, "x" * 30, "#ffffff")
-    surface.put(1, COLS, "gone", "#ffffff")
-    assert fake.writes == [(0, COLS - 10, "x" * 10, 7)]
-
-
-def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_path, bench_clone):
-    """Real curses on a pty: the corner-cell behaviour the fake window imitates."""
-    if (
-        shutil.which("infocmp") is None
-        or subprocess.run(["infocmp", "xterm-256color"], capture_output=True).returncode
-    ):
-        pytest.skip("no xterm-256color terminfo entry")
-    import pty
-
-    code = (
-        "import sys; from wisebench import status; "
-        f"sys.exit(status.watch({str(bench_clone.checkout)!r}, {str(tmp_path)!r}))"
-    )
-    pid, fd = pty.fork()
-    if pid == 0:
-        try:
-            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-            os.environ["TERM"] = "xterm-256color"
-            os.execv(sys.executable, [sys.executable, "-c", code])
-        finally:
-            os._exit(127)
-
-    output = b""
-
-    def read_until(needles, seconds):
-        """Collect the child's output until every needle appears, it closes, or `seconds` pass."""
-        nonlocal output
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline and not all(n in output for n in needles):
-            if select.select([fd], [], [], 0.1)[0]:
-                try:
-                    chunk = os.read(fd, 65536)
-                except OSError:
-                    return
-                if not chunk:
-                    return
-                output += chunk
-
-    try:
-        read_until((b"1 Run", b"0 records"), 5)
-        os.write(fd, b"q")
-        read_until((b"\0",), 3)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            done, status_code = os.waitpid(pid, os.WNOHANG)
-            if done:
-                break
-            time.sleep(0.05)
-        else:
-            os.kill(pid, 9)
-            os.waitpid(pid, 0)
-            pytest.fail("the shell did not exit after q")
-    finally:
-        os.close(fd)
-
-    assert os.waitstatus_to_exitcode(status_code) == 0
-    assert b"1 Run" in output
-    assert b"0 records" in output
-
-
-# -- the Queue tab through the loop ------------------------------------------------------
-
+SIZE = (120, 34)
 HAND = {
     "kind": "test",
     "id": 3,
@@ -217,609 +52,780 @@ HAND = {
     "skip_build": False,
     "args": [],
 }
-SHA = "1234567" + "0" * 33
-TIMEOUT = curses.error("no input")
-IMMEDIATELY = {"run": lambda work: work()}
+MERGE = {"kind": "run", "pr": 14, "title": "Add slot check", "sha": "9" * 40}
+CLEAN = {"sha": "1234567" + "0" * 33, "subject": "Fix the thing", "clean": True}
+PALETTE = {name: Color.parse(value) for name, value in status.PALETTE.items()}
 
 
-class Clock:
-    """The loop's `datetime.now(UTC)`, held still until a test moves it."""
+class Fixed(datetime):
+    """`datetime` whose `now` is the tests' NOW."""
 
-    def __init__(self, monkeypatch):
-        """Replace `status.datetime` so `datetime.now(UTC)` reads this clock."""
-        self.start = self.at = datetime(2026, 11, 10, 10, 0, 0, tzinfo=UTC)
-        monkeypatch.setattr(status, "datetime", types.SimpleNamespace(now=lambda tz=None: self.at))
-
-    def elapsed(self):
-        """Seconds since the clock was made."""
-        return (self.at - self.start).total_seconds()
-
-    def wait(self, seconds):
-        """A key that moves the clock on by `seconds`."""
-        return lambda: setattr(self, "at", self.at + timedelta(seconds=seconds))
+    @classmethod
+    def now(cls, tz=None):
+        return NOW
 
 
-def stub_queue(monkeypatch, clock=None, entries=None, preview=None, add=None, remove=None):
-    """Replace the four `Queue` methods the view may call with recorders.
-
-    Args:
-        monkeypatch (pytest.MonkeyPatch): Restores the methods at teardown.
-        clock (Clock | None): When given, each call is recorded with the seconds elapsed.
-        entries (callable | None): Returns `entries()`'s value, or raises; default no entries.
-        preview (callable | None): Called with the ref; default a clean checkout.
-        add (callable | None): Called with `add`'s arguments; default `(5, SHA, 1)`.
-        remove (callable | None): Called with the id; default True.
-
-    Returns:
-        list[tuple]: Every call, in order: `("entries",)`, `("preview", ref)`,
-        `("add", ref, set_name, skip_build, pytest_args)`, `("remove", id)`; with a clock, a
-        trailing elapsed-seconds item.
-    """
-    calls = []
-
-    def record(*call):
-        calls.append((*call, clock.elapsed()) if clock else call)
-
-    def read(self):
-        record("entries")
-        return entries() if entries else []
-
-    def show(self, ref, source=None):
-        record("preview", ref)
-        if preview:
-            return preview(ref)
-        return {"sha": SHA, "subject": f"subject of {ref}", "clean": True}
-
-    def queue_up(self, ref, set_name, skip_build, pytest_args, source=None):
-        arguments = (ref, set_name, skip_build, pytest_args)
-        record("add", *arguments)
-        return add(*arguments) if add else (5, SHA, 1)
-
-    def take_out(self, entry_id):
-        record("remove", entry_id)
-        return remove(entry_id) if remove else True
-
-    monkeypatch.setattr(queue.Queue, "entries", read)
-    monkeypatch.setattr(queue.Queue, "preview", show, raising=False)
-    monkeypatch.setattr(queue.Queue, "add", queue_up)
-    monkeypatch.setattr(queue.Queue, "remove", take_out)
-    return calls
+@pytest.fixture
+def world(monkeypatch):
+    """What the app reads: runs, a bench and an autospec `Queue`, each set by the test."""
+    world = SimpleNamespace(runs=[run()], bench=IDLE, queue=create_autospec(Queue, instance=True))
+    world.queue.entries.return_value = []
+    world.queue.preview.return_value = CLEAN
+    world.queue.add.return_value = (5, "5" * 40, 1)
+    world.queue.remove.return_value = True
+    monkeypatch.setattr(status, "Records", lambda _: SimpleNamespace(runs=lambda: world.runs))
+    monkeypatch.setattr(status, "read_bench", lambda *_: world.bench)
+    monkeypatch.setattr(status, "Queue", lambda *_: world.queue)
+    monkeypatch.setattr(status, "datetime", Fixed)
+    return world
 
 
-def watch_with(monkeypatch, tmp_path, keys):
-    """Run the loop over `keys` with immediate background work and no colours: the FakeScreen."""
-    terminal(monkeypatch, tmp_path, 0)
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir(exist_ok=True)
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    return fake
+@pytest.fixture
+async def pilot(world, bench_clone):
+    """The app running headless over `world`, its first read in."""
+    app = status.WatchApp(bench_clone.checkout, bench_clone.records)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        yield pilot
 
 
-def every_frame(fake):
-    """The text of every frame drawn."""
-    return "\n".join("\n".join(frame) for frame in fake.frames)
+async def settle(pilot):
+    """Let every worker finish and every message land."""
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
 
 
-def last_frame(fake):
-    """The text of the last frame drawn."""
-    return "\n".join(fake.frames[-1])
+async def show(pilot):
+    """Read the records again after the test changed what they hold."""
+    pilot.app.screen.read()
+    await settle(pilot)
 
 
-def test_entering_the_queue_reads_it_once_through_a_queue_over_the_clones_checkout(
-    monkeypatch, tmp_path, bench_clone
+async def press(pilot, *keys):
+    """Press keys, then let what they started finish."""
+    await pilot.press(*keys)
+    await settle(pilot)
+
+
+def one(pilot, selector):
+    """The screen's one widget matching a type or selector."""
+    return pilot.app.screen.query_one(selector)
+
+
+def text(widget):
+    """What a label-like widget shows, as plain text."""
+    return str(widget.render())
+
+
+def lines(widget):
+    """Each screen line a widget draws, as plain text."""
+    return [strip.text.rstrip() for strip in widget.render_lines(Region(0, 0, *widget.size))]
+
+
+def cells(pilot, table_id):
+    """Each row of a table as its cells' plain text."""
+    table = one(pilot, table_id)
+    return [[cell.plain.strip() for cell in table.get_row_at(i)] for i in range(table.row_count)]
+
+
+def stage_rows(pilot):
+    """Each shown stage row's text and classes."""
+    rows = pilot.app.screen.query(".stage").results(Label)
+    return [(text(row).rstrip(), set(row.classes)) for row in rows if row.display]
+
+
+def focused(pilot):
+    """The type name of the focused widget."""
+    return type(pilot.app.focused).__name__
+
+
+def message(pilot):
+    """The message row's text."""
+    return text(one(pilot, "#message"))
+
+
+# -- Run: the stage list ----------------------------------------------------------------------
+
+
+async def test_the_stage_list_shows_each_stage_with_its_glyph_start_and_took(
+    pilot, world, local_zone
 ):
-    owners = []
-    calls = stub_queue(monkeypatch, entries=lambda: [HAND])
-    read = queue.Queue.entries
-    monkeypatch.setattr(
-        queue.Queue,
-        "entries",
-        lambda self: (owners.append((self.checkout, self.directory)), read(self))[1],
-    )
-    fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
-    assert calls == [("entries",)]
-    assert owners == [(bench_clone.checkout, tmp_path / "records")]
-    assert "feature-a" in last_frame(fake)
-
-
-def test_no_read_happens_while_another_tab_shows_however_long_it_stays(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, [TIMEOUT, clock.wait(40), TIMEOUT, clock.wait(40), "q"])
-    assert calls == []
-
-
-def test_leaving_the_queue_stops_the_reads_and_entering_it_again_reads_again(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    keys = ["2", TIMEOUT, "1", clock.wait(40), clock.wait(40), TIMEOUT, "q"]
-    watch_with(monkeypatch, tmp_path, keys)
-    assert len(calls) == 1
-    again = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, "1", "2", TIMEOUT, "q"])
-    assert len(again) == 2
-
-
-def test_shift_tab_reaches_the_view_as_its_key_and_Tab_goes_the_other_way(monkeypatch, tmp_path):
-    calls = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, [curses.KEY_BTAB, curses.KEY_BTAB, TIMEOUT, "q"])
-    assert calls == [("entries",)]
-    forward = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, ["\t", TIMEOUT, "q"])
-    assert forward == [("entries",)]
-
-
-def test_while_the_queue_shows_it_is_read_every_30_seconds(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch, clock=clock)
-    keys = ["2", TIMEOUT]
-    for _ in range(8):
-        keys += [clock.wait(10), TIMEOUT]
-    watch_with(monkeypatch, tmp_path, [*keys, "q"])
-    times = [call[-1] for call in calls]
-    assert len(times) == 3
-    assert times[0] == 0
-    assert all(
-        30 <= later - earlier <= 40 for earlier, later in zip(times, times[1:], strict=False)
-    )
-
-
-def test_a_failed_read_shows_the_bench_failure_text_and_the_view_goes_on(monkeypatch, tmp_path):
-    from wisebench.bench_test import BenchFailure
-
-    boom = BenchFailure("merge queue read failed")
-    stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(boom))
-    fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
-    assert "merge queue read failed" in last_frame(fake)
-
-
-def test_a_failed_read_keeps_the_last_good_rows(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    outcomes = [[HAND], RuntimeError("queue.db is locked")]
-
-    def entries():
-        outcome = outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-    stub_queue(monkeypatch, entries=entries)
-    keys = ["2", TIMEOUT, TIMEOUT, clock.wait(31), TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    frame = last_frame(fake)
-    assert "queue.db is locked" in frame and "feature-a" in frame
-
-
-def test_run_previews_the_typed_ref_and_draws_the_result(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    keys = ["2", TIMEOUT, *":run feature-c", *[clock.wait(1)] * 5, "\x1b", "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert ("preview", "feature-c") in calls
-    frame = every_frame(fake)
-    assert "will queue" in frame and 'resolves to 1234567 "subject of feature-c"' in frame
-
-
-def test_a_preview_of_a_ref_no_longer_typed_is_never_drawn(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    stub_queue(
-        monkeypatch,
-        preview=lambda ref, source=None: {
-            "sha": SHA,
-            "subject": f"result for {ref}",
-            "clean": True,
-        },
-    )
-    settle = [clock.wait(1)] * 5
-    fake_keys = ["2", TIMEOUT, *":run alpha", *settle]
-    seen = []
-    fake_keys += [
-        lambda: seen.append(len(fake.frames)),
-        *"\x7f\x7f\x7f\x7f\x7f",
-        *"beta",
-        *settle,
-        "\x1b",
-        "q",
+    world.runs, world.bench = [live("build")], LIVE
+    await show(pilot)
+    assert [row for row, _ in stage_rows(pilot)][:4] == [
+        "✓ checkout       06:00:00  0m02s",
+        "✓ precondition   06:05:00  0m02s",
+        "● build          06:10:00  417m30s",
+        "· bundle",
     ]
-    terminal(monkeypatch, tmp_path, 0)
-    fake = FakeScreen(keys=fake_keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    before = "\n".join("\n".join(frame) for frame in fake.frames[: seen[0]])
-    after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] + 1 :])
-    assert "result for alpha" in before
-    assert "result for alpha" not in after
-    assert "result for beta" in after
 
 
-def test_enter_on_run_queues_the_ref_says_so_and_reads_the_queue_again(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch, entries=lambda: [HAND])
-    keys = ["2", TIMEOUT, *":run feature-c", *[clock.wait(1)] * 3, "\n", TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    names = [call[0] for call in calls]
-    assert ("add", "feature-c", None, False, []) in calls
-    assert names.count("add") == 1 and names.count("entries") == 2
-    assert names.index("add") < len(names) - 1 - names[::-1].index("entries")
-    assert "queued 5 1234567" in last_frame(fake)
-
-
-def test_run_of_an_unresolvable_ref_says_so_and_the_view_goes_on(monkeypatch, tmp_path):
-    def refuse(*arguments):
-        raise subprocess.CalledProcessError(128, ["git", "rev-parse"])
-
-    stub_queue(monkeypatch, add=refuse)
-    fake = watch_with(monkeypatch, tmp_path, ["2", *":run nope", "\n", TIMEOUT, "q"])
-    assert "nope does not resolve to a commit" in last_frame(fake)
-
-
-def test_run_with_no_ref_calls_nothing_and_says_nothing(monkeypatch, tmp_path):
-    calls = stub_queue(monkeypatch)
-    fake = watch_with(monkeypatch, tmp_path, [*":run ", "\n", TIMEOUT, "q"])
-    assert [call[0] for call in calls if call[0] in ("add", "preview")] == []
-    assert "queued" not in last_frame(fake)
-
-
-def test_dd_removes_the_hand_row_under_the_cursor_and_reads_the_queue_again(monkeypatch, tmp_path):
-    calls = stub_queue(monkeypatch, entries=lambda: [HAND])
-    watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"])
-    assert calls == [("entries",), ("remove", 3), ("entries",)]
-
-
-def test_a_successful_dd_says_which_run_was_removed(monkeypatch, tmp_path):
-    stub_queue(monkeypatch, entries=lambda: [HAND])
-    keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert "removed queued run 3" in last_frame(fake)
-
-
-def test_dd_on_a_row_already_gone_says_there_is_no_such_run(monkeypatch, tmp_path):
-    stub_queue(monkeypatch, entries=lambda: [HAND], remove=lambda entry_id: False)
-    keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert "no queued run 3" in last_frame(fake)
-
-
-def test_dd_on_a_merge_entry_refuses_and_calls_remove_for_nothing(monkeypatch, tmp_path):
-    merge = {"kind": "run", "pr": 14, "title": "Add slot check", "sha": "9" * 40}
-    calls = stub_queue(monkeypatch, entries=lambda: [merge])
-    keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert [call for call in calls if call[0] == "remove"] == []
-    assert "only hand-queued runs can be removed" in last_frame(fake)
-
-
-@pytest.mark.parametrize("which", ["add", "remove"])
-def test_any_failure_of_add_or_remove_becomes_the_message_and_the_view_goes_on(
-    monkeypatch, tmp_path, which
-):
-    import sqlite3
-
-    def locked(*arguments):
-        raise sqlite3.OperationalError("database is locked")
-
-    stub_queue(monkeypatch, entries=lambda: [HAND], **{which: locked})
-    typed = ["2", TIMEOUT, TIMEOUT, *":run feature-c", "\n"] if which == "add" else ["2", TIMEOUT]
-    keys = [*typed, *(["d", "d"] if which == "remove" else []), TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert "database is locked" in last_frame(fake)
-
-
-def held_work():
-    """Background work held until a key releases it.
-
-    Returns the list `run` appends to and a key that runs all of it.
-    """
-    held = []
-
-    def release():
-        while held:
-            held.pop(0)()
-
-    return held, release
-
-
-def test_at_most_one_preview_is_in_flight_and_the_newest_typed_ref_follows_its_result(
-    monkeypatch, tmp_path
-):
-    calls = stub_queue(monkeypatch)
-    held, release = held_work()
-    terminal(monkeypatch, tmp_path, 0)
-    keys = ["2", TIMEOUT, *":run m", *"ain", release, release, "\x1b", "q"]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
-    assert [call[1] for call in calls if call[0] == "preview"] == ["m", "main"]
-
-
-def test_no_second_preview_is_asked_when_the_ref_typed_is_back_to_the_one_requested(
-    monkeypatch, tmp_path
-):
-    calls = stub_queue(monkeypatch)
-    held, release = held_work()
-    terminal(monkeypatch, tmp_path, 0)
-    keys = ["2", TIMEOUT, *":run m", "x", "\x7f", release, release, "\x1b", "q"]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
-    assert [call[1] for call in calls if call[0] == "preview"] == ["m"]
-
-
-def test_one_entries_read_is_in_flight_at_a_time_however_long_it_takes(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    held, release = held_work()
-    terminal(monkeypatch, tmp_path, 0)
-    stall = clock.wait(31)
-    keys = ["2", stall, stall, stall, release, stall, release, "q"]
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(FakeScreen(keys=keys), _checkout(tmp_path), directory, run=held.append) == 0
-    assert [call for call in calls if call[0] == "entries"] == [("entries",)] * 2
-
-
-def test_a_failed_read_while_the_command_line_is_open_leaves_no_message_behind_after_esc(
-    monkeypatch, tmp_path
-):
-    stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(RuntimeError("remote is down")))
-    terminal(monkeypatch, tmp_path, 0)
-    seen = []
-    keys = [*":run x", TIMEOUT, lambda: seen.append(len(fake.frames)), "\x1b", TIMEOUT, "q"]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] :])
-    assert "remote is down" not in after
-
-
-def test_the_loop_runs_background_work_through_the_worker_thread_by_default():
-    import inspect
-
-    assert inspect.signature(status._loop).parameters["run"].default is status._background
-
-
-def test_background_work_runs_in_order_on_one_thread_that_is_not_the_callers():
-    import threading
-
-    done, threads, order = threading.Event(), [], []
-
-    def work(name):
-        def run():
-            threads.append(threading.get_ident())
-            order.append(name)
-            if name == "last":
-                done.set()
-
-        return run
-
-    for name in ("first", "second", "last"):
-        status._background(work(name))
-    assert done.wait(5), "the worker never ran the work"
-    assert order == ["first", "second", "last"]
-    assert len(set(threads)) == 1 and threading.get_ident() not in threads
-
-
-ASK = "Enable the bench?"
-
-
-def bench_command(monkeypatch, tmp_path, keys, *, unit=True, disabled=True):
-    """Run the loop over `keys` in a directory with a bench.toml, DISABLED, or neither.
-
-    Returns the FakeScreen and the records directory.
-    """
-    directory = tmp_path / "records"
-    directory.mkdir(exist_ok=True)
-    if unit:
-        checkout = clone_root(tmp_path) / "checkout"
-        write_bench_toml(checkout)
-        add_settings(run_unit_settings())
-    if disabled:
-        (directory / "DISABLED").write_text("2026-11-13T00:00:00+00:00\nboom\n")
-    return watch_with(monkeypatch, tmp_path, keys), directory
-
-
-def changes(systemctl):
-    """The systemctl calls that are not the timer query."""
-    return [call for call in systemctl.calls if call[2] != "is-active"]
-
-
-def test_disable_stops_the_timer_says_so_and_leaves_disabled_alone(
-    monkeypatch, tmp_path, systemctl
-):
-    fake, directory = bench_command(monkeypatch, tmp_path, [*":disable", "\n", TIMEOUT, "q"])
-    assert changes(systemctl) == [stop_argv("bench-run")]
-    assert "bench disabled" in last_frame(fake)
-    assert (directory / "DISABLED").exists()
-
-
-def test_disable_with_no_disabled_file_writes_none(monkeypatch, tmp_path, systemctl):
-    _, directory = bench_command(
-        monkeypatch, tmp_path, [*":disable", "\n", TIMEOUT, "q"], disabled=False
-    )
-    assert changes(systemctl) == [stop_argv("bench-run")]
-    assert not (directory / "DISABLED").exists()
-
-
-def test_enable_asks_first_and_changes_nothing_until_y(monkeypatch, tmp_path, systemctl):
-    fake, directory = bench_command(monkeypatch, tmp_path, [*":enable", "\n", TIMEOUT, "q", "q"])
-    assert changes(systemctl) == []
-    assert (directory / "DISABLED").exists()
-    assert any(ASK in "\n".join(frame) for frame in fake.frames)
-
-
-def test_enable_then_y_removes_disabled_starts_the_timer_and_says_so(
-    monkeypatch, tmp_path, systemctl
-):
-    keys = [*":enable", "\n", TIMEOUT, "y", TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys)
-    assert changes(systemctl) == [start_argv("bench-run")]
-    assert not (directory / "DISABLED").exists()
-    assert "bench enabled" in last_frame(fake)
-    assert ASK not in last_frame(fake)
-
-
-def test_enable_then_y_with_no_disabled_file_still_starts_the_timer(
-    monkeypatch, tmp_path, systemctl
-):
-    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
-    fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
-    assert changes(systemctl) == [start_argv("bench-run")]
-    assert "bench enabled" in last_frame(fake)
-
-
-def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_showing(
-    monkeypatch, tmp_path, systemctl
-):
-    stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(RuntimeError("remote is down")))
-    held, release = held_work()
-    checkout = clone_root(tmp_path) / "checkout"
-    write_bench_toml(checkout)
-    add_settings(run_unit_settings())
-    terminal(monkeypatch, tmp_path, 0)
-    seen = []
-    keys = [
-        "2",
-        TIMEOUT,
-        *":enable",
-        "\n",
-        release,
-        lambda: seen.append(last_frame(fake)),
-        "n",
-        "q",
-    ]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
-    assert ASK in seen[0]
-    assert "remote is down" not in seen[0]
-    assert changes(systemctl) == []
-
-
-@pytest.mark.parametrize("cancel", ["n", "x", "\x1b"])
-def test_enable_then_another_key_changes_nothing_and_clears_the_question(
-    monkeypatch, tmp_path, systemctl, cancel
-):
-    keys = [*":enable", "\n", cancel, TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys)
-    assert changes(systemctl) == []
-    assert (directory / "DISABLED").exists()
-    assert any(ASK in "\n".join(frame) for frame in fake.frames)
-    assert ASK not in last_frame(fake)
-
-
-def test_disable_with_no_run_unit_says_so_and_calls_nothing(monkeypatch, tmp_path, systemctl):
-    keys = [*":disable", "\n", TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
-    assert systemctl.calls == []
-    assert "no [run] unit in the bench's settings file" in last_frame(fake)
-    assert (directory / "DISABLED").exists()
-
-
-def test_enable_with_no_run_unit_says_so_and_leaves_disabled_in_place(
-    monkeypatch, tmp_path, systemctl
-):
-    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
-    assert systemctl.calls == []
-    assert "no [run] unit in the bench's settings file" in last_frame(fake)
-    assert (directory / "DISABLED").exists()
+async def test_the_shown_stage_follows_the_run_until_one_is_chosen(pilot, world):
+    world.runs, world.bench = [live("build")], LIVE
+    await show(pilot)
+    assert one(pilot, status.RunView).stage.name == "build"
+    world.runs = [live("bundle")]
+    await show(pilot)
+    assert one(pilot, status.RunView).stage.name == "bundle"
+    await press(pilot, "k")
+    world.runs = [live("host_suite")]
+    await show(pilot)
+    assert one(pilot, status.RunView).stage.name == "build"
 
 
 @pytest.mark.parametrize(
-    ("verb", "command", "answer", "text"),
+    ("keys", "expected"),
     [
+        (["j"], "checkout"),
+        (["k"], "posted"),
+        (["j", "j", "k"], "checkout"),
+        (["end"], "posted"),
+        (["G", "home"], "checkout"),
+        (["k", "j"], "posted"),
+    ],
+    ids=["j from the summary", "k from the summary", "j j k", "End", "G then Home", "clamped"],
+)
+async def test_the_stage_list_keys_move_the_stage_shown(pilot, keys, expected):
+    await press(pilot, *keys)
+    assert one(pilot, status.RunView).stage.name == expected
+
+
+async def test_only_the_shown_stage_row_is_marked_shown(pilot, world, local_zone):
+    world.runs, world.bench = [live("build")], LIVE
+    await show(pilot)
+    shown = [row for row, classes in stage_rows(pilot) if "shown" in classes]
+    assert shown == ["● build          06:10:00  417m30s"]
+
+
+# -- Run: the header ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("runs", "bench", "keys", "header"),
+    [
+        ([live("build")], LIVE, [], "PR #31  a1b2c3d  record 20261110T030715Z"),
+        ([run()], IDLE, [], "last run  PR #31  a1b2c3d  record 20261110T030715Z"),
         (
-            "stop",
-            ":disable",
-            dict(returncode=1, stderr="not loaded\n"),
-            "systemctl failed: not loaded",
+            [run(), failing_at(OLDER, "bundle")],
+            IDLE,
+            ["left_square_bracket"],
+            "PR #31  a1b2c3d  record 20261109T030715Z  failed  ended 07:02:00",
         ),
-        ("stop", ":disable", dict(returncode=4), "systemctl failed: exit 4"),
-        ("start", ":enable", dict(returncode=1, stderr="no unit\n"), "systemctl failed: no unit"),
+        ([], IDLE, [], "0 records in"),
+    ],
+    ids=["live", "idle", "past", "no runs"],
+)
+async def test_the_header_names_the_run_and_its_state(
+    pilot, world, local_zone, runs, bench, keys, header
+):
+    world.runs, world.bench = runs, bench
+    await show(pilot)
+    await press(pilot, *keys)
+    assert text(one(pilot, status.RunHeader)).startswith(header)
+
+
+async def test_brackets_step_through_older_and_newer_runs_and_1_comes_back(pilot, world):
+    world.runs = [run(), run(OLDER), run(OLDEST)]
+    await show(pilot)
+    await press(pilot, *["left_square_bracket"] * 3)
+    assert one(pilot, status.RunView).run.record == OLDEST
+    await press(pilot, "right_square_bracket")
+    assert one(pilot, status.RunView).run.record == OLDER
+    assert str(one(pilot, "#run-tab").label) == f"1 Run  {OLDER}"
+    await press(pilot, "1")
+    assert one(pilot, status.RunView).run.record == STAMP
+
+
+# -- Run: the pane's forms ----------------------------------------------------------------------
+
+
+async def test_the_summary_is_the_result_its_end_and_length_and_a_row_per_suite(
+    pilot, world, local_zone
+):
+    world.runs = [run(host_suite=suite("host_suite", ["passed", "passed"]))]
+    await show(pilot)
+    assert text(one(pilot, status.Head)).splitlines() == [
+        "passed  ended 07:02:00, took 62m",
+        "host suite    2 passed",
+    ]
+    assert not one(pilot, status.LogView).display
+
+
+async def test_a_live_build_shows_its_progress_bar_and_running_tasks_oldest_first(pilot, world):
+    world.runs, world.bench = [building(3)], LIVE
+    await show(pilot)
+    head = text(one(pilot, status.Head)).splitlines()
+    assert head == [
+        "build  task 1204 of 3311  36%",
+        "▉" * 33,
+        "running now",
+        "r0            do_compile    416m30s",
+        "r1            do_compile    416m29s",
+        "r2            do_compile    416m28s",
+    ]
+    assert lines(one(pilot, status.LogView))[0] == "NOTE: Running task 1204 of 3311"
+    assert text(one(pilot, "#output-label")) == "this stage's output"
+
+
+async def test_a_past_build_shows_no_running_tasks(pilot, world):
+    world.runs = [run(), building(3)]
+    await show(pilot)
+    await press(pilot, "left_square_bracket", "j", "j", "j")
+    assert text(one(pilot, status.Head)).splitlines()[0] == "build  task 1204 of 3311  36%"
+    assert "running now" not in text(one(pilot, status.Head))
+
+
+async def test_a_suite_shows_its_counts_its_sections_and_the_hint(pilot, world):
+    world.runs, world.bench = [running_test(2, failed=(1,))], LIVE
+    await show(pilot)
+    assert text(one(pilot, status.Head)) == "target suite  3 of 6  1 passed  1 failed"
+    assert lines(one(pilot, status.LogView))[:7] == [
+        "▸ ✓ setup install_candidate  1m00s",
+        "▸ ✓ t.py::test_0  1m00s",
+        "▾ ✗ t.py::test_1  1m00s",
+        "      out 1",
+        "▾ ● t.py::test_2  399m30s",
+        "      out 2",
+        "  · t.py::test_3",
+    ]
+    assert one(pilot, "#hint").display
+
+
+async def test_a_failure_box_shows_the_disabled_reason_over_the_stages_output(
+    pilot, world, bench_clone, local_zone
+):
+    errored = stage("target_suite", "error", lines=["ota: reboot", "ota: ssh: no answer"])
+    world.runs = [run(result="error", target_suite=errored)]
+    world.bench = DISABLED
+    (bench_clone.records / "DISABLED").write_text("2026-11-10T03:14:02+00:00\nssh: no answer\n")
+    await show(pilot)
+    box = one(pilot, status.FailureBox)
+    assert box.display
+    assert text(box).splitlines() == [
+        "bench failure, not the candidate's",
+        "ssh: no answer",
+        "from the DISABLED file, 06:14:02",
+    ]
+    assert lines(one(pilot, status.LogView))[:2] == ["ota: reboot", "ota: ssh: no answer"]
+
+
+# -- Run: the log -------------------------------------------------------------------------------
+
+
+async def test_enter_moves_into_a_log_with_rows_and_esc_back_to_the_stages(pilot, world):
+    world.runs, world.bench = [live("build", build=plain("build", 5))], LIVE
+    await show(pilot)
+    await press(pilot, "enter")
+    assert focused(pilot) == "LogView"
+    await press(pilot, "escape")
+    assert focused(pilot) == "StageList"
+
+
+async def test_enter_stays_on_the_stages_when_the_log_has_no_rows(pilot):
+    await press(pilot, "j", "enter")
+    assert focused(pilot) == "StageList"
+
+
+async def test_a_plain_logs_cursor_starts_on_its_last_row_and_keys_move_it(pilot, world):
+    world.runs, world.bench = [live("build", build=plain("build", 100))], LIVE
+    await show(pilot)
+    log = one(pilot, status.LogView)
+    half = log.size.height // 2
+    assert log.cursor == 99
+    await press(pilot, "enter", "k", "k", "ctrl+u")
+    assert log.cursor == 97 - half
+    await press(pilot, "home", "j")
+    assert log.cursor == 1
+    await press(pilot, "ctrl+d")
+    assert log.cursor == 1 + half
+
+
+async def test_g_follows_the_live_log_as_it_grows_and_a_move_up_stops_following(pilot, world):
+    world.runs, world.bench = [live("build", build=plain("build", 100))], LIVE
+    await show(pilot)
+    log = one(pilot, status.LogView)
+    await press(pilot, "enter", "home", "G")
+    world.runs = [live("build", build=plain("build", 150))]
+    await show(pilot)
+    assert log.cursor == 149
+    assert lines(log)[-1] == "build line 149"
+    await press(pilot, "k")
+    world.runs = [live("build", build=plain("build", 200))]
+    await show(pilot)
+    assert log.cursor == 148
+
+
+async def test_a_suites_cursor_starts_on_its_first_failed_section(pilot, world):
+    world.runs, world.bench = [running_test(3, failed=(1,))], LIVE
+    await show(pilot)
+    log = one(pilot, status.LogView)
+    assert log.rows.anchor(log.cursor) == (sid(TESTS[1]), 0)
+
+
+@pytest.mark.parametrize("key", ["enter", "space"])
+async def test_enter_or_space_on_a_section_folds_and_unfolds_it(pilot, world, key):
+    world.runs, world.bench = [running_test(3, failed=(1,))], LIVE
+    await show(pilot)
+    log = one(pilot, status.LogView)
+    await press(pilot, "enter")
+    assert lines(log)[2:4] == ["▾ ✗ t.py::test_1  1m00s", "      out 1"]
+    await press(pilot, key)
+    assert lines(log)[2:4] == ["▸ ✗ t.py::test_1  1m00s", "▸ ✓ t.py::test_2  1m00s"]
+    await press(pilot, key)
+    assert lines(log)[3] == "      out 1"
+
+
+async def test_a_fold_key_on_a_body_line_folds_its_section_onto_its_header(pilot, world):
+    world.runs, world.bench = [running_test(3, failed=(1,))], LIVE
+    await show(pilot)
+    log = one(pilot, status.LogView)
+    await press(pilot, "enter", "j", "space")
+    assert log.rows.anchor(log.cursor) == (sid(TESTS[1]), 0)
+    assert lines(log)[2] == "▸ ✗ t.py::test_1  1m00s"
+
+
+async def test_search_finds_text_in_folded_sections_unfolds_them_and_n_and_n_step(pilot, world):
+    bodies = {0: ("boot one",), 3: ("boot two",)}
+    world.runs = [run(host_suite=suite("host_suite", ["passed"] * 5, bodies))]
+    await show(pilot)
+    await press(pilot, *["j"] * 5)
+    log = one(pilot, status.LogView)
+    await press(pilot, "slash", *"boot", "enter")
+    assert focused(pilot) == "LogView"
+    assert log.rows.anchor(log.cursor) == (("host_suite", "test", "case_00", 0), 1)
+    await press(pilot, "n")
+    assert log.rows.anchor(log.cursor) == (("host_suite", "test", "case_03", 0), 1)
+    await press(pilot, "n")
+    assert log.rows.anchor(log.cursor) == (("host_suite", "test", "case_00", 0), 1)
+    await press(pilot, "N")
+    assert log.rows.anchor(log.cursor) == (("host_suite", "test", "case_03", 0), 1)
+    assert "      boot two" in lines(log)
+
+
+async def test_a_search_that_misses_moves_nothing(pilot, world):
+    world.runs, world.bench = [live("build", build=plain("build", 10))], LIVE
+    await show(pilot)
+    await press(pilot, "slash", *"nowhere", "enter")
+    assert one(pilot, status.LogView).cursor == 9
+    assert focused(pilot) == "StageList"
+
+
+async def test_the_prefix_kas_writes_is_dropped_from_a_stages_own_lines(pilot, world):
+    build = stage("build", "open", lines=["2026-11-10 03:00:00 - INFO     - NOTE: x"])
+    world.runs, world.bench = [live("build", build=build)], LIVE
+    await show(pilot)
+    assert lines(one(pilot, status.LogView))[0] == "NOTE: x"
+
+
+async def test_log_text_reaches_the_screen_with_its_controls_shown_not_acted_on(pilot, world):
+    build = stage("build", "open", lines=["\x1b]0;owned\x07 \x9b2J"])
+    world.runs, world.bench = [live("build", build=build)], LIVE
+    await show(pilot)
+    assert lines(one(pilot, status.LogView))[0] == "^[]0;owned^G <9b>2J"
+
+
+# -- views, keys and quitting ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("keys", "view"),
+    [
+        (["tab"], "queue"),
+        (["tab", "tab", "tab"], "run"),
+        (["shift+tab"], "history"),
+        (["2"], "queue"),
+        (["3"], "history"),
+        (["3", "1"], "run"),
+        (["h"], "run"),
+        (["l"], "run"),
     ],
 )
-def test_a_returned_failure_text_is_shown_verbatim(
-    monkeypatch, tmp_path, systemctl, verb, command, answer, text
+async def test_tab_shift_tab_and_the_numbers_switch_views_and_wrap(pilot, keys, view):
+    await press(pilot, *keys)
+    assert pilot.app.screen.current == view
+
+
+async def test_question_mark_toggles_the_keys_panel_which_lists_the_commands(pilot):
+    await press(pilot, "question_mark")
+    panel = pilot.app.screen.query_one("HelpPanel")
+    assert ":run [-C <dir>] <ref>" in str(panel.query_one("Markdown").source)
+    await press(pilot, "question_mark")
+    assert not pilot.app.screen.query("HelpPanel")
+
+
+@pytest.mark.parametrize("keys", [["q"], ["colon", "q", "enter"], ["semicolon", "q", "enter"]])
+async def test_q_and_colon_q_quit_with_0(pilot, keys):
+    await pilot.press(*keys)
+    await pilot.pause()
+    assert pilot.app.return_code == 0
+
+
+async def test_the_command_line_takes_typed_keys_and_esc_closes_it(pilot):
+    await press(pilot, "colon", *"q2")
+    assert one(pilot, "#command").value == ":q2"
+    assert pilot.app.screen.current == "run"
+    await press(pilot, "escape")
+    assert not one(pilot, "#command-row").display
+
+
+# -- History --------------------------------------------------------------------------------------
+
+
+async def test_history_lists_every_run_and_counts_the_records(pilot, world):
+    world.runs = [run(), failing_at(OLDER, "host_suite"), run(OLDEST, kind="test", pr=None)]
+    await show(pilot)
+    await press(pilot, "3")
+    assert cells(pilot, "#history-table") == [
+        [STAMP, "PR #31", "a1b2c3d", "passed", "62m", ""],
+        [OLDER, "PR #31", "a1b2c3d", "failed", "62m", "host suite"],
+        [OLDEST, "main", "a1b2c3d", "passed", "62m", "by hand"],
+    ]
+    assert text(one(pilot, "#history-footer")).startswith("3 records in ")
+
+
+async def test_history_selects_the_run_shown_and_enter_opens_the_selection(pilot, world):
+    world.runs = [run(), run(OLDER), run(OLDEST)]
+    await show(pilot)
+    await press(pilot, "left_square_bracket", "3")
+    assert one(pilot, "#history-table").cursor_row == 1
+    await press(pilot, "j", "enter")
+    assert pilot.app.screen.current == "run"
+    assert one(pilot, status.RunView).run.record == OLDEST
+
+
+async def test_a_live_refresh_redraws_only_the_running_row(pilot, world):
+    world.runs, world.bench = [live("build"), *[run(f"2026{i:04d}") for i in range(30)]], LIVE
+    await show(pilot)
+    await press(pilot, "3")
+    assert cells(pilot, "#history-table")[0][3:5] == ["running", "427m"]
+    table = one(pilot, "#history-table")
+    updated = []
+    real = table.update_cell_at
+    table.update_cell_at = lambda at, value: updated.append(at) or real(at, value)
+    world.runs = [live("build", build=plain("build", 3)), *world.runs[1:]]
+    await show(pilot)
+    assert updated
+    assert {row for row, _ in updated} == {0}
+
+
+# -- Queue ----------------------------------------------------------------------------------------
+
+
+async def test_entering_the_queue_reads_it_and_lists_running_hand_then_merge_rows(pilot, world):
+    world.runs, world.bench = [live("build")], LIVE
+    world.queue.entries.return_value = [HAND, MERGE]
+    await show(pilot)
+    await press(pilot, "2")
+    world.queue.entries.assert_called_once_with()
+    assert [row[:3] + row[5:] for row in cells(pilot, "#queue-table")] == [
+        ["▶", "merge queue", "PR #31", "running, build"],
+        ["2", "by hand", "feature-a", ""],
+        ["3", "merge queue", "PR #14 Add slot check", ""],
+    ]
+
+
+async def test_a_failed_queue_read_says_why_and_keeps_the_last_rows(pilot, world):
+    world.queue.entries.return_value = [HAND]
+    await press(pilot, "2")
+    world.queue.entries.side_effect = OSError("no network")
+    pilot.app.screen.read_queue()
+    await settle(pilot)
+    assert message(pilot) == "no network"
+    assert len(cells(pilot, "#queue-table")) == 1
+
+
+async def test_the_queue_is_read_again_on_its_interval_only_while_it_shows(pilot, world):
+    await press(pilot, "3")
+    pilot.app.screen.tick_queue()
+    await settle(pilot)
+    world.queue.entries.assert_not_called()
+    await press(pilot, "2")
+    pilot.app.screen.tick_queue()
+    await settle(pilot)
+    assert world.queue.entries.call_count == 2
+
+
+async def test_the_queue_selection_stays_on_its_row_when_rows_before_it_go(pilot, world):
+    other = {**HAND, "id": 4, "ref": "feature-b"}
+    world.queue.entries.return_value = [HAND, other, MERGE]
+    await press(pilot, "2", "j", "j")
+    world.queue.entries.return_value = [other, MERGE]
+    pilot.app.screen.read_queue()
+    await settle(pilot)
+    assert one(pilot, status.QueueView).selected().key == "merge 14"
+
+
+async def test_run_previews_the_typed_ref_and_enter_queues_it(pilot, world):
+    world.queue.entries.return_value = [HAND]
+    await press(pilot, "colon", *"run feature-c")
+    assert pilot.app.screen.current == "queue"
+    world.queue.preview.assert_called_with("feature-c", None)
+    assert text(one(pilot, "#preview")).splitlines() == [
+        "will queue",
+        'resolves to 1234567 "Fix the thing", clean tree',
+        "joins as 2, after feature-a",
+    ]
+    await press(pilot, "enter")
+    world.queue.add.assert_called_once_with("feature-c", None, False, [], None)
+    assert message(pilot) == "queued 5 5555555"
+    assert world.queue.entries.call_count == 2
+
+
+async def test_a_preview_for_a_ref_no_longer_typed_is_not_shown(pilot):
+    await press(pilot, "colon", *"run feature-c", "backspace")
+    assert not one(pilot, "#preview").display
+
+
+async def test_run_of_an_unresolvable_ref_says_so(pilot, world):
+    world.queue.add.side_effect = subprocess.CalledProcessError(128, "git")
+    await press(pilot, "colon", *"run nope", "enter")
+    assert message(pilot) == "nope does not resolve to a commit"
+
+
+@pytest.mark.parametrize(
+    ("down", "removed", "said"),
+    [(1, 3, "removed queued run 3"), (2, None, "only hand-queued runs can be removed")],
+    ids=["hand row", "merge row"],
+)
+async def test_remove_removes_only_the_selected_hand_row(pilot, world, down, removed, said):
+    world.runs, world.bench = [live("build")], LIVE
+    world.queue.entries.return_value = [HAND, MERGE]
+    await show(pilot)
+    await press(pilot, "2", *["j"] * down, "colon", *"remove", "enter")
+    if removed:
+        world.queue.remove.assert_called_once_with(removed)
+    else:
+        world.queue.remove.assert_not_called()
+    assert message(pilot) == said
+
+
+# -- the bench commands ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def unit():
+    """A `[run] unit` in the bench's settings file."""
+    add_settings(run_unit_settings())
+
+
+async def test_disable_stops_the_timer_and_says_so(unit, pilot, systemctl):
+    await press(pilot, "colon", *"disable", "enter")
+    assert ["systemctl", "--user", "stop", "bench-run.timer"] in systemctl.calls
+    assert message(pilot) == "bench disabled"
+
+
+async def test_enable_asks_first_and_y_enables(unit, pilot, systemctl, bench_clone):
+    (bench_clone.records / "DISABLED").write_text("x\n")
+    await press(pilot, "colon", *"enable", "enter")
+    assert "Enable the bench?" in message(pilot)
+    assert (bench_clone.records / "DISABLED").exists()
+    await press(pilot, "y")
+    assert not (bench_clone.records / "DISABLED").exists()
+    assert ["systemctl", "--user", "start", "bench-run.timer"] in systemctl.calls
+    assert message(pilot) == "bench enabled"
+
+
+@pytest.mark.parametrize("key", ["n", "escape", "2", "q"])
+async def test_any_other_key_after_enable_cancels_it_and_does_nothing_else(
+    unit, pilot, bench_clone, key
 ):
-    systemctl.answer(verb, **answer)
-    keys = [*command, "\n", *(["y"] if verb == "start" else []), TIMEOUT, "q"]
-    fake, _ = bench_command(monkeypatch, tmp_path, keys)
-    assert text in last_frame(fake)
-    assert "bench disabled" not in last_frame(fake)
-    assert "bench enabled" not in last_frame(fake)
+    (bench_clone.records / "DISABLED").write_text("x\n")
+    await press(pilot, "colon", *"enable", "enter", key)
+    assert (bench_clone.records / "DISABLED").exists()
+    assert pilot.app.screen.current == "run"
+    assert pilot.app.return_code is None
+    assert not one(pilot, "#message").display
 
 
-def test_enable_that_cannot_remove_disabled_shows_why_and_does_not_start(
-    monkeypatch, tmp_path, systemctl
+async def test_a_bench_command_without_a_run_unit_says_so(pilot):
+    await press(pilot, "colon", *"disable", "enter")
+    assert message(pilot) == "no [run] unit in the bench's settings file"
+
+
+# -- colour --------------------------------------------------------------------------------------
+
+
+def colour(widget, needle):
+    """(foreground, background) of the first cell of `needle` as the widget draws it."""
+    for strip in widget.render_lines(Region(0, 0, *widget.size)):
+        if needle in strip.text:
+            cut, column = strip.text.index(needle), 0
+            for segment in strip:
+                if column + len(segment.text) > cut:
+                    style = segment.style
+                    return Color.from_rich_color(style.color), Color.from_rich_color(style.bgcolor)
+                column += len(segment.text)
+    raise AssertionError(f"{needle!r} is not drawn")
+
+
+@pytest.mark.parametrize(
+    ("runs", "bench", "keys", "where", "needle", "ground", "expected"),
+    [
+        ([failing_at(STAMP, "bundle")], DISABLED, [], ".shown", "✗ bundle", False, "red"),
+        ([live("build")], LIVE, [], ".shown", "● build", False, "amber"),
+        ([live("build")], LIVE, [], ".passed", "✓ checkout", False, "green"),
+        ([live("build")], LIVE, [], ".shown", "● build", True, "running-tint"),
+        ([failing_at(STAMP, "bundle")], DISABLED, [], ".shown", "✗ bundle", True, "failed-tint"),
+        ([run()], IDLE, ["j"], ".shown", "✓ checkout", True, "selection"),
+        ([live("build")], LIVE, [], "#badge", "RUNNING", True, "amber"),
+        ([run(kind="test", pr=None)], IDLE, ["3"], "#history-table", "by hand", False, "blue"),
+        ([failing_at(STAMP, "bundle")], IDLE, ["3"], "#history-table", "failed", False, "red"),
+        ([run()], IDLE, ["3"], "#history-table", STAMP, True, "selection"),
+    ],
+    ids=[
+        "failed red",
+        "running amber",
+        "passed green",
+        "running stage on the running tint",
+        "failed stage on the failed tint",
+        "chosen stage on the selection",
+        "running badge amber",
+        "by hand blue",
+        "failed run red",
+        "History selection",
+    ],
+)
+async def test_each_meaning_shows_in_its_colour(
+    pilot, world, runs, bench, keys, where, needle, ground, expected
 ):
-    directory = tmp_path / "records"
-    (directory / "DISABLED").mkdir(parents=True)
-    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
-    fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
-    assert changes(systemctl) == []
-    assert "cannot remove DISABLED:" in last_frame(fake)
+    world.runs, world.bench = runs, bench
+    await show(pilot)
+    await press(pilot, *keys)
+    fg, bg = colour(one(pilot, where), needle)
+    assert (bg if ground else fg).rgb == PALETTE[expected].rgb
 
 
-def watch_source(
-    monkeypatch, tmp_path, bench_clone, after_typing, dirty_checkout=False, typed_dir=None
+# -- cost per key and per refresh -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("length", [100, 20_000])
+async def test_a_key_and_a_refresh_draw_only_the_log_rows_on_screen(pilot, world, length):
+    world.runs, world.bench = [live("build", build=plain("build", length))], LIVE
+    await show(pilot)
+    log = one(pilot, status.LogView)
+    await press(pilot, "enter", "home")
+    drawn, real = [], status.LogView.render_line
+    status.LogView.render_line = lambda self, y: drawn.append(y) or real(self, y)
+    try:
+        await press(pilot, "j")
+        per_key = len(drawn)
+        drawn.clear()
+        world.runs = [live("build", build=plain("build", length + 10))]
+        await show(pilot)
+        per_refresh = len(drawn)
+    finally:
+        status.LogView.render_line = real
+    assert 0 < per_key <= log.size.height
+    assert per_refresh <= log.size.height
+
+
+@pytest.mark.parametrize("count", [50, 2_000])
+async def test_a_history_key_draws_only_the_rows_on_screen(pilot, world, count):
+    world.runs = [run(f"2026{i:05d}") for i in range(count)]
+    await show(pilot)
+    await press(pilot, "3")
+    table = one(pilot, "#history-table")
+    drawn, real = [], status.Table.render_line
+    status.Table.render_line = lambda self, y: drawn.append(y) or real(self, y)
+    try:
+        await press(pilot, "j")
+    finally:
+        status.Table.render_line = real
+    assert 0 < len(drawn) <= table.size.height
+
+
+# -- the terminal -------------------------------------------------------------------------------
+
+
+def test_not_on_a_terminal_it_says_so_and_exits_2(capsys, bench_clone):
+    assert status.watch(bench_clone.checkout, bench_clone.records) == 2
+    assert capsys.readouterr().err == "BENCH ERROR: bench status --watch needs a terminal\n"
+
+
+def test_on_a_real_terminal_log_text_drives_nothing_the_mouse_is_off_and_ctrl_c_exits_0(
+    bench_clone,
 ):
-    """Type `:run -C <src> HEAD` over a real `Queue`, then feed `after_typing` and a `q`.
-
-    Returns:
-        tuple: The source's tip commit, and one `(frame text, whether the checkout holds the
-        commit)` pair per snapshot key `after_typing` is given.
-    """
-    stub_merge_queue(monkeypatch, bench_clone.checkout)
-    sha = source_repo(tmp_path / "src")
-    if dirty_checkout:
-        (bench_clone.checkout / "tracked.txt").write_text("changed\n")
-    seen = []
-
-    def snap():
-        seen.append((last_frame(fake), has_commit(bench_clone.checkout, sha)))
-
-    terminal(monkeypatch, tmp_path, 0)
-    typed = [*f":run -C {typed_dir or tmp_path / 'src'} HEAD", TIMEOUT, TIMEOUT, snap]
-    fake = FakeScreen(keys=["2", TIMEOUT, *typed, *after_typing(snap), "q"])
-    directory = tmp_path / "records"
-    directory.mkdir(exist_ok=True)
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    return sha, seen
-
-
-def test_the_preview_of_a_directory_reports_the_state_of_the_checkout_not_of_the_directory(
-    monkeypatch, tmp_path, bench_clone
-):
-    """The run builds in the checkout, so its uncommitted change is the one to warn of."""
-    _, seen = watch_source(
-        monkeypatch, tmp_path, bench_clone, lambda snap: ["\x1b"], dirty_checkout=True
+    """A record whose log holds an OSC title, BEL and a C1 CSI, watched in a pty."""
+    record = bench_clone.records / STAMP
+    record.mkdir()
+    (record / "bench.log").write_text(
+        "bench: 2026-11-10T03:00:00+00:00 run started kind=test ref=main\n"
+        "bench: 2026-11-10T03:00:01+00:00 stage checkout started\n"
+        "\x1b]0;owned\x07 \x9b2J\n"
+        "bench: 2026-11-10T03:00:02+00:00 stage checkout failed\n"
+        "bench: 2026-11-10T03:00:03+00:00 run failed\n"
     )
-    frame, _ = seen[0]
-    assert "uncommitted changes in the checkout" in frame
-    assert "clean tree" not in frame
+    code = (
+        "import sys; from wisebench import status; "
+        f"sys.exit(status.watch({str(bench_clone.checkout)!r}, {str(bench_clone.records)!r}))"
+    )
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 34, 120, 0, 0))
+            os.environ["TERM"] = "xterm-256color"
+            os.execv(sys.executable, [sys.executable, "-c", code])
+        finally:
+            os._exit(127)
+    output = b""
+
+    def read_until(needle, seconds):
+        """Collect output until `needle` appears, the child closes, or `seconds` pass."""
+        nonlocal output
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline and needle not in output:
+            if select.select([fd], [], [], 0.1)[0]:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    return
+                if not chunk:
+                    return
+                output += chunk
+
+    try:
+        read_until(b"owned", 20)
+        os.write(fd, b"\x03")
+        read_until(b"\0never", 5)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            done, wait_status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+            pytest.fail("the view did not exit on Ctrl-C")
+    finally:
+        os.close(fd)
+
+    assert os.waitstatus_to_exitcode(wait_status) == 0
+    assert b"^[]0;owned^G" in output
+    assert b"\x1b]0;owned" not in output
+    assert b"\x07" not in output
+    assert "\x9b".encode() not in output
+    for mode in (b"1000", b"1002", b"1003", b"1006", b"1015"):
+        assert b"\x1b[?" + mode + b"h" not in output
 
 
-def test_run_with_a_home_relative_directory_previews_and_queues_its_commit(
-    monkeypatch, tmp_path, bench_clone
+# -- a real Queue ---------------------------------------------------------------------------------
+
+
+async def test_run_with_a_home_relative_directory_previews_and_queues_its_commit(
+    monkeypatch, bench_clone, tmp_path
 ):
     """`~/src` is typed, HOME is `tmp_path`: the preview resolves in `src` and Enter queues it."""
-    sha, seen = watch_source(
-        monkeypatch,
-        tmp_path,
-        bench_clone,
-        lambda snap: ["\n", TIMEOUT, TIMEOUT, snap],
-        typed_dir="~/src",
-    )
-    (preview, fetched_by_preview), (queued, fetched) = seen
-    assert f'resolves to {sha[:7]} "unpushed work"' in preview
-    assert not fetched_by_preview
-    assert f"queued 1 {sha[:7]}" in queued
-    assert fetched
-    held = queue.Queue(bench_clone.checkout, tmp_path / "records").entries()
+    stub_merge_queue(monkeypatch, bench_clone.checkout)
+    sha = source_repo(tmp_path / "src")
+    app = status.WatchApp(bench_clone.checkout, bench_clone.records)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        await press(pilot, "colon", *"run -C ~/src HEAD")
+        assert f'resolves to {sha[:7]} "unpushed work"' in text(one(pilot, "#preview"))
+        assert not has_commit(bench_clone.checkout, sha)
+        await press(pilot, "enter")
+        assert message(pilot) == f"queued 1 {sha[:7]}"
+    assert has_commit(bench_clone.checkout, sha)
+    held = Queue(bench_clone.checkout, bench_clone.records).entries()
     assert [(e["ref"], e["sha"]) for e in held] == [("HEAD", sha)]
