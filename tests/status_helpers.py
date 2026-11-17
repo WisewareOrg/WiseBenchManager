@@ -1,7 +1,7 @@
-"""Builders shared by the status tests: marker text, run models and a test draw surface."""
+"""Builders shared by the status tests: marker text, run models, and a headless view driver."""
 
+import asyncio
 import json
-import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -12,8 +12,6 @@ OLDER = "20261109T030715Z"
 OLDEST = "20261108T030715Z"
 SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")
-SIZE = (24, 80)
-DIRECTORY = "records"
 LIVE = bench_state.Bench(live=True, disabled=False, timer="on")
 IDLE = bench_state.Bench(live=False, disabled=False, timer="on")
 DISABLED = bench_state.Bench(live=False, disabled=True, timer="off")
@@ -182,40 +180,6 @@ LONG = run(host_suite=suite("host_suite", ["passed"] * 30, {3: ("boot one",), 7:
 MANY = [run(record=f"2026{i:04d}") for i in range(40, 0, -1)]
 
 
-class Grid:
-    """A draw surface for tests: a grid of (char, fg, bg, bold) cells, clipped at the right edge."""
-
-    def __init__(self, rows, cols):
-        """An empty grid of blank cells."""
-        self.rows, self.cols = rows, cols
-        self.cells = [[(" ", None, None, False)] * cols for _ in range(rows)]
-
-    def put(self, y, x, text, fg, bg=None, bold=False):
-        """Write `text` at (y, x), clipped at the right edge."""
-        assert 0 <= y < self.rows, f"row {y} is off a {self.rows}-row screen"
-        for offset, char in enumerate(text):
-            if 0 <= x + offset < self.cols:
-                self.cells[y][x + offset] = (char, fg, bg, bold)
-
-    def text(self, y):
-        """The characters of row `y` as a string."""
-        return "".join(cell[0] for cell in self.cells[y])
-
-    def find(self, pattern):
-        """(row, start, end) of the first match of `pattern`; the span of group 1 if it has one."""
-        for y in range(self.rows):
-            found = re.search(pattern, self.text(y))
-            if found:
-                group = 1 if found.re.groups else 0
-                return y, found.start(group), found.end(group)
-        raise AssertionError(f"{pattern!r} is not drawn")
-
-    def span(self, pattern):
-        """The cells of the first match of `pattern`."""
-        y, start, end = self.find(pattern)
-        return self.cells[y][start:end]
-
-
 REAL_RUN = Path(__file__).parent / "fixtures" / "real_run"
 
 
@@ -230,3 +194,41 @@ def real_run():
         for suite_name in ("host_suite", "target_suite")
     }
     return runlog.parse_run(STAMP, (REAL_RUN / "bench.log").read_text(), reports)
+
+
+def drive(app, *steps, size=(100, 30), look=lambda app: None):
+    """Run `app` headless through `steps`: a key name, or a function of the app called there.
+
+    After each step the app settles and every `Queue` read it started lands.
+
+    Returns:
+        tuple: The screen's rows after the last step, and what `look(app)` saw then.
+    """
+
+    async def scenario():
+        async with app.run_test(size=size) as pilot:
+            for step in steps:
+                await pilot.pause()
+                step(app) if callable(step) else await pilot.press(step)
+                await pilot.pause()
+                while app.reading:
+                    await asyncio.sleep(0.01)
+                await pilot.pause()
+            return app.screen._compositor.render_strips(), look(app)
+
+    return asyncio.run(scenario())
+
+
+def text(strips):
+    """The screen's rows as text."""
+    return "\n".join(strip.text for strip in strips)
+
+
+def colours(strips, word):
+    """(foreground, background) hex of the first character of `word` on the screen."""
+    for strip in strips:
+        at = strip.text.find(word)
+        if at >= 0:
+            style = next(iter(strip.crop(at, at + 1))).style
+            return style.color.name, style.bgcolor.name
+    raise AssertionError(f"{word!r} is not on the screen")
