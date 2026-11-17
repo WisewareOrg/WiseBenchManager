@@ -1,9 +1,11 @@
-"""Screen: a resolved `view.Frame` drawn onto a surface in the canvas's layout and colours.
+"""Screen: the watch view's urwid widgets, refilled from each resolved `view.Frame`.
 
-A surface has one method, `put(y, x, text, fg, bg=None, bold=False)`; a `bg` of None is the
-ground. The colours are the canvas's hex values; the curses shell maps each to a terminal colour.
-Nothing here decides where a log or History row sits: the frame says.
+The widgets only show; every key goes to `view.handle` through the shell. Each list's focus is set
+from the frame, so urwid scrolls a list only as far as keeps the selection in view, and the
+selected row's ground is drawn here. The colours are the canvas's hex values, as 24-bit colour.
 """
+
+import urwid
 
 from wisebench.bench_state import DASH
 from wisebench.runlog import POSTED, STAGES
@@ -22,11 +24,29 @@ RUNNING_TINT = "#2a2614"
 FAILED_TINT = "#3a1d20"
 SELECTION = "#1f2a36"
 
-_STAGES_WIDTH, _DIVIDER, _PANE = 34, 35, 37
+MIN_ROWS, MIN_COLS = 24, 80
+MIN_LOG_ROWS = 3
+
+_COLOURS = (
+    GROUND,
+    TEXT,
+    DIM,
+    LOG,
+    RULE,
+    BRIGHT,
+    GREEN,
+    AMBER,
+    RED,
+    BLUE,
+    RUNNING_TINT,
+    FAILED_TINT,
+    SELECTION,
+)
+_STAGES_WIDTH = 34
 _START_COL, _TOOK_COL = 17, 27
 _BAR_CELLS = 33
 _NAME_MIN = 14
-_HELP_GAP = 2  # the three Help columns must fit 80 columns
+_HELP_GAP = 2
 _MARKER_WIDTH, _SOURCE_WIDTH, _SHA_WIDTH, _ADDED_WIDTH = 3, 14, 9, 7
 _RUNNING_STAGE = "running, {}"
 _RUNNING_STAGE_WIDTH = max(len(_RUNNING_STAGE.format(name)) for name in (*STAGES, POSTED))
@@ -78,31 +98,210 @@ _HELP = (
 )
 
 
-def draw(surface, frame):
-    """Draw `frame` onto `surface`: the tab line, the tab shown, the status bar and the prompt.
+def _attr(fg, bg=None, bold=False):
+    """The palette name of `fg` on `bg` (None: the ground), bold if `bold`."""
+    return f"{fg} {bg or GROUND} {'bold' if bold else 'plain'}"
 
-    Args:
-        surface: Anything with `put(y, x, text, fg, bg=None, bold=False)`.
-        frame (view.Frame): The frame to draw.
+
+def _entry(fg, bg, bold):
+    """One palette entry: the exact colours in 24-bit, else reverse video for a filled ground."""
+    flags = ["bold"] * bold + ["standout"] * (bg != GROUND)
+    high = ",".join([fg, *["bold"] * bold])
+    return (
+        _attr(fg, bg, bold),
+        ",".join(["default", *flags]),
+        "default",
+        ",".join(flags),
+        high,
+        bg,
+    )
+
+
+PALETTE = [_entry(fg, bg, bold) for fg in _COLOURS for bg in _COLOURS for bold in (False, True)]
+
+
+class MinimumSize(urwid.WidgetWrap):
+    """The wrapped widget, or `terminal too small` below `MIN_COLS` by `MIN_ROWS`."""
+
+    def render(self, size, focus=False):
+        """Render the wrapped widget at `size`, or the too-small text when `size` is below it."""
+        cols, rows = size
+        if cols < MIN_COLS or rows < MIN_ROWS:
+            small = urwid.Text("terminal too small", wrap="clip")
+            return urwid.Filler(small, "top").render(size, focus)
+        return super().render(size, focus)
+
+
+class _List(urwid.ListBox):
+    """A list of rows whose focus the frame sets; `rows` is the height it was last drawn at.
+
+    With a `label`, the label sits directly over the rows, and rows fewer than the list's height
+    sit at its bottom; `rows` is then the height under the label.
     """
-    lay = frame.layout
-    if lay.too_small:
-        surface.put(0, 0, "terminal too small", TEXT)
-        return
-    _tab_line(surface, frame)
-    for y in (lay.rule_top, lay.rule_bottom):
-        surface.put(y, 0, "─" * lay.cols, RULE)
-    _status_bar(surface, frame)
-    if lay.prompt is not None:
-        _command_row(surface, frame)
-    if frame.tab == "history":
-        _history(surface, frame)
-    elif frame.tab == "queue":
-        _queue(surface, frame)
-    elif frame.tab == "help":
-        _help(surface, lay)
-    else:
-        _run(surface, frame)
+
+    def __init__(self):
+        """An empty list, not yet drawn."""
+        super().__init__(urwid.SimpleFocusListWalker([]))
+        self.rows = 0
+        self.label = None
+
+    def fill(self, rows, focus, label=None):
+        """Show `rows` with row `focus` (None: leave it) in view, under `label` if given."""
+        self.body[:] = rows
+        self.label = label
+        if focus is not None and rows:
+            self.set_focus(focus)
+        self._invalidate()
+
+    def render(self, size, focus=False):
+        """Render the rows at `size`, recording the height they were given."""
+        cols, height = size
+        if self.label is None:
+            self.rows = height
+            return super().render(size, focus)
+        self.rows = max(0, height - 1)
+        shown = min(len(self.body), self.rows)
+        canvases = []
+        if self.rows > shown:
+            canvases.append(urwid.SolidCanvas(" ", cols, self.rows - shown))
+        if height:
+            canvases.append(self.label.render((cols,)))
+        if shown:
+            canvases.append(super().render((cols, shown), focus))
+        return urwid.CanvasCombine([(canvas, None, False) for canvas in canvases])
+
+
+class _Pane(urwid.Widget):
+    """A plain stage's pane: a build's head, then the log under its label.
+
+    The running tasks are listed oldest first, as many as leave `MIN_LOG_ROWS` log rows.
+    """
+
+    _sizing = frozenset([urwid.BOX])
+
+    def __init__(self, log):
+        """A pane over the log list `log`."""
+        super().__init__()
+        self.log = log
+        self.frame = None
+
+    def show(self, frame):
+        """Show `frame`'s stage."""
+        self.frame = frame
+        self._invalidate()
+
+    def render(self, size, focus=False):
+        """Render the head, cut to leave room for the log, and the log at `size`."""
+        cols, rows = size
+        head = _build_head(self.frame) if self.frame.pane_head == "build" else []
+        if self.frame.tasks:
+            spare = max(0, rows - len(head) - 1 - MIN_LOG_ROWS)
+            head += _running_tasks(self.frame, self.frame.tasks[:spare], cols)
+        pile = urwid.Pile([*(("pack", line) for line in head), self.log])
+        return pile.render(size, focus)
+
+
+class Screen:
+    """The view's widgets, kept across refreshes and refilled from each frame."""
+
+    def __init__(self):
+        """Every widget, empty until the first `update`."""
+        self._stages = _List()
+        self._log = _List()
+        self._queue = _List()
+        self._history = _List()
+        self._pane = _Pane(self._log)
+        self._top = urwid.WidgetPlaceholder(urwid.SolidFill(" "))
+        self.widget = MinimumSize(urwid.AttrMap(self._top, _attr(TEXT)))
+
+    def page(self, tab):
+        """How many rows `^d` and `^u` move on `tab`: half the height of the list it scrolls.
+
+        Args:
+            tab (str): "run", "queue", "history" or "help".
+
+        Returns:
+            int: At least 1.
+        """
+        lists = {"run": self._log, "queue": self._queue, "history": self._history}
+        return max(1, lists[tab].rows // 2) if tab in lists else 1
+
+    def update(self, frame):
+        """Refill every widget from `frame`.
+
+        Args:
+            frame (view.Frame): The frame to show.
+        """
+        if frame.tab == "history":
+            header, body = self._history_tab(frame)
+        elif frame.tab == "queue":
+            header, body = self._queue_tab(frame)
+        elif frame.tab == "help":
+            header, body = _row([("keys", BRIGHT, True)]), _help()
+        else:
+            header, body = self._run_tab(frame)
+        rule = urwid.AttrMap(urwid.Divider("─"), _attr(RULE))
+        rows = [_tab_line(frame), rule, header, body, rule, _status_bar(frame)]
+        if frame.prompt is not None or frame.message is not None:
+            rows.append(_command_row(frame))
+        self._top.original_widget = urwid.Pile(
+            [row if row is body else ("pack", row) for row in rows]
+        )
+
+    def _run_tab(self, frame):
+        """The Run tab's header and body: the stage list, the divider and the stage's pane."""
+        if frame.run is None:
+            return _row([(_record_count(frame), DIM, False)]), urwid.SolidFill(" ")
+        stages = frame.run.stages
+        shown = stages.index(frame.stage) if frame.stage in stages else None
+        self._stages.fill([_stage_row(stage, frame) for stage in stages], shown)
+        heading = f"{'stage':<{_START_COL}}{'start':<{_TOOK_COL - _START_COL}}took"
+        left = urwid.Pile([("pack", _row([(heading, DIM, False)])), self._stages])
+        divider = urwid.AttrMap(urwid.SolidFill("│"), _attr(RULE))
+        columns = [(_STAGES_WIDTH, left), (1, urwid.SolidFill(" ")), (1, divider)]
+        columns += [(1, urwid.SolidFill(" ")), self._run_pane(frame)]
+        return _row(_run_header(frame)), urwid.Columns(columns)
+
+    def _run_pane(self, frame):
+        """The pane of the stage shown: the summary, a suite's sections, or a plain stage's log."""
+        if frame.pane_head == "summary":
+            return urwid.Filler(urwid.Pile(_summary(frame)), "top")
+        rows = [_log_row(row, index, frame) for index, row in enumerate(frame.rows)]
+        if frame.pane_head == "suite":
+            self._log.fill(rows, frame.cursor)
+            hint = _row([(_HINT, DIM, False)])
+            return urwid.Pile([("pack", _suite_head(frame)), self._log, ("pack", hint)])
+        self._log.fill(rows, frame.cursor, _row([("this stage's output", DIM, False)]))
+        self._pane.show(frame)
+        return self._pane
+
+    def _queue_tab(self, frame):
+        """The Queue tab's column header and body: a row per run, then the preview box."""
+        names = ("", "source", "what", "sha", "added", "")
+        header = _queue_columns([_row([(name, DIM, False)]) for name in names])
+        rows = [
+            _queue_row(row, index == frame.queue_cursor)
+            for index, row in enumerate(frame.queue_rows)
+        ]
+        self._queue.fill(rows, frame.queue_cursor)
+        body = [self._queue]
+        if frame.preview_lines:
+            lines = [
+                _row([(line, BLUE if index == 0 else TEXT, False)])
+                for index, line in enumerate(frame.preview_lines)
+            ]
+            box = urwid.LineBox(urwid.Pile(lines))
+            body.append(("pack", urwid.AttrMap(box, _attr(BLUE))))
+        return header, urwid.Pile(body)
+
+    def _history_tab(self, frame):
+        """The History tab's column header and body: a row per run, then the footer."""
+        width = max(18, max((len(r.record) for r in frame.history), default=0) + 2)
+        header = "record".ljust(width) + "what".ljust(22) + "sha".ljust(9) + "result".ljust(13)
+        rows = [_history_row(run, index, frame, width) for index, run in enumerate(frame.history)]
+        self._history.fill(rows, frame.history_cursor if frame.history else None)
+        footer = _row([(_record_count(frame), DIM, False)])
+        return _row([(header + "took", DIM, False)]), urwid.Pile([self._history, ("pack", footer)])
 
 
 def _text(line):
@@ -116,6 +315,13 @@ def _text(line):
         else:
             out += char
     return out
+
+
+def _row(parts, bg=None):
+    """One row of `(text, fg, bold)` parts, clipped at its edge, on `bg` across its width."""
+    markup = [(_attr(fg, bg, bold), _text(text)) for text, fg, bold in parts if text]
+    row = urwid.Text(markup, wrap="clip")
+    return urwid.AttrMap(row, _attr(TEXT, bg)) if bg else row
 
 
 def _clock(moment):
@@ -202,69 +408,51 @@ def _running(frame, stage):
     return frame.live and stage.state == "open"
 
 
-def _put_parts(surface, y, x, parts, bg=None, stop=None):
-    """Write consecutive `(text, fg, bold)` parts from (y, x) on `bg`, clipped at column `stop`."""
-    for text, fg, bold in parts:
-        if stop is not None:
-            text = text[: max(0, stop - x)]
-        surface.put(y, x, text, fg, bg, bold)
-        x += len(text)
-
-
-def _tab_line(surface, frame):
-    """Row 0: `bench`, the three tabs with the shown one filled, and the clock."""
-    surface.put(0, 0, "bench", TEXT, bold=True)
+def _tab_line(frame):
+    """The top row: `bench`, the three tabs with the shown one filled, and the clock."""
     run_label = " 1 Run "
     if frame.run is not None and not frame.newest:
         run_label = f" 1 Run  {frame.run.record} "
-    x = 7
+    markup = [(_attr(TEXT, None, True), "bench  ")]
     for label, tab in ((run_label, "run"), (" 2 Queue ", "queue"), (" 3 History ", "history")):
-        if frame.tab == tab:
-            surface.put(0, x, label, GROUND, TEXT)
-        else:
-            surface.put(0, x, label, DIM)
-        x += len(label)
-    clock = _clock(frame.now)
-    surface.put(0, frame.layout.cols - len(clock), clock, DIM)
+        filled = frame.tab == tab
+        markup.append((_attr(GROUND, TEXT) if filled else _attr(DIM), _text(label)))
+    clock = _row([(_clock(frame.now), DIM, False)])
+    return urwid.Columns([urwid.Text(markup, wrap="clip"), ("pack", clock)])
 
 
-def _command_row(surface, frame):
+def _command_row(frame):
     """The last row: the message while the command line is closed, else the command line.
 
-    A `:run` command line also shows what Enter and Esc do, at the right edge when it fits.
+    A `:run` command line also shows what Enter and Esc do, at the right edge.
     """
-    y, prompt = frame.layout.prompt, frame.prompt
+    prompt = frame.prompt
     if prompt is None:
-        surface.put(y, 0, frame.message, TEXT)
-        return
-    surface.put(y, 0, prompt, TEXT)
-    surface.put(y, len(prompt), " ", GROUND, TEXT)
-    left = frame.layout.cols - len(_PROMPT_HINT)
-    if prompt.startswith(":run ") and left > len(prompt) + 1:
-        surface.put(y, left, _PROMPT_HINT, DIM)
+        return _row([(frame.message, TEXT, False)])
+    line = urwid.Text([(_attr(TEXT), _text(prompt)), (_attr(GROUND, TEXT), " ")], wrap="clip")
+    if not prompt.startswith(":run "):
+        return line
+    return urwid.Columns([line, ("pack", _row([(_PROMPT_HINT, DIM, False)]))])
 
 
-def _status_bar(surface, frame):
+def _status_bar(frame):
     """The badge (running, disabled or idle), the timer, the pending key and the `? keys` box."""
-    bench, lay = frame.bench, frame.layout
+    bench = frame.bench
     if bench.live:
         badge, fg, bg = " RUNNING ", GROUND, AMBER
     elif bench.disabled:
         badge, fg, bg = " DISABLED ", GROUND, RED
     else:
         badge, fg, bg = " IDLE ", BRIGHT, RULE
-    surface.put(lay.bar, 0, badge, fg, bg, bold=True)
     timer_colour = {"on": GREEN, "off": RED}.get(bench.timer, DIM)
-    _put_parts(
-        surface,
-        lay.bar,
-        len(badge) + 2,
-        [("timer ", DIM, False), (bench.timer, timer_colour, False)],
-    )
-    if frame.pending:
-        surface.put(lay.bar, lay.cols - 7 - len(frame.pending), frame.pending, TEXT)
-    surface.put(lay.bar, lay.cols - 6, "?", GROUND, TEXT)
-    surface.put(lay.bar, lay.cols - 5, " keys", TEXT)
+    left = [
+        (_attr(fg, bg, True), badge),
+        (_attr(DIM), "  timer "),
+        (_attr(timer_colour), bench.timer),
+    ]
+    right = [(_attr(TEXT), _text(frame.pending) + " ")] if frame.pending else []
+    right += [(_attr(GROUND, TEXT), "?"), (_attr(TEXT), " keys")]
+    return urwid.Columns([urwid.Text(left, wrap="clip"), ("pack", urwid.Text(right))])
 
 
 def _record_count(frame):
@@ -272,34 +460,7 @@ def _record_count(frame):
     return f"{len(frame.history)} records in {frame.directory}/"
 
 
-def _run(surface, frame):
-    """The Run tab: the header, the stage list, the divider and the pane of the stage shown."""
-    lay = frame.layout
-    if frame.run is None:
-        surface.put(lay.header, 0, _record_count(frame), DIM)
-        return
-    _run_header(surface, frame)
-    surface.put(
-        lay.pane_top, 0, f"{'stage':<{_START_COL}}{'start':<{_TOOK_COL - _START_COL}}took", DIM
-    )
-    for index, stage in enumerate(frame.run.stages):
-        y = lay.pane_top + 1 + index
-        if y > lay.pane_bottom:
-            break
-        _stage_row(surface, y, stage, frame)
-    for y in range(lay.pane_top, lay.pane_bottom + 1):
-        surface.put(y, _DIVIDER, "│", RULE)
-    if frame.pane_head == "summary":
-        _summary(surface, frame)
-    elif frame.pane_head == "suite":
-        _suite_head(surface, frame)
-        _log_window(surface, frame, lay.pane_top + frame.head_height)
-        surface.put(lay.pane_bottom, _PANE, _HINT, DIM)
-    else:
-        _plain_head(surface, frame)
-
-
-def _run_header(surface, frame):
+def _run_header(frame):
     """The header row: title and `<sha7>  record <id>`; a prefix when idle, the result when past."""
     run, bench = frame.run, frame.bench
     title = _what(run)
@@ -307,20 +468,18 @@ def _run_header(surface, frame):
     if not frame.newest:
         word, colour = _RESULT_WORDS[run.result]
         ended = _clock(run.ended) if run.ended else DASH
-        parts = [
+        return [
             (title, BRIGHT, True),
             (f"  {rest}  ", DIM, False),
             (word, colour, True),
             (f"  ended {ended}", DIM, False),
         ]
-    elif not bench.live and not bench.disabled:
-        parts = [("last run  ", DIM, False), (title, BRIGHT, True), (f"  {rest}", DIM, False)]
-    else:
-        parts = [(title, BRIGHT, True), (f"  {rest}", DIM, False)]
-    _put_parts(surface, frame.layout.header, 0, parts)
+    if not bench.live and not bench.disabled:
+        return [("last run  ", DIM, False), (title, BRIGHT, True), (f"  {rest}", DIM, False)]
+    return [(title, BRIGHT, True), (f"  {rest}", DIM, False)]
 
 
-def _stage_row(surface, y, stage, frame):
+def _stage_row(stage, frame):
     """One stage row, glyph, name, start and took, in the stage's colour across the row.
 
     Only the shown stage's row has a ground: the running tint, else the failed tint, else the
@@ -340,12 +499,12 @@ def _stage_row(surface, y, stage, frame):
             bg = FAILED_TINT
         else:
             bg = SELECTION
-    surface.put(y, 0, text.ljust(_STAGES_WIDTH)[:_STAGES_WIDTH], colour, bg, bold)
+    return _row([(text, colour, bold)], bg)
 
 
-def _summary(surface, frame):
+def _summary(frame):
     """The pane with no stage shown: the result, its end and length, a row per suite."""
-    run, lay = frame.run, frame.layout
+    run = frame.run
     running = run.result is None and frame.live
     took = _run_took(run, running, frame.now)
     if running:
@@ -355,114 +514,87 @@ def _summary(surface, frame):
         word, colour = _RESULT_WORDS[run.result]
         ended = _clock(run.ended) if run.ended else DASH
         rest = f"  ended {ended}, took {took}"
-    _put_parts(surface, lay.pane_top, _PANE, [(word, colour, True), (rest, DIM, False)])
-    y = lay.pane_top + 1
+    rows = [_row([(word, colour, True), (rest, DIM, False)])]
     for name in ("host_suite", "target_suite"):
         stage = _find_stage(run, name)
-        if stage is None or y >= lay.pane_bottom:
+        if stage is None:
             continue
         _, queued, passed, failed = _counts(stage)
         if not queued:
             continue
         counts = f"{passed} passed" + (f"  {failed} failed" if failed else "")
-        _put_parts(
-            surface, y, _PANE, [(f"{_display_name(name):<14}", DIM, False), (counts, TEXT, False)]
-        )
-        y += 1
+        rows.append(_row([(f"{_display_name(name):<14}", DIM, False), (counts, TEXT, False)]))
+    return rows
 
 
-def _suite_head(surface, frame):
+def _suite_head(frame):
     """A suite's counts line: its name in its colour, started of queued, passed and failed."""
     stage = frame.stage
     _, colour, _ = _tone(stage.state, _running(frame, stage))
     done, queued, passed, failed = _counts(stage)
-    parts = [
-        (_display_name(stage.name), colour, True),
-        (f"  {done} of {queued}  ", TEXT, False),
-        (f"{passed} passed", GREEN, False),
-        ("  ", TEXT, False),
-        (f"{failed} failed", RED if failed else DIM, False),
+    return _row(
+        [
+            (_display_name(stage.name), colour, True),
+            (f"  {done} of {queued}  ", TEXT, False),
+            (f"{passed} passed", GREEN, False),
+            ("  ", TEXT, False),
+            (f"{failed} failed", RED if failed else DIM, False),
+        ]
+    )
+
+
+def _build_head(frame):
+    """A build's progress line and bar, and while it runs the `running now` line."""
+    stage = frame.stage
+    progress = stage.progress
+    progress_line = f"  {progress.phase}"
+    filled = 0
+    if progress.total:
+        percent = progress.done * 100 // progress.total
+        filled = round(_BAR_CELLS * progress.done / progress.total)
+        progress_line += f" {progress.done} of {progress.total}  {percent}%"
+    _, colour, _ = _tone(stage.state, _running(frame, stage))
+    head = [
+        _row([("build", colour, True), (progress_line, TEXT, False)]),
+        _row([("▉" * filled, colour, False), ("▉" * (_BAR_CELLS - filled), RULE, False)]),
     ]
-    _put_parts(surface, frame.layout.pane_top, _PANE, parts)
+    if _running(frame, stage):
+        head.append(_row([("running now", DIM, False)]))
+    return head
 
 
-def _plain_head(surface, frame):
-    """A stage without sections: its head, then its log rows pushed to the bottom of the pane.
-
-    A build's head is its progress line and bar, and while running its running tasks; every head
-    ends with the output label directly over the log rows.
-    """
-    stage, top = frame.stage, frame.layout.pane_top
-    if frame.pane_head == "build":
-        progress = stage.progress
-        progress_line = f"  {progress.phase}"
-        filled = 0
-        if progress.total:
-            percent = progress.done * 100 // progress.total
-            filled = round(_BAR_CELLS * progress.done / progress.total)
-            progress_line += f" {progress.done} of {progress.total}  {percent}%"
-        _, colour, _ = _tone(stage.state, _running(frame, stage))
-        _put_parts(surface, top, _PANE, [("build", colour, True), (progress_line, TEXT, False)])
-        _put_parts(
-            surface,
-            top + 1,
-            _PANE,
-            [("▉" * filled, colour, False), ("▉" * (_BAR_CELLS - filled), RULE, False)],
-        )
-        if _running(frame, stage):
-            surface.put(top + 2, _PANE, "running now", DIM)
-            _running_tasks(surface, frame, top + 3)
-    shown = len(frame.rows[frame.scroll : frame.scroll + frame.room])
-    first = top + frame.head_height + frame.room - shown
-    surface.put(first - 1, _PANE, "this stage's output", DIM)
-    _log_window(surface, frame, first)
-
-
-def _running_tasks(surface, frame, top):
-    """The `running now` rows from row `top`: recipe, task and elapsed time in columns.
+def _running_tasks(frame, tasks, cols):
+    """The `running now` rows of `tasks` in a pane `cols` wide: recipe, task and elapsed time.
 
     Each name column is its longest name plus two, at least `_NAME_MIN`. The elapsed time always
     shows whole: when the columns would overflow the pane, the excess comes off the recipe column
     down to `_NAME_MIN`, then off the task column down to it, and a name is cut to its column
     minus two.
     """
-    tooks = [_duration(frame.now - t.started) if t.started else DASH for t in frame.tasks]
-    recipe_width = max(_NAME_MIN, max((len(t.recipe) for t in frame.tasks), default=0) + 2)
-    task_width = max(_NAME_MIN, max((len(t.task) for t in frame.tasks), default=0) + 2)
+    tooks = [_duration(frame.now - t.started) if t.started else DASH for t in tasks]
+    recipe_width = max(_NAME_MIN, max((len(t.recipe) for t in tasks), default=0) + 2)
+    task_width = max(_NAME_MIN, max((len(t.task) for t in tasks), default=0) + 2)
     took_width = max(map(len, tooks), default=0)
-    excess = recipe_width + task_width + took_width - (frame.layout.cols - _PANE)
+    excess = recipe_width + task_width + took_width - cols
     cut = min(max(excess, 0), recipe_width - _NAME_MIN)
     recipe_width -= cut
     task_width -= min(max(excess - cut, 0), task_width - _NAME_MIN)
-    for offset, (task, took) in enumerate(zip(frame.tasks, tooks, strict=True)):
+    rows = []
+    for task, took in zip(tasks, tooks, strict=True):
         names = f"{task.recipe[: recipe_width - 2]:<{recipe_width}}"
         names += f"{task.task[: task_width - 2]:<{task_width}}"
-        surface.put(top + offset, _PANE, names + took, TEXT)
+        rows.append(_row([(names + took, TEXT, False)]))
+    return rows
 
 
-def _log_window(surface, frame, top):
-    """The log rows the frame scrolled to, from row `top`.
-
-    The cursor's row is selected only while the log has focus.
-    """
-    cols = frame.layout.cols
-    running = _running(frame, frame.stage)
-    for offset, row in enumerate(frame.rows[frame.scroll : frame.scroll + frame.room]):
-        y = top + offset
-        selected = frame.focus == "log" and frame.scroll + offset == frame.cursor
-        bg = SELECTION if selected else None
-        if bg is not None:
-            surface.put(y, _PANE, " " * (cols - _PANE), TEXT, bg)
-        if row.kind == "head":
-            _section_head(surface, y, row, running, frame.now, bg)
-        else:
-            indent = _BODY_INDENT if row.kind == "body" else ""
-            surface.put(y, _PANE, indent + _text(row.text), LOG, bg)
-
-
-def _section_head(surface, y, row, running, now, bg):
-    """A section header: fold glyph, then glyph and name in the outcome's colour, then took."""
+def _log_row(row, index, frame):
+    """One log row; the cursor's row is selected only while the log has focus."""
+    bg = SELECTION if frame.focus == "log" and index == frame.cursor else None
+    if row.kind != "head":
+        indent = _BODY_INDENT if row.kind == "body" else ""
+        return _row([(indent + row.text, LOG, False)], bg)
     section = row.section
+    running = _running(frame, frame.stage)
     has_body = section.lines or section.failure
     fold = ("▾ " if row.opened else "▸ ") if has_body else "  "
     glyph, colour, bold = _tone(section.outcome, running)
@@ -471,98 +603,41 @@ def _section_head(surface, y, row, running, now, bg):
         parts += [("setup", BLUE, bold), (" ", colour, bold)]
     parts.append((section.name, colour, bold))
     if section.started is not None:
-        took = _took(section.started, row.end, running and section.outcome == "open", now)
+        took = _took(section.started, row.end, running and section.outcome == "open", frame.now)
         parts.append((f"  {took}", DIM, False))
-    _put_parts(surface, y, _PANE, parts, bg)
+    return _row(parts, bg)
 
 
-def _what_width(cols):
-    """The width of the Queue tab's `what` column at `cols` columns.
-
-    The room the other columns and the longest running stage leave.
-    """
-    others = _MARKER_WIDTH + _SOURCE_WIDTH + _SHA_WIDTH + _ADDED_WIDTH + _RUNNING_STAGE_WIDTH
-    return cols - others
-
-
-def _queue(surface, frame):
-    """The Queue tab: the column header, a row per run, then the preview box over the status bar."""
-    lay = frame.layout
-    columns = (
-        ("", _MARKER_WIDTH),
-        ("source", _SOURCE_WIDTH),
-        ("what", _what_width(lay.cols)),
-        ("sha", _SHA_WIDTH),
-        ("added", _ADDED_WIDTH),
-    )
-    surface.put(lay.header, 0, "".join(name.ljust(width) for name, width in columns), DIM)
-    for offset, row in enumerate(frame.queue_rows):
-        y = lay.pane_top + offset
-        if y > lay.pane_bottom:
-            break
-        _queue_row(surface, y, row, offset == frame.queue_cursor, frame.layout.cols)
-    _preview_box(surface, lay, frame.preview_lines or [])
+def _queue_columns(cells):
+    """The Queue's columns over `cells`: marker, source, what, sha, added, then the stage."""
+    marker, source, what, sha, added, *stage = cells
+    columns = [(_MARKER_WIDTH, marker), (_SOURCE_WIDTH, source)]
+    columns += [urwid.Padding(what, right=2), (_SHA_WIDTH, sha), (_ADDED_WIDTH, added)]
+    columns += [(_RUNNING_STAGE_WIDTH, cell) for cell in stage]
+    return urwid.Columns(columns)
 
 
-def _preview_box(surface, lay, lines):
-    """The preview lines in a blue border whose bottom edge is the pane's last row.
-
-    A line wider than the screen is cut to fit between the borders.
-    """
-    if not lines:
-        return
-    width = min(max(map(len, lines)), lay.cols - 4)
-    top = lay.pane_bottom - len(lines) - 1
-    for y in range(max(top, lay.pane_top), lay.pane_bottom + 1):
-        surface.put(y, 0, " " * lay.cols, TEXT)
-    edges = (("┌", "┐", top), ("└", "┘", lay.pane_bottom))
-    for left, right, y in edges:
-        if y >= lay.pane_top:
-            surface.put(y, 0, left + "─" * (width + 2) + right, BLUE)
-    for offset, line in enumerate(lines):
-        y = top + 1 + offset
-        if y >= lay.pane_top:
-            surface.put(y, 0, "│", BLUE)
-            surface.put(y, 2, line[:width].ljust(width), BLUE if offset == 0 else TEXT)
-            surface.put(y, width + 3, "│", BLUE)
-
-
-def _queue_row(surface, y, row, selected, cols):
+def _queue_row(row, selected):
     """One Queue row: marker, source, what, sha and added time, then the running stage.
 
     The selected row is on the selection, else the running row on the running tint.
     """
-    what = _what_width(cols)
     running = row.marker == "▶"
     bg = SELECTION if selected else RUNNING_TINT if running else None
-    if bg is not None:
-        surface.put(y, 0, " " * cols, TEXT, bg)
-    parts = [
-        (row.marker.ljust(_MARKER_WIDTH), AMBER if running else TEXT, False),
-        (row.source.ljust(_SOURCE_WIDTH), BLUE if row.source == "by hand" else TEXT, False),
-        (row.what[: what - 2].ljust(what), TEXT, False),
-        (row.sha7.ljust(_SHA_WIDTH), TEXT, False),
-        (row.added.ljust(_ADDED_WIDTH), TEXT, False),
+    stage = _RUNNING_STAGE.format(row.stage) if running and row.stage else ""
+    cells = [
+        _row([(row.marker, AMBER if running else TEXT, False)], bg),
+        _row([(row.source, BLUE if row.source == "by hand" else TEXT, False)], bg),
+        _row([(row.what, TEXT, False)], bg),
+        _row([(row.sha7, TEXT, False)], bg),
+        _row([(row.added, TEXT, False)], bg),
+        _row([(stage, AMBER, False)], bg),
     ]
-    if running and row.stage:
-        parts.append((_RUNNING_STAGE.format(row.stage), AMBER, False))
-    _put_parts(surface, y, 0, parts, bg)
+    columns = _queue_columns(cells)
+    return urwid.AttrMap(columns, _attr(TEXT, bg)) if bg else columns
 
 
-def _history(surface, frame):
-    """The History tab: the column header, the rows the frame scrolled to, the footer."""
-    lay = frame.layout
-    width = max(18, max((len(r.record) for r in frame.history), default=0) + 2)
-    header = "record".ljust(width) + "what".ljust(22) + "sha".ljust(9) + "result".ljust(13)
-    surface.put(lay.header, 0, header + "took", DIM)
-    window = frame.history[frame.history_scroll : frame.history_scroll + frame.history_room]
-    for offset, run in enumerate(window):
-        index = frame.history_scroll + offset
-        _history_row(surface, lay.pane_top + offset, run, index, frame, width)
-    surface.put(lay.pane_bottom, 0, _record_count(frame), DIM)
-
-
-def _history_row(surface, y, run, index, frame, width):
+def _history_row(run, index, frame, width):
     """One History row: record, what, sha, result, took, then the failing stage or `by hand`."""
     running = index == 0 and frame.bench.live
     word, colour = ("running", AMBER) if running else _RESULT_WORDS[run.result]
@@ -579,24 +654,19 @@ def _history_row(surface, y, run, index, frame, width):
         parts.append((_display_name(failing.name) + "  ", DIM, False))
     if run.kind == "test":
         parts.append(("by hand", BLUE, False))
-    bg = SELECTION if index == frame.history_cursor else None
-    if bg is not None:
-        surface.put(y, 0, " " * frame.layout.cols, TEXT, bg)
-    _put_parts(surface, y, 0, parts, bg)
+    return _row(parts, SELECTION if index == frame.history_cursor else None)
 
 
-def _help(surface, lay):
-    """The Help tab: the `keys` title over three columns, each as wide as its widest entry."""
-    surface.put(lay.header, 0, "keys", BRIGHT, bold=True)
-    start = 0
+def _help():
+    """The Help body: three columns of keys, each as wide as its widest entry."""
+    columns = []
     for heading, entries in _HELP:
         key_width = max(len(key) for key, _ in entries) + 1
-        surface.put(lay.pane_top, start, heading, BLUE)
-        for offset, (key, words) in enumerate(entries):
-            _put_parts(
-                surface,
-                lay.pane_top + 1 + offset,
-                start,
-                [(key.ljust(key_width), AMBER, False), (words, TEXT, False)],
-            )
-        start += key_width + max(len(words) for _, words in entries) + _HELP_GAP
+        width = key_width + max(len(words) for _, words in entries) + _HELP_GAP
+        lines = [_row([(heading, BLUE, False)])]
+        lines += [
+            _row([(key.ljust(key_width), AMBER, False), (words, TEXT, False)])
+            for key, words in entries
+        ]
+        columns.append((width, urwid.Pile(lines)))
+    return urwid.Filler(urwid.Columns(columns), "top")

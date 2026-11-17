@@ -1,14 +1,13 @@
-"""Status: `bench status --watch`, the curses shell around `view` and `screen`.
+"""Status: `bench status --watch`, the urwid shell around `view` and `screen`.
 
-Once a second, and on every key, it reads the records and the bench once, resolves a frame, draws
-it and hands the next key to `view.handle` with that frame. Nothing here takes a lock of its own:
-the Queue tab reads `Queue.entries` and `Queue.preview` on a background thread, `:run` and `dd` call
-`Queue.add` and `Queue.remove`, and `:disable` and `:enable` call `stop_timer` and `enable`.
+Once a second, and after every key, `Shell.tick` reads the records and the bench once, resolves a
+frame and refills the screen from it; `Shell.press` hands a key to `view.handle` with the frame
+last shown. Nothing here takes a lock of its own: the Queue tab reads `Queue.entries` and
+`Queue.preview` on a background thread, `:run` and `dd` call `Queue.add` and `Queue.remove`, and
+`:disable` and `:enable` call `stop_timer` and `enable`.
 """
 
-import curses
 import functools
-import math
 import os
 import subprocess
 import sys
@@ -18,48 +17,87 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import SimpleQueue
 
+import urwid
+
 from wisebench import screen, view
 from wisebench.bench_state import enable, read_bench, read_run_unit, stop_timer
 from wisebench.queue import Queue
 from wisebench.records import Records
 
-_FIRST_COLOUR = 16
-_XTERM = {
-    screen.GROUND: 232,
-    screen.TEXT: 252,
-    screen.DIM: 245,
-    screen.LOG: 248,
-    screen.RULE: 237,
-    screen.BRIGHT: 231,
-    screen.GREEN: 108,
-    screen.AMBER: 180,
-    screen.RED: 168,
-    screen.BLUE: 75,
-    screen.RUNNING_TINT: 235,
-    screen.FAILED_TINT: 235,
-    screen.SELECTION: 235,
+_KEYS = {
+    "enter": "\n",
+    "backspace": "\x7f",
+    "esc": "\x1b",
+    "tab": "\t",
+    "shift tab": "\x1b[Z",
+    "ctrl d": "\x04",
+    "ctrl u": "\x15",
 }
-_KEYS = {curses.KEY_ENTER: "\n", curses.KEY_BACKSPACE: "\x7f", curses.KEY_BTAB: "\x1b[Z"}
 _QUEUE_REFRESH = timedelta(seconds=30)
+_NO_TERMINAL = "BENCH ERROR: bench status --watch needs a terminal"
 
 
 def watch(checkout, directory):
-    """Run the curses view of the records and the queue until the user quits.
+    """Run the urwid view of the records and the queue until the user quits.
 
     Args:
         checkout (pathlib.Path): The bench's layer checkout.
         directory (pathlib.Path): The records directory.
 
     Returns:
-        int: 0 on quit or Ctrl-C, 2 when curses cannot start (not a terminal).
+        int: 0 on quit or Ctrl-C, 2 when stdin or stdout is not a terminal.
     """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print(_NO_TERMINAL, file=sys.stderr)
+        return 2
+    shell = Shell(checkout, directory)
+    shell.tick(datetime.now(UTC))
+    terminal = urwid.display.raw.Screen()
+    terminal.set_terminal_properties(colors=2**24)
+    loop = urwid.MainLoop(
+        shell.widget,
+        screen.PALETTE,
+        screen=terminal,
+        input_filter=lambda keys, raw: _input(shell, keys, datetime.now(UTC)),
+        handle_mouse=False,
+    )
+
+    def refresh(loop, _):
+        """The one-second alarm: refresh, then arm the next."""
+        shell.tick(datetime.now(UTC))
+        loop.set_alarm_in(1, refresh)
+
+    loop.set_alarm_in(1, refresh)
     try:
-        return curses.wrapper(_loop, Path(checkout), Path(directory))
+        loop.run()
     except KeyboardInterrupt:
         return 0
-    except curses.error as exc:
-        print(f"BENCH ERROR: {exc}", file=sys.stderr)
-        return 2
+    return 0
+
+
+def _input(shell, keys, now):
+    """Hand urwid's keys to `shell` one at a time, refreshing after each.
+
+    Args:
+        shell (Shell): The watch session.
+        keys (list): The keys urwid read, in its names.
+        now (datetime): The time of the refreshes.
+
+    Returns:
+        list: The `"window resize"` keys, left for urwid to lay the screen out again.
+
+    Raises:
+        urwid.ExitMainLoop: A key quit.
+    """
+    resized = []
+    for key in keys:
+        if key == "window resize":
+            resized.append(key)
+            continue
+        if shell.press(key):
+            raise urwid.ExitMainLoop
+        shell.tick(now)
+    return resized
 
 
 @dataclass
@@ -189,104 +227,67 @@ def _perform(queue, reads, state, directory, run_unit):
         state.disable_request = state.enable_request = False
 
 
-def _loop(window, checkout, directory, run=_background):
-    """Draw a frame once a second and on every key; 0 on a quit key.
+class Shell:
+    """One watch session apart from the terminal: the state, the reads, the writes and the widgets.
 
     Args:
-        window: The curses window.
         checkout (pathlib.Path): The bench's layer checkout.
         directory (pathlib.Path): The records directory.
         run (Callable): Runs a function of no arguments away from the draw path; tests pass a
-            function that calls it at once.
-    """
-    window.timeout(1000)
-    attributes = _attributes()
-    window.bkgd(" ", attributes(screen.TEXT, None, False))
-    records = Records(directory)
-    run_unit = read_run_unit()
-    state = view.State()
-    shown_directory = os.path.relpath(directory)
-    queue, results, reads = Queue(checkout, directory), SimpleQueue(), _Reads()
-    while True:
-        _collect(results, reads, state)
-        runs = records.runs()
-        bench = read_bench(directory, runs[0] if runs else None, run_unit, Path("/proc"))
-        rows, cols = window.getmaxyx()
-        now = datetime.now(UTC)
-        _request(queue, run, results, reads, state, now)
-        snap = view.Snapshot(runs, bench, now, shown_directory, reads.entries, reads.preview)
-        frame = view.resolve(state, snap, rows, cols)
-        state.scroll, state.history_scroll = frame.scroll, frame.history_scroll
-        window.erase()
-        screen.draw(_Surface(window, rows, cols, attributes), frame)
-        window.refresh()
-        try:
-            key = window.get_wch()
-        except curses.error:
-            continue
-        if view.handle(state, _KEYS.get(key, key), frame):
-            return 0
-        _perform(queue, reads, state, directory, run_unit)
+            function that calls it at once, or holds it.
 
-
-def _attributes():
-    """A function from `(fg, bg, bold)` to curses attributes for this terminal.
-
-    With 256 colours each canvas colour is defined exactly at its own number from 16 when the
-    terminal can redefine colours, else it is its nearest xterm index. A `bg` of None is the ground.
-    With fewer, a filled ground is reverse video, and bold stays bold.
-    """
-    if not (curses.has_colors() and curses.COLORS >= 256):
-
-        def reverse(fg, bg, bold):
-            """Reverse video for the selection, a tab, a badge or a box; bold as bold."""
-            filled = bg is not None
-            return (curses.A_REVERSE if filled else curses.A_NORMAL) | _bold(bold)
-
-        return reverse
-    numbers = _XTERM
-    if curses.can_change_color():
-        numbers = {hexed: _FIRST_COLOUR + i for i, hexed in enumerate(_XTERM)}
-        for hexed, number in numbers.items():
-            channels = (math.ceil(int(hexed[i : i + 2], 16) * 1000 / 255) for i in (1, 3, 5))
-            curses.init_color(number, *channels)
-    pairs = {}
-
-    def colour(fg, bg, bold):
-        """The colour pair of `fg` on `bg`, made on first use; bold as bold."""
-        pair = (numbers[fg], numbers[bg or screen.GROUND])
-        if pair not in pairs:
-            pairs[pair] = len(pairs) + 1
-            curses.init_pair(pairs[pair], *pair)
-        return curses.color_pair(pairs[pair]) | _bold(bold)
-
-    return colour
-
-
-def _bold(bold):
-    """`A_BOLD` when `bold`, else no attribute."""
-    return curses.A_BOLD if bold else curses.A_NORMAL
-
-
-class _Surface:
-    """A curses window as a `screen` surface: writes clipped at the right edge.
-
-    A write that fills the bottom-right cell lands and then raises in curses; that error alone
-    is swallowed.
+    Attributes:
+        frame (view.Frame | None): The frame last shown; None before the first tick.
+        screen (screen.Screen): The widgets the frame is shown in.
+        widget (urwid.Widget): The top widget, `screen.widget`.
     """
 
-    def __init__(self, window, rows, cols, attributes):
-        """Wrap `window`, `rows` by `cols`, drawing colours through `attributes`."""
-        self.window, self.rows, self.cols = window, rows, cols
-        self.attributes = attributes
+    def __init__(self, checkout, directory, run=_background):
+        """Start a session over the records in `directory`, showing nothing until `tick`."""
+        directory = Path(directory)
+        self.frame = None
+        self.screen = screen.Screen()
+        self.widget = self.screen.widget
+        self._state = view.State()
+        self._records = Records(directory)
+        self._directory = directory
+        self._shown_directory = os.path.relpath(directory)
+        self._run_unit = read_run_unit()
+        self._queue = Queue(Path(checkout), directory)
+        self._run = run
+        self._results, self._reads = SimpleQueue(), _Reads()
 
-    def put(self, y, x, text, fg, bg=None, bold=False):
-        """Write `text` at (y, x) in `fg` on `bg` (None: the ground), bold if `bold`."""
-        text = text[: max(0, self.cols - x)]
-        if not text:
-            return
-        try:
-            self.window.addnstr(y, x, text, len(text), self.attributes(fg, bg, bold))
-        except curses.error:
-            if not (y == self.rows - 1 and x + len(text) == self.cols):
-                raise
+    def tick(self, now):
+        """Take in finished reads, read the records and the bench, and show the frame for `now`.
+
+        Args:
+            now (datetime): The time of the refresh.
+        """
+        _collect(self._results, self._reads, self._state)
+        runs = self._records.runs()
+        bench = read_bench(
+            self._directory, runs[0] if runs else None, self._run_unit, Path("/proc")
+        )
+        _request(self._queue, self._run, self._results, self._reads, self._state, now)
+        reads = self._reads
+        snap = view.Snapshot(runs, bench, now, self._shown_directory, reads.entries, reads.preview)
+        self.frame = view.resolve(self._state, snap)
+        self.screen.update(self.frame)
+
+    def press(self, key):
+        """Hand one key, in urwid's names, to the view, and carry out what it asked for.
+
+        A named key outside `_KEYS` does nothing.
+
+        Args:
+            key (str): The key.
+
+        Returns:
+            bool: True to quit.
+        """
+        key = _KEYS.get(key, key if len(key) == 1 else None)
+        if key is None:
+            return False
+        done = view.handle(self._state, key, self.frame, self.screen.page(self._state.tab))
+        _perform(self._queue, self._reads, self._state, self._directory, self._run_unit)
+        return done
