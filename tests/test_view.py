@@ -44,7 +44,7 @@ def texts(rows):
     ("shown", "newest", "bench", "expected"),
     [
         (live("bundle"), True, LIVE, "bundle"),
-        (run(), True, IDLE, None),
+        (failing_at(STAMP, "build"), True, IDLE, None),
         (failing_at(STAMP, "host_suite"), True, DISABLED, "host_suite"),
         (failing_at(STAMP, "build"), False, IDLE, "build"),
     ],

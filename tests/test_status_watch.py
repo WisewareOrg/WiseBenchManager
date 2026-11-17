@@ -147,7 +147,7 @@ def test_each_key_shows_what_the_boards_show(
     [
         ([run(build=plain("build", 5))], IDLE, [*"jjj", "enter"],
          {"focused": "log", "row": (None, 4)}),
-        ([run()], IDLE, [*"jjj", "enter", "escape"], {"focused": "stages"}),
+        ([run(build=plain("build", 5))], IDLE, [*"jjj", "enter", "escape"], {"focused": "stages"}),
         ([running_test(2)], LIVE, ["enter"], {"row": (TESTS[2], 0)}),
         ([NEEDLES], DISABLED, FIND, {"focused": "log", "row": ("case_01", 1)}),
         ([NEEDLES], DISABLED, [*FIND, "n"], {"row": ("case_04", 1)}),
