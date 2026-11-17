@@ -1,8 +1,8 @@
 """Status: `bench status --watch`, an urwid view of the records, the bench and the queue.
 
-Once a second it reads the records and the bench and updates the widgets; a key acts on the widgets
-and reads nothing from disk. `Queue.entries` and `Queue.preview` run on a daemon thread. The only
-writes are `:run`, `dd`, `:disable` and `:enable`, through `Queue.add`, `Queue.remove`,
+Once a second it reads the records and the bench and updates the widgets; a key acts on the
+widgets and reads nothing from disk. `Queue.entries` and `Queue.preview` run on a daemon thread.
+The only writes are `:run`, `dd`, `:disable` and `:enable`, through `Queue.add`, `Queue.remove`,
 `stop_timer` and `enable`.
 """
 
@@ -55,15 +55,9 @@ PALETTE = [
 ]
 KEYS = urwid.CommandMap()
 KEYS.update(
-    {
-        "j": Command.DOWN,
-        "k": Command.UP,
-        "G": Command.MAX_RIGHT,
-        "ctrl d": Command.PAGE_DOWN,
-        "ctrl u": Command.PAGE_UP,
-    }
+    {"j": Command.DOWN, "k": Command.UP, "G": Command.MAX_RIGHT}
+    | {"ctrl d": Command.PAGE_DOWN, "ctrl u": Command.PAGE_UP}
 )
-_MOVES = (Command.UP, Command.DOWN)
 _TABS = ("run", "queue", "history")
 _RESULTS = {
     "passed": ("passed", "green"),
@@ -71,52 +65,35 @@ _RESULTS = {
     "error": ("bench error", "red"),
     None: ("no result", "dim"),
 }
-_HINT = "Enter into the log   za fold   Esc back to stages"
-_ENABLE = [
-    ("bright bold", "Enable the bench?"),
-    " Clears DISABLED and starts the timer. ",
-    ("green", "[y/N]"),
-]
+_ENABLE = [("bright bold", "Enable the bench?"), " Clears DISABLED and starts the timer. "]
 _TASK_ROWS = 8
 _BAR = 33
 _QUEUE_READ = timedelta(seconds=30)
-_HELP = (
-    (
-        "move",
-        (
-            ("Tab S-Tab", "next / prev view"),
-            ("1-3", "jump to view"),
-            ("j k", "down / up"),
-            ("gg G", "top / bottom"),
-            ("^d ^u", "page down / up"),
-            ("Enter", "open selection"),
-        ),
-    ),
-    (
-        "runs and log",
-        (
-            ("[ ]", "older / newer run"),
-            ("1", "back to the live run"),
-            ("dd", "remove hand-queued run"),
-            ("za", "fold / unfold a section"),
-            ("zR zM", "unfold / fold all"),
-            ("/", "search"),
-            ("n N", "next / prev match"),
-            ("G", "follow the live log"),
-        ),
-    ),
-    (
-        "commands",
-        (
-            (":run ref", "queue a ref"),
-            (":disable", "stop the bench"),
-            (":enable", "start it again"),
-            (":q", "quit"),
-            ("?", "this screen"),
-            ("q", "quit"),
-        ),
-    ),
-)
+_HELP = {
+    "move": """
+Tab S-Tab next / prev view
+1-3       jump to view
+j k       down / up
+gg G      top / bottom
+^d ^u     page down / up
+Enter     open selection""",
+    "runs and log": """
+[ ]       older / newer run
+1         back to the live run
+dd        remove hand-queued run
+za        fold / unfold
+zR zM     unfold / fold all
+/         search
+n N       next / prev match
+G         follow the live log""",
+    "commands": """
+:run ref  queue a ref
+:disable  stop the bench
+:enable   start it again
+:q        quit
+?         this screen
+q         quit""",
+}
 
 
 def watch(checkout, directory):
@@ -138,7 +115,7 @@ def watch(checkout, directory):
     try:
         loop.run()
     except KeyboardInterrupt:
-        pass
+        return 0
     return 0
 
 
@@ -146,22 +123,15 @@ def _tone(state, running):
     """(glyph, attribute) for a stage or section state; an open one is amber only while live."""
     if state == "open":
         return ("●", "amber bold") if running else ("?", "dim")
-    return {
-        "passed": ("✓", "green"),
-        "failed": ("✗", "red bold"),
-        "error": ("✗", "red bold"),
-        "skipped": ("–", "dim"),
-    }.get(state, ("·", "dim"))
+    if state in ("failed", "error"):
+        return "✗", "red bold"
+    return {"passed": ("✓", "green"), "skipped": ("–", "dim")}.get(state, ("·", "dim"))
 
 
 class _Line(urwid.Text):
-    """A row a list can put its focus on; it clips rather than wraps."""
+    """A clipped row of text that a list can put its focus on."""
 
     _selectable = True
-
-    def __init__(self, markup):
-        """A clipped row of `markup`."""
-        super().__init__(markup, wrap="clip")
 
     def keypress(self, size, key):
         """Hand every key back to the list."""
@@ -169,8 +139,8 @@ class _Line(urwid.Text):
 
 
 def _row(markup, ground=None, focus="selection"):
-    """A list row of `markup` on `ground`, on `focus` while the list's focus is on it."""
-    return urwid.AttrMap(_Line(markup), ground, focus or ground)
+    """A list row of `markup` on `ground`, and on `focus` (None: `ground`) while focused."""
+    return urwid.AttrMap(_Line(markup, wrap="clip"), ground, focus or ground)
 
 
 class _Rows(urwid.ListWalker):
@@ -185,7 +155,7 @@ class _Rows(urwid.ListWalker):
         self.build, self.items, self.focus, self.built = build, [], 0, {}
 
     def set(self, items, focus):
-        """Replace the items, with the focus on `focus`, held within them."""
+        """Replace the items, the focus on `focus` held within them."""
         self.items, self.built = items, {}
         self.focus = min(max(focus, 0), max(len(items) - 1, 0))
         self._modified()
@@ -241,41 +211,35 @@ class _List(urwid.ListBox):
 class _RunTab(urwid.WidgetWrap):
     """The Run tab: a run's header, its stage list and the pane of the stage shown.
 
-    Which sections are folded is kept here by section id, because each refresh re-parses the run
+    Which sections are folded is kept here by section id, since each refresh re-parses the run
     into new section objects.
     """
 
     def __init__(self, watch):
         """The tab over `watch`'s runs and bench."""
         self.watch, self.run, self.stage, self.chosen = watch, None, None, None
-        self.folds, self.pattern = {}, None
+        self.live, self.folds, self.pattern, self.ends = False, {}, None, {}
         self.header = urwid.Text("")
         self.stages = _List(self._stage_row)
         self.log = _List(self._log_row)
         self.pane = urwid.WidgetPlaceholder(urwid.SolidFill(" "))
         heading = urwid.Text(("dim", "stage            start     took"))
-        self.columns = urwid.Columns(
-            [
-                (34, urwid.Pile([("pack", heading), self.stages])),
-                (1, urwid.AttrMap(urwid.SolidFill("│"), "rule")),
-                self.pane,
-            ],
-            dividechars=1,
-        )
-        super().__init__(
-            urwid.Pile([("pack", self.header), ("pack", urwid.Divider()), self.columns])
-        )
+        stages = urwid.Pile([("pack", heading), self.stages])
+        divider = urwid.AttrMap(urwid.SolidFill("│"), "rule")
+        self.columns = urwid.Columns([(34, stages), (1, divider), self.pane], dividechars=1)
+        blank = urwid.Divider()
+        super().__init__(urwid.Pile([("pack", self.header), ("pack", blank), self.columns]))
 
     def update(self, opening=False):
-        """Show the run and stage chosen, else the newest run and its automatic stage.
+        """Show the run and stage chosen, else the newest run on its automatic stage.
 
         Args:
-            opening (bool): Put the log cursor where a stage opens, even on the same stage.
+            opening (bool): Put the log cursor where the stage opens, even on the same stage.
         """
         watch, runs = self.watch, self.watch.runs
         run = next((r for r in runs if r.record == watch.record), runs[0] if runs else None)
         if run is None:
-            self.header.set_text(("dim", f"{len(runs)} records in {watch.directory.name}/"))
+            self.header.set_text(("dim", f"0 records in {watch.directory.name}/"))
             return
         newest = run is runs[0]
         stage = next((s for s in run.stages if s.name == self.chosen), None)
@@ -294,7 +258,7 @@ class _RunTab(urwid.WidgetWrap):
         self.pane.original_widget = urwid.Pile(self._pane(newest))
 
     def _header(self, newest):
-        """The run's title, sha and record; `last run` when idle, the result when past."""
+        """The run's title, sha and record; `last run` first when idle, its result after if past."""
         run, bench = self.run, self.watch.bench
         title = [
             ("bright bold", view.what(run)),
@@ -309,14 +273,13 @@ class _RunTab(urwid.WidgetWrap):
         return title
 
     def _stage_row(self, stage):
-        """A stage's row, on the running or failed tint, or the selection, while it shows."""
+        """A stage's row; the one shown on the running or failed tint, else the selection."""
         running = self.live and stage.state == "open"
         glyph, colour = _tone(stage.state, running)
         text = f"{glyph} {stage.name.replace('_', ' ')}".ljust(17)
         if stage.started is not None and stage.state not in ("not-started", "skipped"):
-            now = self.watch.now
             text += view.clock(stage.started).ljust(10)
-            text += view.took(stage.started, stage.ended, running, now)
+            text += view.took(stage.started, stage.ended, running, self.watch.now)
         ground = None
         if stage is self.stage:
             failed = stage.state in ("failed", "error")
@@ -338,7 +301,7 @@ class _RunTab(urwid.WidgetWrap):
         return urwid.Filler(urwid.Text(lines), valign="top")
 
     def _pane(self, newest):
-        """The pane's widgets for the stage shown: its head, then its log."""
+        """The pane's widgets: the failure box while disabled, the stage's head, then its log."""
         stage, watch = self.stage, self.watch
         running = self.live and stage.state == "open"
         _, colour = _tone(stage.state, running)
@@ -362,58 +325,54 @@ class _RunTab(urwid.WidgetWrap):
                 "  ",
                 ("red" if failed else "dim", f"{failed} failed"),
             ]
-            return [
-                *parts,
-                ("pack", urwid.Text(head)),
-                self.log,
-                ("pack", urwid.Text(("dim", _HINT))),
-            ]
-        progress = stage.progress
-        if progress is not None:
-            head = [(colour, "build"), f"  {progress.phase}"]
-            filled = 0
-            if progress.total:
-                filled = round(_BAR * progress.done / progress.total)
-                percent = progress.done * 100 // progress.total
-                head.append(f" {progress.done} of {progress.total}  {percent}%")
-            head += ["\n", (colour, "█" * filled), ("rule", "█" * (_BAR - filled))]
-            if running:
-                tasks = sorted(progress.tasks, key=lambda t: (t.started is None, t.started))
-                tasks = tasks[:_TASK_ROWS]
-                recipe = max((len(t.recipe) for t in tasks), default=0) + 2
-                task = max((len(t.task) for t in tasks), default=0) + 2
-                head.append(("dim", "\nrunning now"))
-                for t in tasks:
-                    took = view.took(t.started, None, True, watch.now) if t.started else DASH
-                    head.append(f"\n{t.recipe:<{recipe}}{t.task:<{task}}{took}")
-            parts.append(("pack", urwid.Text(head)))
+            hint = ("dim", "Enter into the log   za fold   Esc back to stages")
+            return [*parts, ("pack", urwid.Text(head)), self.log, ("pack", urwid.Text(hint))]
+        if stage.progress is not None:
+            parts.append(("pack", urwid.Text(self._build_head(colour, running))))
         return [*parts, ("pack", urwid.Text(("dim", "this stage's output"))), self.log]
 
+    def _build_head(self, colour, running):
+        """A build's progress line and bar, and while it runs a row per running task."""
+        progress = self.stage.progress
+        head = [(colour, "build"), f"  {progress.phase}"]
+        filled = 0
+        if progress.total:
+            filled = round(_BAR * progress.done / progress.total)
+            percent = progress.done * 100 // progress.total
+            head.append(f" {progress.done} of {progress.total}  {percent}%")
+        head += ["\n", (colour, "█" * filled), ("rule", "█" * (_BAR - filled))]
+        if running:
+            tasks = sorted(progress.tasks, key=lambda t: (t.started is None, t.started))
+            tasks = tasks[:_TASK_ROWS]
+            recipe = max((len(t.recipe) for t in tasks), default=0) + 2
+            task = max((len(t.task) for t in tasks), default=0) + 2
+            head.append(("dim", "\nrunning now"))
+            for t in tasks:
+                took = view.took(t.started, None, True, self.watch.now) if t.started else DASH
+                head.append(f"\n{t.recipe:<{recipe}}{t.task:<{task}}{took}")
+        return head
+
     def _fill_log(self, at):
-        """List the stage's rows with the cursor on `at`, else where the stage opens.
+        """List the stage's rows with the cursor on row `at`, else where the stage opens.
 
         The cursor stays on its row, else on its section's header; on the last row it follows the
         tail.
         """
         rows = view.log_rows(self.stage, self.folds)
-        if at is None:
-            focus = view.opening_row(self.stage, rows)
-        elif self.log.body.focus == len(self.log.items) - 1:
+        focus = None
+        if at is not None and self.log.body.focus == len(self.log.items) - 1:
             focus = len(rows) - 1
-        else:
+        elif at is not None:
             focus = view.find(rows, at)
-            focus = view.opening_row(self.stage, rows) if focus is None else focus
         self.ends = view.section_ends(self.stage)
-        self.log.body.set(rows, focus)
+        self.log.body.set(rows, view.opening_row(self.stage, rows) if focus is None else focus)
 
     def _log_row(self, row):
         """A log row: a stage line, a section's header with its fold and took, or a body line."""
         section, line = row
         text = view.row_text(self.stage, row)
-        if section is None:
-            return _row(("log", text))
-        if line:
-            return _row(("log", "      " + text))
+        if section is None or line:
+            return _row(("log", f"      {text}" if section else text))
         has_body = section.lines or section.failure
         fold = ("▾ " if view.unfolded(self.folds, section) else "▸ ") if has_body else "  "
         running = self.live and section.outcome == "open"
@@ -428,9 +387,12 @@ class _RunTab(urwid.WidgetWrap):
         return _row(markup)
 
     def keypress(self, size, key):
-        """Move the stage list or the log; Enter goes into the log and Esc back to the stages."""
+        """Move the stage list or the log; Enter goes into the log and Esc back to the stages.
+
+        From the summary, `j` and `k` show the first stage.
+        """
         on_stages = self.columns.focus_position == 0
-        if self.run and self.stage is None and on_stages and KEYS[key] in _MOVES:
+        if self.run and self.stage is None and on_stages and key in ("j", "k", "down", "up"):
             self.chosen = self.run.stages[0].name
             self.update()
             return None
@@ -443,9 +405,7 @@ class _RunTab(urwid.WidgetWrap):
             self.columns.focus_position = 2
         elif key == "esc":
             self.columns.focus_position = 0
-        else:
-            return key
-        return None
+        return None if key in ("enter", "esc") else key
 
     def fold(self, op):
         """`za` folds or unfolds the cursor's section; `zR` unfolds and `zM` folds them all."""
@@ -462,7 +422,7 @@ class _RunTab(urwid.WidgetWrap):
     def search(self, pattern, direction):
         """Put the cursor on the next (1) or previous (-1) row holding the pattern, unfolding it."""
         self.pattern = pattern or self.pattern
-        if self.stage is None or self.log.at is None or not self.pattern:
+        if self.log.at is None or not self.pattern or self.stage is None:
             return
         row = view.search(self.stage, self.folds, self.log.at, self.pattern, direction)
         if row is None:
@@ -475,9 +435,9 @@ class _RunTab(urwid.WidgetWrap):
 
 
 class _QueueTab(urwid.WidgetWrap):
-    """The Queue tab: the running run, the hand-queued runs and the merge queue, and the preview.
+    """The Queue tab: the running run, the hand-queued runs, the merge queue, and the preview.
 
-    The selection is kept on its row by the row's key, because each read lists new rows.
+    The selection is kept on its row by the row's key, since each read lists new rows.
     """
 
     def __init__(self, watch):
@@ -488,21 +448,17 @@ class _QueueTab(urwid.WidgetWrap):
         super().__init__(urwid.Frame(self.list, header=header))
 
     def update(self, first=False):
-        """List the rows from the last reads, the selection on its row, else at its index.
-
-        Args:
-            first (bool): Select the first row.
-        """
+        """List the last reads' rows, the selection on its row, else its place, else (`first`) 0."""
         watch = self.watch
         rows = view.queue_rows(watch.runs, watch.bench, watch.entries)
         at = self.list.at
-        focus = next((i for i, r in enumerate(rows) if at and r.key == at.key), None)
-        self.list.body.set(rows, 0 if first else self.list.body.focus if focus is None else focus)
+        found = next((i for i, row in enumerate(rows) if at and row.key == at.key), None)
+        self.list.body.set(rows, 0 if first else self.list.body.focus if found is None else found)
         ref = view.typed_ref(watch.prompt.edit_text) if watch.prompting else None
         box = None
         if ref is not None and watch.preview and watch.preview[0] == ref:
-            first_line, *rest = view.preview_lines(ref, watch.preview[1], rows)
-            text = urwid.Text([("blue bold", first_line), *(("dim", f"\n{line}") for line in rest)])
+            head, *rest = view.preview_lines(ref, watch.preview[1], rows)
+            text = urwid.Text([("blue bold", head), *(("dim", f"\n{line}") for line in rest)])
             box = urwid.AttrMap(urwid.LineBox(text), "blue")
         self._w.footer = box
 
@@ -518,23 +474,17 @@ class _QueueTab(urwid.WidgetWrap):
             markup.append(("amber", f"running, {row.stage}"))
         return _row(markup, "running" if running else None)
 
-    def remove(self):
-        """`dd`: remove the selected hand-queued run; any other row says it cannot be."""
-        row = self.list.at
-        if row is not None:
-            self.watch.remove(row)
-
 
 class _HistoryTab(urwid.WidgetWrap):
-    """The History tab: every run, newest first, and Enter opens one in Run."""
+    """The History tab: every run, newest first; Enter opens one in Run."""
 
     def __init__(self, watch):
         """The tab over `watch`'s runs."""
         self.watch = watch
         self.list = _List(self._row)
         self.count = urwid.Text("")
-        header = f"{'record':<18}{'what':<22}{'sha':<9}{'result':<13}took"
-        super().__init__(urwid.Frame(self.list, urwid.Text(("dim", header)), self.count))
+        header = urwid.Text(("dim", f"{'record':<18}{'what':<22}{'sha':<9}{'result':<13}took"))
+        super().__init__(urwid.Frame(self.list, header, self.count))
 
     def update(self, record=None):
         """List every run with the selection kept on its run, or moved to `record`."""
@@ -545,7 +495,7 @@ class _HistoryTab(urwid.WidgetWrap):
         self.count.set_text(("dim", f"{len(runs)} records in {self.watch.directory.name}/"))
 
     def _row(self, run):
-        """One run: record, what, sha, result and took, then its failing stage or `by hand`."""
+        """One run: record, what, sha, result and took, then its failing stage and `by hand`."""
         watch = self.watch
         running = watch.bench.live and run is watch.runs[0]
         word, colour = ("running", "amber") if running else _RESULTS[run.result]
@@ -573,19 +523,14 @@ class _HistoryTab(urwid.WidgetWrap):
 
 def _help():
     """The keys, in three columns under a title."""
-    columns = [
-        urwid.Pile(
-            [
-                urwid.Text(("blue", heading)),
-                *(urwid.Text([("amber", f"{key:<10}"), words]) for key, words in entries),
-            ]
-        )
-        for heading, entries in _HELP
-    ]
-    body = urwid.Pile(
-        [urwid.Text(("bright bold", "keys")), urwid.Divider(), urwid.Columns(columns, 2)]
-    )
-    return urwid.Filler(body, valign="top")
+    columns = []
+    for heading, block in _HELP.items():
+        lines = block.strip("\n").splitlines()
+        rows = [urwid.Text([("amber", line[:10]), line[10:]]) for line in lines]
+        width = max(map(len, lines))
+        columns.append((width, urwid.Pile([urwid.Text(("blue", heading)), *rows])))
+    title = urwid.Text(("bright bold", "keys"))
+    return urwid.Filler(urwid.Pile([title, urwid.Divider(), urwid.Columns(columns, 3)]), "top")
 
 
 class Watch(urwid.WidgetWrap):
@@ -617,8 +562,7 @@ class Watch(urwid.WidgetWrap):
         }
         self.tab_line, self.clock = urwid.Text(""), urwid.Text("")
         self.bar, self.keys = urwid.Text(""), urwid.Text("")
-        self.message = urwid.Text("")
-        self.prompt = urwid.Edit()
+        self.message, self.prompt = urwid.Text(""), urwid.Edit()
         urwid.connect_signal(self.prompt, "postchange", self._typed)
         self.command_row = urwid.WidgetPlaceholder(self.message)
         rule = urwid.AttrMap(urwid.Divider("─"), "rule")
@@ -638,31 +582,28 @@ class Watch(urwid.WidgetWrap):
         newest = self.runs[0] if self.runs else None
         self.bench = read_bench(self.directory, newest, self.run_unit, Path("/proc"))
         self.now = datetime.now(UTC)
-        self.disabled = self._disabled() if self.bench.disabled else None
-        self.tabs[self.tab].update() if self.tab != "help" else None
-        due = self.read_at is None or self.now - self.read_at >= _QUEUE_READ
-        if self.tab == "queue" and due:
+        self.disabled = None
+        if self.bench.disabled:
+            try:
+                stamp, _, reason = (self.directory / DISABLED).read_text().partition("\n")
+                self.disabled = view.clock(datetime.fromisoformat(stamp.strip())), reason.strip()
+            except (OSError, ValueError):
+                self.disabled = DASH, ""
+        if self.tab != "help":
+            self.tabs[self.tab].update()
+        if self.tab == "queue" and (self.read_at is None or self.now - self.read_at >= _QUEUE_READ):
             self._read_entries()
         self._draw()
         self.loop.set_alarm_in(1, self.refresh)
 
-    def _disabled(self):
-        """(when, why) from the DISABLED file: its first line's time and the lines after."""
-        try:
-            stamp, _, reason = (self.directory / DISABLED).read_text().partition("\n")
-            return view.clock(datetime.fromisoformat(stamp.strip())), reason.strip()
-        except (OSError, ValueError):
-            return DASH, ""
-
     def _draw(self):
-        """The tab line and the status bar."""
-        run_tab = self.tabs["run"]
-        run_label = "1 Run"
-        if run_tab.run is not None and self.runs and run_tab.run is not self.runs[0]:
-            run_label += f"  {run_tab.run.record}"
-        labels = zip((run_label, "2 Queue", "3 History"), _TABS, strict=True)
+        """The tab line, naming a past run's record, and the status bar."""
+        run = self.tabs["run"].run
+        past = run is not None and run is not self.runs[0]
+        labels = (f"1 Run  {run.record}" if past else "1 Run", "2 Queue", "3 History")
         line = [("text bold", "bench"), " "]
-        line += [("tab" if self.tab == tab else "dim", f" {label} ") for label, tab in labels]
+        for label, tab in zip(labels, _TABS, strict=True):
+            line.append(("tab" if self.tab == tab else "dim", f" {label} "))
         self.tab_line.set_text(line)
         self.clock.set_text(("dim", view.clock(self.now)))
         badge = "RUNNING" if self.bench.live else "DISABLED" if self.bench.disabled else "IDLE"
@@ -674,13 +615,15 @@ class Watch(urwid.WidgetWrap):
         self.keys.set_text([self.pending or "", " ", ("tab", " ? "), " keys"])
 
     def keypress(self, size, key):
-        """Act on one key: the command line's, a pair's second, a view's or the shown tab's."""
+        """Act on a key: `:enable`'s answer, the command line's, a pair's, the view's, a tab's."""
+        pending, self.pending = self.pending, None
+        run_tab = self.tabs["run"]
         if self.confirming:
             self.confirming = False
+            self.message.set_text("")
             if key == "y":
-                self.say(self._timer(lambda unit: enable(self.directory, unit), "bench enabled"))
-            else:
-                self.say("")
+                done = self._timer(lambda unit: enable(self.directory, unit), "bench enabled")
+                self.message.set_text(done)
         elif self.prompting:
             key = super().keypress(size, key)
             if key in ("enter", "esc"):
@@ -688,16 +631,26 @@ class Watch(urwid.WidgetWrap):
                 self._close()
                 if key == "enter":
                     self._command(text)
-        elif self.pending:
-            self._pair(size, self.pending + key)
-        elif self.tab == "help" and key not in ("q", ":", ";", "?", "esc"):
+        elif pending == "g" and key == "g":
+            super().keypress(size, "home")
+        elif pending == "d" and key == "d":
+            self._remove(self.tabs["queue"].list.at)
+        elif pending == "z" and key in ("a", "R", "M"):
+            run_tab.fold(key)
+        elif pending or (self.tab == "help" and key not in ("q", ":", ";", "?", "esc")):
             pass
-        elif key in ("g", "z") or (key == "d" and self.tab == "queue"):
+        elif key == "g" or (key, self.tab) in (("z", "run"), ("d", "queue")):
             self.pending = key
         elif key == "q":
             raise urwid.ExitMainLoop
         elif key in (":", ";") or (key == "/" and self.tab == "run"):
-            self._open(":" if key == ";" else key)
+            self.message.set_text("")
+            self.prompting = True
+            self.prompt.set_edit_text(":" if key == ";" else key)
+            self.prompt.set_edit_pos(1)
+            self.command_row.original_widget = self.prompt
+            self._w.focus_position = "footer"
+            self.footer.focus_position = 2
         elif key == "?" or (key == "esc" and self.tab == "help"):
             self.show(self.back if self.tab == "help" else "help")
         elif key in ("tab", "shift tab"):
@@ -706,26 +659,20 @@ class Watch(urwid.WidgetWrap):
             self.open(None)
         elif key in ("2", "3"):
             self.show(_TABS[int(key) - 1])
-        elif key in ("[", "]") and self.tab == "run":
-            self._step(1 if key == "[" else -1)
+        elif key in ("[", "]") and self.tab == "run" and run_tab.run is not None:
+            index = self.runs.index(run_tab.run) + (1 if key == "[" else -1)
+            if 0 <= index < len(self.runs):
+                self.open(None if index == 0 else self.runs[index].record)
         elif key in ("n", "N") and self.tab == "run":
-            self.tabs["run"].search(None, 1 if key == "n" else -1)
+            run_tab.search(None, 1 if key == "n" else -1)
         else:
             if key == "esc":
-                self.say("")
-            return super().keypress(size, key)
+                self.message.set_text("")
+            unhandled = super().keypress(size, key)
+            self._draw()
+            return unhandled
         self._draw()
         return None
-
-    def _pair(self, size, pair):
-        """The second key of a pair: `gg`, `dd`, `za`, `zR` or `zM`; any other pair does nothing."""
-        self.pending = None
-        if pair == "gg":
-            super().keypress(size, "home")
-        elif pair == "dd":
-            self.tabs["queue"].remove()
-        elif pair in ("za", "zR", "zM") and self.tab == "run":
-            self.tabs["run"].fold(pair[1])
 
     def show(self, tab):
         """Show a tab; entering Queue selects its first row, History the run shown in Run."""
@@ -745,35 +692,12 @@ class Watch(urwid.WidgetWrap):
             self.tabs["run"].update()
 
     def open(self, record):
-        """Show a run in Run, on its automatic stage; None is the newest run."""
+        """Show a run in Run on its automatic stage; None is the newest run."""
         run_tab = self.tabs["run"]
         self.record, run_tab.chosen = record, None
         run_tab.columns.focus_position = 0
         self.show("run")
         run_tab.update(opening=True)
-
-    def _step(self, direction):
-        """Show the next older (1) or newer (-1) run; nothing at either end."""
-        run = self.tabs["run"].run
-        if run is None:
-            return
-        index = self.runs.index(run) + direction
-        if 0 <= index < len(self.runs):
-            self.open(None if index == 0 else self.runs[index].record)
-
-    def say(self, text):
-        """Show `text` in the command line's row while it is closed."""
-        self.message.set_text(text)
-
-    def _open(self, text):
-        """Open the command line holding `text`; it replaces the message."""
-        self.say("")
-        self.prompting = True
-        self.prompt.set_edit_text(text)
-        self.prompt.set_edit_pos(len(text))
-        self.command_row.original_widget = self.prompt
-        self._w.focus_position = "footer"
-        self.footer.focus_position = 2
 
     def _close(self):
         """Close the command line."""
@@ -783,7 +707,7 @@ class Watch(urwid.WidgetWrap):
         if self.tab == "queue":
             self.tabs["queue"].update()
 
-    def _typed(self, edit, before):
+    def _typed(self, edit, _before):
         """Follow the command line: emptied it closes, `:run ` shows Queue, a ref is previewed."""
         text = edit.edit_text
         if not text:
@@ -792,10 +716,10 @@ class Watch(urwid.WidgetWrap):
         if text == ":run ":
             self.show("queue")
         ref = view.typed_ref(text)
-        if ref is not None and "preview" not in self.reading:
-            if self.preview is None or self.preview[0] != ref:
-                source, name = view.split_run(ref)
-                self._read("preview", lambda: self.queue.preview(name, source), ref)
+        asked = ref is not None and (self.preview is None or self.preview[0] != ref)
+        if asked and "preview" not in self.reading:
+            source, name = view.split_run(ref)
+            self._read("preview", lambda: self.queue.preview(name, source), ref)
 
     def _command(self, text):
         """Carry out a command line: `:q`, `:disable`, `:enable`, `:run <ref>` or `/<pattern>`."""
@@ -803,12 +727,20 @@ class Watch(urwid.WidgetWrap):
         if text == ":q":
             raise urwid.ExitMainLoop
         if text == ":disable":
-            self.say(self._timer(stop_timer, "bench disabled"))
+            self.message.set_text(self._timer(stop_timer, "bench disabled"))
         elif text == ":enable":
             self.confirming = True
-            self.say(_ENABLE)
+            self.message.set_text([*_ENABLE, ("green", "[y/N]")])
         elif ref is not None:
-            self.say(self._add(ref))
+            source, name = view.split_run(ref)
+            try:
+                entry_id, sha, _ = self.queue.add(name, None, False, [], source)
+                self.message.set_text(f"queued {entry_id} {sha[:7]}")
+            except subprocess.CalledProcessError:
+                self.message.set_text(f"{name} does not resolve to a commit")
+            except Exception as exc:
+                self.message.set_text(str(exc))
+            self._read_entries()
         elif text.startswith("/") and len(text) > 1:
             self.tabs["run"].search(text[1:], 1)
 
@@ -818,39 +750,29 @@ class Watch(urwid.WidgetWrap):
             return "no [run] unit in the bench's settings file"
         return write(self.run_unit) or done
 
-    def _add(self, ref):
-        """Queue `ref` by hand and read the queue again; what happened, as a message."""
-        source, name = view.split_run(ref)
-        self.read_at = None
-        try:
-            entry_id, sha, _ = self.queue.add(name, None, False, [], source)
-        except subprocess.CalledProcessError:
-            return f"{name} does not resolve to a commit"
-        except Exception as exc:
-            return str(exc)
-        finally:
-            self._read_entries()
-        return f"queued {entry_id} {sha[:7]}"
-
-    def remove(self, row):
-        """Remove a hand-queued run and read the queue again; refuse any other row."""
+    def _remove(self, row):
+        """`dd`: remove a hand-queued run and read the queue again; refuse any other row."""
+        if row is None:
+            return
         if row.id is None:
-            self.say("only hand-queued runs can be removed")
+            self.message.set_text("only hand-queued runs can be removed")
             return
         try:
             removed = self.queue.remove(row.id)
+            self.message.set_text(
+                f"removed queued run {row.id}" if removed else f"no queued run {row.id}"
+            )
         except Exception as exc:
-            self.say(str(exc))
-        else:
-            self.say(f"removed queued run {row.id}" if removed else f"no queued run {row.id}")
-        self.read_at = None
+            self.message.set_text(str(exc))
         self._read_entries()
 
     def _read_entries(self):
-        """Ask for `Queue.entries()` unless a read is already out."""
-        if "entries" not in self.reading:
-            self.read_at = self.now
-            self._read("entries", self.queue.entries)
+        """Ask for `Queue.entries()`; while one is out, ask again at the next refresh."""
+        if "entries" in self.reading:
+            self.read_at = None
+            return
+        self.read_at = self.now
+        self._read("entries", self.queue.entries)
 
     def _read(self, kind, call, ref=None):
         """Run a queue read on a daemon thread and take its outcome on the loop's thread.
@@ -877,10 +799,9 @@ class Watch(urwid.WidgetWrap):
             self.preview = (ref, str(outcome) if failed else outcome)
             if self.prompting:
                 self._typed(self.prompt, None)
-        elif failed:
-            if not (self.prompting or self.confirming):
-                self.say(str(outcome))
-        else:
+        elif not failed:
             self.entries = outcome
+        elif not (self.prompting or self.confirming):
+            self.message.set_text(str(outcome))
         if self.tab == "queue":
             self.tabs["queue"].update()
