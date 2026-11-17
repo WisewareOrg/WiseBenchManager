@@ -468,6 +468,49 @@ def test_search_unfolds_a_match_and_n_and_capital_n_step_between_matches_and_wra
             await pilot.press(key)
             seen.append(under_cursor(app))
         assert seen == ["boot two", "boot one", "boot two"]
+        await pilot.press("g", "g", *"jjjjj", "N")
+        assert under_cursor(app) == "boot one"
+
+    drive(app, scenario)
+
+
+def test_a_line_the_stage_prints_after_its_sections_began_shows_above_them(disk, tmp_path):
+    def host(*lead):
+        return run(host_suite=suite("host_suite", ["passed"], {0: ("body",)}, lead=lead))
+
+    app, _ = in_the_log(disk, tmp_path, [host("first")])
+
+    async def scenario(pilot):
+        await pilot.press(*HOST_STAGE)
+        disk.runs = [host("first", "second")]
+        await tick(app, pilot)
+        lines = text(app).split("\n")
+        row = {
+            word: next(i for i, line in enumerate(lines) if word in line)
+            for word in ("first", "second", "case_00")
+        }
+        assert row["first"] < row["second"] < row["case_00"]
+
+    drive(app, scenario)
+
+
+def test_a_selected_row_keeps_the_colour_of_its_meaning(disk, tmp_path):
+    """A failed glyph stays red under the log's cursor, a running one amber in the stage list."""
+    app, _ = in_the_log(disk, tmp_path, [running_test(2, failed=(1,))], LIVE)
+
+    def colour_of(glyph):
+        for line in app.screen._compositor.render_update(full=True).strips:
+            for segment in (segment for strip in line for segment in strip):
+                if glyph in segment.text and segment.style.bgcolor.get_truecolor().hex != (
+                    screen.GROUND
+                ):
+                    return segment.style.color.get_truecolor().hex
+        return None
+
+    async def scenario(pilot):
+        await pilot.press("enter")
+        assert colour_of("✗") == screen.RED
+        assert colour_of("●") == screen.AMBER
 
     drive(app, scenario)
 

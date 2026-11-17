@@ -401,7 +401,8 @@ class Log(Tree):
         at = self.cursor_node.data.anchor if self.cursor_node and self.cursor_node.data else None
         follow = self.chosen and self.cursor_line == self.last_line >= 0
         running = frame.live and stage.state == "open"
-        first_section = None
+        heads = [node for node in self.root.children if node.data.kind == "head"]
+        first_section = heads[0] if heads else None
         for row in view.rows(stage):
             node = self.nodes.get(row.anchor)
             if row.kind == "head":
@@ -409,7 +410,6 @@ class Log(Tree):
                 if node is None:
                     node = self.root.add(label, row, allow_expand=False)
                     self.nodes[row.anchor] = node
-                first_section = node if first_section is None else first_section
                 node.set_label(label)
                 node.data = row
                 node.allow_expand = bool(row.section.lines or row.section.failure)

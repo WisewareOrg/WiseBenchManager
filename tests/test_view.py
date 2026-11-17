@@ -75,6 +75,7 @@ def stage_of(the_run, name):
     [
         ([live("build"), run(OLDER)], LIVE, None, "build"),
         ([run(), failing_at(OLDER, "bundle")], IDLE, None, None),
+        ([failing_at(STAMP, "bundle")], IDLE, None, None),
         ([failing_at(STAMP, "target_suite"), run(OLDER)], DISABLED, None, "target_suite"),
         ([live("bundle")], DISABLED, None, "bundle"),
         (
@@ -89,6 +90,7 @@ def stage_of(the_run, name):
     ids=[
         "newest live: its open stage",
         "newest idle: the summary",
+        "newest idle that failed: the summary too",
         "disabled: the failed stage",
         "disabled: the stage left open",
         "disabled: the errored stage",
