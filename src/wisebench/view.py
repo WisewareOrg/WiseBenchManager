@@ -1,4 +1,7 @@
-"""View rules: what the watch view shows, as plain functions of the run model and the queue."""
+"""View rules: what the watch view shows, as plain functions of the run model and the queue.
+
+Nothing here draws. `status` builds its widgets from these answers.
+"""
 
 import re
 from dataclasses import dataclass
@@ -13,10 +16,16 @@ _RUN_PROMPT = re.compile(r":run\s+(.*)")
 
 
 def auto_stage(run, newest, bench):
-    """The stage shown until the user picks one; None is the run's summary.
+    """The stage a run shows until the user picks one; None is the run's summary.
 
-    The open stage of the newest run while it is live; the summary of the newest run while the
-    bench is idle; otherwise the first stage that failed, errored or was left open.
+    Args:
+        run (Run): The run shown.
+        newest (bool): The run is the newest.
+        bench (Bench): The bench's state.
+
+    Returns:
+        Stage | None: The open stage of the newest run while it is live; None for the newest run
+        while the bench is idle; otherwise the first stage that failed, errored or was left open.
     """
     if newest and bench.live:
         return next((s for s in run.stages if s.state == "open"), None)
@@ -26,15 +35,29 @@ def auto_stage(run, newest, bench):
 
 
 def unfolded(folds, section):
-    """Whether a section's body shows: as `folds` says, else while it runs or failed."""
+    """Whether a section's body shows: the user's choice, else unfolded while running or failed.
+
+    Args:
+        folds (dict): Section id to True (unfolded) or False (folded).
+        section (Section): The section.
+
+    Returns:
+        bool: True if the body shows.
+    """
     return folds.get(section.id, section.outcome in ("open", "failed"))
 
 
 def log_rows(stage, folds, expand=False):
     """A stage's log rows: its own lines, then each section's header and unfolded body.
 
-    A row is `(None, i)` for the stage's line i, or `(section, line)`: line 0 the header, then
-    the body's output lines and failure lines. `expand` lists folded bodies too.
+    Args:
+        stage (Stage): The stage.
+        folds (dict): Section id to True (unfolded) or False (folded).
+        expand (bool): Include the bodies of folded sections too.
+
+    Returns:
+        list[tuple]: `(None, i)` for the stage's line i; `(section, line)` for a section row, line
+        0 its header and 1 on its body, its output lines then its failure lines.
     """
     rows = [(None, i) for i in range(len(stage.lines))]
     for section in stage.sections:
@@ -46,7 +69,15 @@ def log_rows(stage, folds, expand=False):
 
 
 def row_text(stage, row):
-    """A log row's text: a stage line without kas's log prefix, a header's name, a body line."""
+    """A log row's text: a stage line without kas's log prefix, a header's name, a body line.
+
+    Args:
+        stage (Stage): The stage.
+        row (tuple): A row as `log_rows` lists it.
+
+    Returns:
+        str: The text.
+    """
     section, line = row
     if section is None:
         return _LOG_PREFIX.sub("", stage.lines[line])
@@ -54,10 +85,15 @@ def row_text(stage, row):
 
 
 def opening_row(stage, rows):
-    """Where the log cursor lands on a stage.
+    """Where the log cursor lands on a stage: the first failed section, else the running one.
 
-    On the first failed section's header, else the running one's; a suite with neither on its first
-    row, a stage without sections on its last.
+    Args:
+        stage (Stage): The stage shown.
+        rows (list[tuple]): Its rows, as `log_rows` lists them.
+
+    Returns:
+        int: The index of that section's header; a stage without sections lands on its last row,
+        and a suite with neither on its first.
     """
     if not stage.sections:
         return max(len(rows) - 1, 0)
@@ -68,9 +104,15 @@ def opening_row(stage, rows):
 
 
 def find(rows, row):
-    """Where a row of an earlier listing of the stage sits in `rows`.
+    """Where a row from an earlier listing sits now: the row itself, else its section's header.
 
-    The row itself, else its section's header, sections matched by id; None when neither is listed.
+    Args:
+        rows (list[tuple]): The rows, as `log_rows` lists them.
+        row (tuple): The row, from a listing of this stage before a fold or a re-parse; a section
+            is matched by its id.
+
+    Returns:
+        int | None: Its index, or its header's; None when neither is listed.
     """
     section, line = row
     if section is None:
@@ -80,7 +122,14 @@ def find(rows, row):
 
 
 def section_ends(stage):
-    """Section id to its end: the next started section's start, else the stage's end."""
+    """When each section ended: the next started section's start, else the stage's end.
+
+    Args:
+        stage (Stage): The stage.
+
+    Returns:
+        dict: Section id to its end, None while it has none.
+    """
     ends, following = {}, stage.ended
     for section in reversed(stage.sections):
         ends[section.id] = following
@@ -90,9 +139,17 @@ def section_ends(stage):
 
 
 def search(stage, folds, at, pattern, direction):
-    """The next (1) or previous (-1) row after row `at` holding `pattern`; None on a miss.
+    """The next (1) or previous (-1) row from `at` holding `pattern`, folded bodies included.
 
-    The search wraps, and looks in folded bodies too.
+    Args:
+        stage (Stage): The stage shown.
+        folds (dict): Section id to True (unfolded) or False (folded).
+        at (tuple): The row the cursor is on.
+        pattern (str): The text searched for.
+        direction (int): 1 forward, -1 backward; the search wraps.
+
+    Returns:
+        tuple | None: The row found; None on a miss.
     """
     rows = log_rows(stage, folds, expand=True)
     start = rows.index(at)
@@ -109,7 +166,17 @@ def clock(moment):
 
 
 def took(started, ended, running, now):
-    """`MmSSs` from start to end, or to now while running; a dash when neither."""
+    """How long a stage or section took: start to end, start to now while running, else a dash.
+
+    Args:
+        started (datetime): Its start.
+        ended (datetime | None): Its end.
+        running (bool): It is open in the live run.
+        now (datetime): The current time.
+
+    Returns:
+        str: `MmSSs`, minutes unbounded; a dash when it neither ended nor runs.
+    """
     if ended is None and not running:
         return DASH
     seconds = int(((ended or now) - started).total_seconds())
@@ -117,7 +184,16 @@ def took(started, ended, running, now):
 
 
 def run_took(run, running, now):
-    """A run's whole minutes from its start to its end, or to now while running; else a dash."""
+    """How long a run took, in whole minutes: since its start while running, else start to end.
+
+    Args:
+        run (Run): The run.
+        running (bool): The bench is running it.
+        now (datetime): The current time.
+
+    Returns:
+        str: `Nm`, floored; a dash without a start, or without an end when not running.
+    """
     end = now if running else run.ended
     if run.started is None or end is None:
         return DASH
@@ -136,7 +212,14 @@ def sha7(run):
 
 
 def counts(stage):
-    """A suite's tests, setups left out: (started or reported, queued, passed, failed)."""
+    """A suite's tests: (started or reported, queued, passed, failed).
+
+    Args:
+        stage (Stage): The suite stage.
+
+    Returns:
+        tuple[int, int, int, int]: The four counts; setup sections are not tests.
+    """
     tests = [s for s in stage.sections if s.kind == "test"]
     return (
         sum(1 for s in tests if s.outcome != "not-started"),
@@ -153,7 +236,8 @@ class QueueRow:
     Args:
         marker (str): `RUNNING` for the running run, else its place, the running run counting 1.
         source (str): "by hand" or "merge queue".
-        what (str): "PR #<n> <title>", "PR #<n>" or the ref.
+        what (str): "PR #<n> <title>" for a merge entry and for the running run when the merge
+            queue holds its PR, else "PR #<n>" or the ref.
         sha7 (str): The commit's first 7 characters; blank until GitHub has built it.
         added (str): A hand entry's local `HH:MM`; blank for the others.
         stage (str): The running run's open stage; blank for the others.
@@ -176,6 +260,14 @@ def queue_rows(runs, bench, entries):
 
     The running run takes its title from the merge entry with its PR, and the merge entry whose
     sha it checked out is left out.
+
+    Args:
+        runs (list[Run]): Every run, newest first.
+        bench (Bench): The bench's state.
+        entries (list[dict]): `Queue.entries()`.
+
+    Returns:
+        list[QueueRow]: The rows in order.
     """
     rows, running_sha = [], None
     if bench.live and runs:
@@ -203,22 +295,44 @@ def queue_rows(runs, bench, entries):
 
 
 def typed_ref(text):
-    """The ref typed after `:run `, stripped; None when the text holds no such ref."""
+    """The ref typed after `:run `, stripped.
+
+    Args:
+        text (str): The command line's text.
+
+    Returns:
+        str | None: The ref; None when the command line holds no such ref.
+    """
     found = _RUN_PROMPT.fullmatch(text)
     return (found.group(1).strip() or None) if found else None
 
 
 def split_run(text):
-    """`(directory, ref)` from `-C <dir> <ref>`, else `(None, text)`."""
+    """Split what `:run ` was typed with into the directory after `-C` and the ref.
+
+    Args:
+        text (str): The text after `:run `, as `typed_ref` returns it.
+
+    Returns:
+        tuple[str | None, str]: The directory (no spaces in it) and the ref after `-C <dir> `; or
+        None and `text` as it is when it does not begin with `-C <dir> <ref>`.
+    """
     found = re.fullmatch(r"-C\s+(\S+)\s+(\S.*)", text)
     return (found.group(1), found.group(2)) if found else (None, text)
 
 
 def preview_lines(ref, result, rows):
-    """The `:run` preview's lines: what `ref` resolves to and where it joins the queue.
+    """The `:run` preview box: what the ref resolves to and where it would join the queue.
 
-    It joins after the running run and the hand entries. `result` is `Queue.preview`'s, or the text
-    of its failure.
+    It joins after the running run and the hand entries; the merge queue comes after it.
+
+    Args:
+        ref (str): The ref typed.
+        result (dict | str): `Queue.preview`'s result, or the text of its failure.
+        rows (list[QueueRow]): The Queue tab's rows.
+
+    Returns:
+        list[str]: The box's lines.
     """
     if isinstance(result, str):
         return [f"{ref} does not resolve"]

@@ -120,7 +120,15 @@ def watch(checkout, directory):
 
 
 def _tone(state, running):
-    """(glyph, attribute) for a stage or section state; an open one is amber only while live."""
+    """The glyph and palette attribute that show a stage's or a section's state.
+
+    Args:
+        state (str): "passed", "failed", "error", "open", "skipped" or "not-started".
+        running (bool): It is open in the live run; an open one is amber only then.
+
+    Returns:
+        tuple[str, str]: The glyph and the attribute.
+    """
     if state == "open":
         return ("●", "amber bold") if running else ("?", "dim")
     if state in ("failed", "error"):
@@ -134,12 +142,29 @@ class _Line(urwid.Text):
     _selectable = True
 
     def keypress(self, size, key):
-        """Hand every key back to the list."""
+        """Hand every key back to the list.
+
+        Args:
+            size (tuple[int]): The row's size.
+            key (str): The key.
+
+        Returns:
+            str: `key`, unhandled.
+        """
         return key
 
 
 def _row(markup, ground=None, focus="selection"):
-    """A list row of `markup` on `ground`, and on `focus` (None: `ground`) while focused."""
+    """A list row of `markup`, on its ground, and on another while the list's focus is on it.
+
+    Args:
+        markup: urwid text markup.
+        ground (str | None): The attribute under the row; None is the screen's ground.
+        focus (str | None): The attribute under the row while focused; None keeps `ground`.
+
+    Returns:
+        urwid.AttrMap: The row.
+    """
     return urwid.AttrMap(_Line(markup, wrap="clip"), ground, focus or ground)
 
 
@@ -151,40 +176,90 @@ class _Rows(urwid.ListWalker):
     """
 
     def __init__(self, build):
-        """No items yet; `build` makes an item's row widget."""
+        """A walker over no items yet.
+
+        Args:
+            build (Callable): Makes the row widget of one item.
+        """
         self.build, self.items, self.focus, self.built = build, [], 0, {}
 
     def set(self, items, focus):
-        """Replace the items, the focus on `focus` held within them."""
+        """Replace the items, dropping the rows built for the old ones.
+
+        Args:
+            items (Sequence): The new items.
+            focus (int): The position to focus, held within the items.
+        """
         self.items, self.built = items, {}
         self.focus = min(max(focus, 0), max(len(items) - 1, 0))
         self._modified()
 
     def __getitem__(self, position):
-        """The row widget at `position`, built on first use."""
+        """The row widget at a position, built on first use.
+
+        Args:
+            position (int): The item's position.
+
+        Returns:
+            urwid.Widget: Its row.
+
+        Raises:
+            IndexError: No item is at `position`.
+        """
         if position not in self.built:
             self.built[position] = self.build(self.items[position])
         return self.built[position]
 
     def next_position(self, position):
-        """The position after `position`; IndexError at the end."""
+        """The position after one.
+
+        Args:
+            position (int): A position.
+
+        Returns:
+            int: The next position.
+
+        Raises:
+            IndexError: `position` is the last.
+        """
         if position + 1 >= len(self.items):
             raise IndexError(position)
         return position + 1
 
     def prev_position(self, position):
-        """The position before `position`; IndexError at the start."""
+        """The position before one.
+
+        Args:
+            position (int): A position.
+
+        Returns:
+            int: The previous position.
+
+        Raises:
+            IndexError: `position` is the first.
+        """
         if position <= 0:
             raise IndexError(position)
         return position - 1
 
     def set_focus(self, position):
-        """Put the focus on `position`."""
+        """Put the focus on a position.
+
+        Args:
+            position (int): The position.
+        """
         self.focus = position
         self._modified()
 
     def positions(self, reverse=False):
-        """Every position, last first when `reverse`."""
+        """Every position, in order.
+
+        Args:
+            reverse (bool): Last first.
+
+        Returns:
+            range: The positions.
+        """
         return range(len(self.items))[:: -1 if reverse else 1]
 
 
@@ -194,17 +269,29 @@ class _List(urwid.ListBox):
     _command_map = KEYS
 
     def __init__(self, build):
-        """An empty list whose rows `build` makes."""
+        """An empty list.
+
+        Args:
+            build (Callable): Makes the row widget of one item.
+        """
         super().__init__(_Rows(build))
 
     @property
     def items(self):
-        """The items listed."""
+        """The items listed.
+
+        Returns:
+            Sequence: The items.
+        """
         return self.body.items
 
     @property
     def at(self):
-        """The item the focus is on; None without items."""
+        """The item the focus is on.
+
+        Returns:
+            object | None: The item; None without items.
+        """
         return self.items[self.body.focus] if self.items else None
 
 
@@ -216,7 +303,11 @@ class _RunTab(urwid.WidgetWrap):
     """
 
     def __init__(self, watch):
-        """The tab over `watch`'s runs and bench."""
+        """The tab over the view's runs and bench.
+
+        Args:
+            watch (Watch): The view.
+        """
         self.watch, self.run, self.stage, self.chosen = watch, None, None, None
         self.live, self.folds, self.pattern, self.ends = False, {}, None, {}
         self.header = urwid.Text("")
@@ -258,7 +349,16 @@ class _RunTab(urwid.WidgetWrap):
         self.pane.original_widget = urwid.Pile(self._pane(newest))
 
     def _header(self, newest):
-        """The run's title, sha and record; `last run` first when idle, its result after if past."""
+        """The run's header line: its title, sha and record.
+
+        `last run` comes first while the bench is idle; a past run's result and end follow.
+
+        Args:
+            newest (bool): The run shown is the newest.
+
+        Returns:
+            list: urwid text markup.
+        """
         run, bench = self.run, self.watch.bench
         title = [
             ("bright bold", view.what(run)),
@@ -273,7 +373,17 @@ class _RunTab(urwid.WidgetWrap):
         return title
 
     def _stage_row(self, stage):
-        """A stage's row; the one shown on the running or failed tint, else the selection."""
+        """A stage's row: glyph, name, start and took in the stage's colour.
+
+        The stage shown is on the running tint while it runs, the failed tint when it failed,
+        else the selection.
+
+        Args:
+            stage (Stage): The stage.
+
+        Returns:
+            urwid.AttrMap: The row.
+        """
         running = self.live and stage.state == "open"
         glyph, colour = _tone(stage.state, running)
         text = f"{glyph} {stage.name.replace('_', ' ')}".ljust(17)
@@ -287,7 +397,11 @@ class _RunTab(urwid.WidgetWrap):
         return _row((colour, text), ground, focus=None)
 
     def _summary(self):
-        """The pane without a stage: the run's result and a line per suite."""
+        """The pane without a stage: the run's result, its end and length, and a line per suite.
+
+        Returns:
+            urwid.Filler: The pane.
+        """
         run = self.run
         word, colour = _RESULTS[run.result]
         ended = view.clock(run.ended) if run.ended else DASH
@@ -301,7 +415,17 @@ class _RunTab(urwid.WidgetWrap):
         return urwid.Filler(urwid.Text(lines), valign="top")
 
     def _pane(self, newest):
-        """The pane's widgets: the failure box while disabled, the stage's head, then its log."""
+        """The pane's widgets for the stage shown.
+
+        The failure box while the bench is disabled, then the stage's head, then its log: a
+        suite's counts over its sections and the keys hint, or a build's progress over the output.
+
+        Args:
+            newest (bool): The run shown is the newest.
+
+        Returns:
+            list: Widgets and `("pack", widget)` items for a `urwid.Pile`.
+        """
         stage, watch = self.stage, self.watch
         running = self.live and stage.state == "open"
         _, colour = _tone(stage.state, running)
@@ -332,7 +456,15 @@ class _RunTab(urwid.WidgetWrap):
         return [*parts, ("pack", urwid.Text(("dim", "this stage's output"))), self.log]
 
     def _build_head(self, colour, running):
-        """A build's progress line and bar, and while it runs a row per running task."""
+        """A build's progress line and bar, and while it runs a row per running task.
+
+        Args:
+            colour (str): The build stage's attribute.
+            running (bool): The build is open in the live run.
+
+        Returns:
+            list: urwid text markup.
+        """
         progress = self.stage.progress
         head = [(colour, "build"), f"  {progress.phase}"]
         filled = 0
@@ -353,10 +485,14 @@ class _RunTab(urwid.WidgetWrap):
         return head
 
     def _fill_log(self, at):
-        """List the stage's rows with the cursor on row `at`, else where the stage opens.
+        """List the stage's rows with the cursor on a row, else where the stage opens.
 
         The cursor stays on its row, else on its section's header; on the last row it follows the
         tail.
+
+        Args:
+            at (tuple | None): The row the cursor was on, as `view.log_rows` lists it; None opens
+                the stage.
         """
         rows = view.log_rows(self.stage, self.folds)
         focus = None
@@ -368,7 +504,14 @@ class _RunTab(urwid.WidgetWrap):
         self.log.body.set(rows, view.opening_row(self.stage, rows) if focus is None else focus)
 
     def _log_row(self, row):
-        """A log row: a stage line, a section's header with its fold and took, or a body line."""
+        """A log row: a stage line, a section's header with its fold and took, or a body line.
+
+        Args:
+            row (tuple): The row, as `view.log_rows` lists it.
+
+        Returns:
+            urwid.AttrMap: The row.
+        """
         section, line = row
         text = view.row_text(self.stage, row)
         if section is None or line:
@@ -390,6 +533,13 @@ class _RunTab(urwid.WidgetWrap):
         """Move the stage list or the log; Enter goes into the log and Esc back to the stages.
 
         From the summary, `j` and `k` show the first stage.
+
+        Args:
+            size (tuple[int, int]): The tab's size.
+            key (str): The key.
+
+        Returns:
+            str | None: The key when the tab does not use it.
         """
         on_stages = self.columns.focus_position == 0
         if self.run and self.stage is None and on_stages and key in ("j", "k", "down", "up"):
@@ -408,7 +558,11 @@ class _RunTab(urwid.WidgetWrap):
         return None if key in ("enter", "esc") else key
 
     def fold(self, op):
-        """`za` folds or unfolds the cursor's section; `zR` unfolds and `zM` folds them all."""
+        """`za` folds or unfolds the cursor's section; `zR` unfolds and `zM` folds them all.
+
+        Args:
+            op (str): "a", "R" or "M".
+        """
         if self.columns.focus_position != 2 or self.log.at is None:
             return
         section, _ = at = self.log.at
@@ -420,7 +574,12 @@ class _RunTab(urwid.WidgetWrap):
         self._fill_log(at)
 
     def search(self, pattern, direction):
-        """Put the cursor on the next (1) or previous (-1) row holding the pattern, unfolding it."""
+        """Put the cursor on the next or previous row holding the pattern, unfolding it.
+
+        Args:
+            pattern (str | None): The pattern; None searches for the last one again.
+            direction (int): 1 forward, -1 backward.
+        """
         self.pattern = pattern or self.pattern
         if self.log.at is None or not self.pattern or self.stage is None:
             return
@@ -441,14 +600,24 @@ class _QueueTab(urwid.WidgetWrap):
     """
 
     def __init__(self, watch):
-        """The tab over `watch`'s runs and queue reads."""
+        """The tab over the view's runs and queue reads.
+
+        Args:
+            watch (Watch): The view.
+        """
         self.watch = watch
         self.list = _List(self._row)
         header = urwid.Text(("dim", f"{'':<3}{'source':<14}{'what':<27}{'sha':<9}added"))
         super().__init__(urwid.Frame(self.list, header=header))
 
     def update(self, first=False):
-        """List the last reads' rows, the selection on its row, else its place, else (`first`) 0."""
+        """List the rows of the last reads, and the preview while `:run <ref>` is typed.
+
+        The selection stays on its row, else at its place.
+
+        Args:
+            first (bool): Select the first row instead.
+        """
         watch = self.watch
         rows = view.queue_rows(watch.runs, watch.bench, watch.entries)
         at = self.list.at
@@ -463,7 +632,14 @@ class _QueueTab(urwid.WidgetWrap):
         self._w.footer = box
 
     def _row(self, row):
-        """One row: place, source, what, sha and added time; the running run's stage after."""
+        """One row: place, source, what, sha and added time; the running run's stage after.
+
+        Args:
+            row (view.QueueRow): The row.
+
+        Returns:
+            urwid.AttrMap: Its widget; the running run's is on the running tint.
+        """
         running = row.marker == view.RUNNING
         markup = [
             ("amber" if running else "text", f"{row.marker:<3}"),
@@ -479,7 +655,11 @@ class _HistoryTab(urwid.WidgetWrap):
     """The History tab: every run, newest first; Enter opens one in Run."""
 
     def __init__(self, watch):
-        """The tab over `watch`'s runs."""
+        """The tab over the view's runs.
+
+        Args:
+            watch (Watch): The view.
+        """
         self.watch = watch
         self.list = _List(self._row)
         self.count = urwid.Text("")
@@ -487,7 +667,11 @@ class _HistoryTab(urwid.WidgetWrap):
         super().__init__(urwid.Frame(self.list, header, self.count))
 
     def update(self, record=None):
-        """List every run with the selection kept on its run, or moved to `record`."""
+        """List every run with the selection kept on its run, or moved to another.
+
+        Args:
+            record (str | None): The record to select; None keeps the selection.
+        """
         runs = self.watch.runs
         record = record or (self.list.at.record if self.list.at else None)
         records = [run.record for run in runs]
@@ -495,7 +679,14 @@ class _HistoryTab(urwid.WidgetWrap):
         self.count.set_text(("dim", f"{len(runs)} records in {self.watch.directory.name}/"))
 
     def _row(self, run):
-        """One run: record, what, sha, result and took, then its failing stage and `by hand`."""
+        """One run: record, what, sha, result and took, then its failing stage and `by hand`.
+
+        Args:
+            run (Run): The run.
+
+        Returns:
+            urwid.AttrMap: Its row.
+        """
         watch = self.watch
         running = watch.bench.live and run is watch.runs[0]
         word, colour = ("running", "amber") if running else _RESULTS[run.result]
@@ -513,7 +704,15 @@ class _HistoryTab(urwid.WidgetWrap):
         return _row(markup)
 
     def keypress(self, size, key):
-        """Enter opens the selected run in Run."""
+        """Move the selection; Enter opens the selected run in Run.
+
+        Args:
+            size (tuple[int, int]): The tab's size.
+            key (str): The key.
+
+        Returns:
+            str | None: The key when the tab does not use it.
+        """
         key = super().keypress(size, key)
         if key != "enter" or self.list.at is None:
             return key
@@ -522,7 +721,11 @@ class _HistoryTab(urwid.WidgetWrap):
 
 
 def _help():
-    """The keys, in three columns under a title."""
+    """The Help view: the keys, in three columns under a title.
+
+    Returns:
+        urwid.Filler: The view.
+    """
     columns = []
     for heading, block in _HELP.items():
         lines = block.strip("\n").splitlines()
@@ -545,7 +748,12 @@ class Watch(urwid.WidgetWrap):
     """
 
     def __init__(self, checkout, directory):
-        """Bind the view to the records under `directory` and the queue over `checkout`."""
+        """Bind the view to the records and the queue; nothing is read until `start`.
+
+        Args:
+            checkout (pathlib.Path): The bench's layer checkout.
+            directory (pathlib.Path): The records directory.
+        """
         self.directory = Path(directory)
         self.records, self.run_unit = Records(self.directory), read_run_unit()
         self.queue = Queue(Path(checkout), self.directory)
@@ -572,12 +780,20 @@ class Watch(urwid.WidgetWrap):
         super().__init__(urwid.Frame(self.tabs["run"], header, self.footer))
 
     def start(self, loop):
-        """Read the disk, draw, and refresh once a second on `loop`."""
+        """Read the disk, draw, and refresh once a second.
+
+        Args:
+            loop (urwid.MainLoop): The loop the view runs on.
+        """
         self.loop = loop
         self.refresh()
 
     def refresh(self, *_):
-        """Read the records, the bench and the clock, update what shows, and come back in 1 s."""
+        """Read the records, the bench and the clock, update what shows, and come back in 1 s.
+
+        Args:
+            *_: The alarm's loop and data, unused.
+        """
         self.runs = self.records.runs()
         newest = self.runs[0] if self.runs else None
         self.bench = read_bench(self.directory, newest, self.run_unit, Path("/proc"))
@@ -597,7 +813,7 @@ class Watch(urwid.WidgetWrap):
         self.loop.set_alarm_in(1, self.refresh)
 
     def _draw(self):
-        """The tab line, naming a past run's record, and the status bar."""
+        """Draw the tab line, naming a past run's record, and the status bar."""
         run = self.tabs["run"].run
         past = run is not None and run is not self.runs[0]
         labels = (f"1 Run  {run.record}" if past else "1 Run", "2 Queue", "3 History")
@@ -615,7 +831,18 @@ class Watch(urwid.WidgetWrap):
         self.keys.set_text([self.pending or "", " ", ("tab", " ? "), " keys"])
 
     def keypress(self, size, key):
-        """Act on a key: `:enable`'s answer, the command line's, a pair's, the view's, a tab's."""
+        """Act on one key.
+
+        In order: the answer to `:enable`, a key for the command line, the second key of a pair,
+        Help's own keys, a key of the view's, else the shown tab's key.
+
+        Args:
+            size (tuple[int, int]): The screen's size.
+            key (str): The key.
+
+        Returns:
+            str | None: The key when nothing uses it.
+        """
         pending, self.pending = self.pending, None
         run_tab = self.tabs["run"]
         if self.confirming:
@@ -675,7 +902,11 @@ class Watch(urwid.WidgetWrap):
         return None
 
     def show(self, tab):
-        """Show a tab; entering Queue selects its first row, History the run shown in Run."""
+        """Show a tab; entering Queue selects its first row, History the run shown in Run.
+
+        Args:
+            tab (str): "run", "queue", "history" or "help".
+        """
         if tab == self.tab:
             return
         if tab == "help":
@@ -692,7 +923,11 @@ class Watch(urwid.WidgetWrap):
             self.tabs["run"].update()
 
     def open(self, record):
-        """Show a run in Run on its automatic stage; None is the newest run."""
+        """Show a run in Run on its automatic stage.
+
+        Args:
+            record (str | None): The run's record; None is the newest run.
+        """
         run_tab = self.tabs["run"]
         self.record, run_tab.chosen = record, None
         run_tab.columns.focus_position = 0
@@ -708,7 +943,12 @@ class Watch(urwid.WidgetWrap):
             self.tabs["queue"].update()
 
     def _typed(self, edit, _before):
-        """Follow the command line: emptied it closes, `:run ` shows Queue, a ref is previewed."""
+        """Follow the command line: emptied it closes, `:run ` shows Queue, a ref is previewed.
+
+        Args:
+            edit (urwid.Edit): The command line.
+            _before (str | None): Its text before the change, unused.
+        """
         text = edit.edit_text
         if not text:
             self._close()
@@ -722,7 +962,14 @@ class Watch(urwid.WidgetWrap):
             self._read("preview", lambda: self.queue.preview(name, source), ref)
 
     def _command(self, text):
-        """Carry out a command line: `:q`, `:disable`, `:enable`, `:run <ref>` or `/<pattern>`."""
+        """Carry out a command line: `:q`, `:disable`, `:enable`, `:run <ref>` or `/<pattern>`.
+
+        Args:
+            text (str): The command line's text.
+
+        Raises:
+            urwid.ExitMainLoop: The command was `:q`.
+        """
         ref = view.typed_ref(text)
         if text == ":q":
             raise urwid.ExitMainLoop
@@ -745,13 +992,25 @@ class Watch(urwid.WidgetWrap):
             self.tabs["run"].search(text[1:], 1)
 
     def _timer(self, write, done):
-        """Call `write(run_unit)`: `done`, its failure text, or why it cannot be called."""
+        """Change the run timer through `bench_state`.
+
+        Args:
+            write (Callable): `stop_timer`, or `enable` bound to the records directory.
+            done (str): What a success says.
+
+        Returns:
+            str: `done`, the failure text `write` returns, or why it cannot be called.
+        """
         if self.run_unit is None:
             return "no [run] unit in the bench's settings file"
         return write(self.run_unit) or done
 
     def _remove(self, row):
-        """`dd`: remove a hand-queued run and read the queue again; refuse any other row."""
+        """`dd`: remove a hand-queued run and read the queue again; refuse any other row.
+
+        Args:
+            row (view.QueueRow | None): The selected row; None does nothing.
+        """
         if row is None:
             return
         if row.id is None:
@@ -779,6 +1038,11 @@ class Watch(urwid.WidgetWrap):
 
         A daemon thread rather than `concurrent.futures`, whose workers are joined at exit: a
         GitHub read that hangs must not hold `q`.
+
+        Args:
+            kind (str): "entries" or "preview"; one of each is out at a time.
+            call (Callable): The read, a function of no arguments.
+            ref (str | None): The ref a preview is for.
         """
         self.reading.add(kind)
 
@@ -792,7 +1056,15 @@ class Watch(urwid.WidgetWrap):
         threading.Thread(target=work, daemon=True).start()
 
     def _landed(self, kind, ref, outcome):
-        """Take a finished read: a failed `entries()` shows its text and the last rows stay."""
+        """Take a finished read: a failed `entries()` shows its text and the last rows stay.
+
+        A preview that lands while another ref is typed asks for the typed one.
+
+        Args:
+            kind (str): "entries" or "preview".
+            ref (str | None): The ref a preview was for.
+            outcome (object): The read's result, or the exception it raised.
+        """
         self.reading.discard(kind)
         failed = isinstance(outcome, Exception)
         if kind == "preview":
