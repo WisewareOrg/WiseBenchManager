@@ -68,5 +68,5 @@ directory in the clone.**
 - **Two boards' runs overlap freely,** so an added board needs a layer whose build entry point takes
   the host's build lock, and whose hooks and suites share no fixed port or name on the host.
 - **An added board costs a clone of the layer and a build directory.**
-- **Two labgrid files that name one board drive it under two locks,** and nothing says so.
+- **Two tables that lead to one board drive it under two locks,** and nothing says so.
 - **The code does not check who runs `bench on` or `bench off`.**

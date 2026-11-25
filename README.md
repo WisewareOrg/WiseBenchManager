@@ -339,8 +339,8 @@ the merge queue is the first board's. Its records, queue, lock and `DISABLED` ar
 `boards/<name>/records/`, and `bench status --watch --board <name>` shows them.
 
 `lg_env` becomes `LG_ENV`, the only `LG_` variable of that board's run, so the file states its own
-address. Two labgrid files that name one board drive it under two locks, and nothing says so. The
-rest of `bench.env` reaches every board.
+address. Two tables that lead to one board drive it under two locks, and nothing says so. The rest
+of `bench.env` reaches every board.
 
 Runs on two boards overlap. One build at a time comes from the layer's own build entry point, which
 waits for the host's other builds; that wait is why the template's `TimeoutStartSec` is `infinity`.
