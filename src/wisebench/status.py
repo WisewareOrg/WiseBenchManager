@@ -11,13 +11,14 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from textual import events, work
+from textual import events, on, work
 from textual.app import App
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.reactive import var
 from textual.widgets import (
     ContentSwitcher,
+    DataTable,
     HelpPanel,
     Input,
     Static,
@@ -33,9 +34,10 @@ from wisebench.bench_state import (
     read_run_unit,
     stop_timer,
 )
+from wisebench.history_view import HistoryView
 from wisebench.queue import Queue
+from wisebench.queue_view import QueueView
 from wisebench.records import Records
-from wisebench.rows import Rows
 from wisebench.run_view import RunView, StagePane
 
 ENABLE = (
@@ -115,9 +117,12 @@ class Watch(App):
         Binding("q", "quit", "quit"),
         Binding("ctrl+c", "quit", "quit", priority=True, show=False),
     ]
+    tab = var("run", init=False)
+    record = var(None, init=False)
     seen = var(rules.NOTHING, init=False)
     entries = var(list, init=False)
-    record = var(None, init=False)
+    typed = var(None, init=False)
+    previewed = var(None, init=False)
 
     def __init__(self, checkout, directory):
         """A view of the records in `directory` and the queue of `checkout`.
@@ -131,7 +136,7 @@ class Watch(App):
         self.theme = palette.THEME.name
         self.directory, self.records = directory, Records(directory)
         self.queue, self.unit = Queue(checkout, directory), read_run_unit()
-        self.target, self.previewing = None, None
+        self.target = None
         self.asking = False
         self.animation_level = "none"
 
@@ -171,15 +176,10 @@ class Watch(App):
                 Tab("3 History", id="tab-history"),
             )
             yield Static(id="clock")
-        with ContentSwitcher(initial="run", id="views"):
+        with ContentSwitcher(initial="run", id="views").data_bind(current=Watch.tab):
             yield RunView(id="run").data_bind(Watch.seen, Watch.record)
-            with Vertical(id="queue"):
-                yield Rows("", "source", "what", "sha", "added", "", id="queue-rows")
-                yield Static(id="preview")
-            with Vertical(id="history"):
-                headings = ("record", "what", "sha", "result", "took", "")
-                yield Rows(*headings, id="history-rows")
-                yield Static(id="count")
+            yield QueueView(id="queue").data_bind(Watch.seen, Watch.entries, Watch.previewed)
+            yield HistoryView(id="history").data_bind(Watch.seen, Watch.tab)
         with Horizontal(id="bottom"):
             yield Static(id="state")
             yield Static(palette.KEYS, id="keys")
@@ -198,11 +198,6 @@ class Watch(App):
     def tick(self):
         """Show the time."""
         self.query_one("#clock").update(view.clock(datetime.now(UTC)))
-
-    @property
-    def shown(self):
-        """str: The view showing: "run", "queue" or "history"."""
-        return self.query_one(ContentSwitcher).current
 
     @work
     async def read_disk(self):
@@ -233,7 +228,7 @@ class Watch(App):
     @work(exclusive=True, group="queue")
     async def read_queue(self):
         """Read the queue every `QUEUE_EVERY` seconds while its tab shows."""
-        while self.is_running and self.shown == "queue":
+        while self.is_running and self.tab == "queue":
             try:
                 entries, error = await in_daemon_thread(self.queue.entries), None
             except Exception as exc:
@@ -246,29 +241,29 @@ class Watch(App):
                 self.say(error)
             await asyncio.sleep(self.QUEUE_EVERY)
 
+    @work(exclusive=True, group="preview")
+    async def read_preview(self):
+        """Read what the `:run` typed would queue, off the screen's thread."""
+        if self.typed is None:
+            return
+        source, ref = self.typed
+        try:
+            outcome = await in_daemon_thread(self.queue.preview, ref, source)
+        except Exception as exc:
+            outcome = exc
+        if self.is_running:
+            self.previewed = ref, outcome
+
     def watch_seen(self):
-        """Show the new read."""
-        seen = self.seen
-        if self.record and all(run.record != self.record for run in seen.runs):
+        """Show the state; leave a run that is gone."""
+        if self.record and all(run.record != self.record for run in self.seen.runs):
             self.record = None
-        history_rows = self.query_one("#history-rows").rows_shown
-        if self.shown == "history" or len(seen.runs) != len(history_rows):
-            self.show_history()
-        self.query_one("#state").update(view.state_line(seen))
-        self.watch_entries()
+        self.query_one("#state").update(view.state_line(self.seen))
 
-    def show_history(self):
-        """Show the records in the History table."""
-        self.query_one("#history-rows").rows_shown = view.history_rows(self.seen)
-        self.query_one("#count").update(view.count(self.seen))
-
-    def watch_entries(self):
-        """Show the queue."""
-        waiting = rules.queue(self.seen, self.entries)
-        self.query_one("#queue-rows").rows_shown = view.queue_rows(waiting)
-        box = self.query_one("#preview")
-        if box.display and self.previewing:
-            box.update(view.preview(*self.previewing, waiting))
+    def watch_typed(self):
+        """Preview the run typed."""
+        self.previewed = None
+        self.read_preview()
 
     def watch_record(self):
         """Name a past run on its tab."""
@@ -285,17 +280,19 @@ class Watch(App):
         message.update(palette.styled(str(text)))
         message.display = bool(text)
 
+    def watch_tab(self):
+        """Mark the tab, and read the queue when it shows."""
+        with self.prevent(Tabs.TabActivated):
+            self.query_one(Tabs).active = f"tab-{self.tab}"
+        self.read_queue()
+
     def on_tabs_tab_activated(self, event):
         """Show the view of the tab chosen.
 
         Args:
             event (Tabs.TabActivated): The tab.
         """
-        self.query_one(ContentSwitcher).current = event.tab.id.removeprefix("tab-")
-        if self.shown == "queue":
-            self.read_queue()
-        elif self.shown == "history":
-            self.show_history()
+        self.tab = event.tab.id.removeprefix("tab-")
 
     def action_tab(self, name):
         """Show a view and focus its list.
@@ -303,9 +300,8 @@ class Watch(App):
         Args:
             name (str): The view.
         """
-        self.query_one(Tabs).active = f"tab-{name}"
-        self.query_one(ContentSwitcher).current = name
-        self.screen.set_focus(self.query_one("#stages" if name == "run" else f"#{name}-rows"))
+        self.tab = name
+        self.screen.set_focus(self.query_one(f"#{name} Rows"))
 
     def action_live(self):
         """Show the newest run, at the stage the bench's state calls for."""
@@ -313,15 +309,15 @@ class Watch(App):
         self.query_one(RunView).picked = None
         self.action_tab("run")
 
-    def open_run(self, index):
-        """Show a run in Run.
+    def open_run(self, record):
+        """Show a run in Run; the newest is followed, not named.
 
         Args:
-            index (int): Its place, 0 the newest.
+            record (str): The run's record; nothing happens when no such run is read.
         """
         runs = self.seen.runs
-        if 0 <= index < len(runs):
-            self.record = runs[index].record if index else None
+        if record in [run.record for run in runs]:
+            self.record = None if record == runs[0].record else record
             self.action_tab("run")
 
     def action_step(self, by):
@@ -330,18 +326,18 @@ class Watch(App):
         Args:
             by (int): 1 older, -1 newer.
         """
-        run = self.query_one(RunView).run
-        if run and self.shown == "run":
-            self.open_run(self.seen.runs.index(run) + by)
+        runs, run = self.seen.runs, self.query_one(RunView).run
+        if run and self.tab == "run" and 0 <= (at := runs.index(run) + by) < len(runs):
+            self.open_run(runs[at].record)
 
-    def on_data_table_row_selected(self, event):
+    @on(DataTable.RowSelected, "#history-rows")
+    def show_record(self, event):
         """Enter in History: show that run.
 
         Args:
             event (DataTable.RowSelected): The row.
         """
-        if event.data_table.id == "history-rows":
-            self.open_run(event.cursor_row)
+        self.open_run(event.row_key.value)
 
     def action_keys(self):
         """Show or hide Textual's keys panel."""
@@ -358,7 +354,7 @@ class Watch(App):
         """
         self.asking = False
         self.say("")
-        self.target = self.query_one("#queue-rows").key if self.shown == "queue" else None
+        self.target = self.query_one("#queue-rows").key if self.tab == "queue" else None
         command = self.query_one(Input)
         self.query_one("#command-row").display = True
         command.placeholder = ""
@@ -369,8 +365,9 @@ class Watch(App):
         """Close the command line."""
         self.asking = False
         self.say("")
-        self.query_one("#command-row").display = self.query_one("#preview").display = False
-        self.action_tab(self.shown)
+        self.query_one("#command-row").display = False
+        self.typed = None
+        self.action_tab(self.tab)
 
     def on_input_changed(self, event):
         """Show the Queue while `:run` is typed, and what it would queue.
@@ -380,31 +377,10 @@ class Watch(App):
         """
         typing_run = event.value.startswith(":run ")
         self.query_one("#runhint").display = typing_run
-        if typing_run:
-            self.query_one(Tabs).active = "tab-queue"
-        self.query_one("#preview").display = False
-        self.previewing = None
-        if typed := rules.typed_run(event.value):
-            self.preview(*typed)
-
-    @work(exclusive=True, group="preview")
-    async def preview(self, source, name):
-        """Show what queueing `name` would run; the read is off the screen's thread.
-
-        Args:
-            source (str | None): The directory typed with `-C`, if any.
-            name (str): The ref.
-        """
-        try:
-            outcome = await in_daemon_thread(self.queue.preview, name, source)
-        except Exception as exc:
-            outcome = exc
-        if not self.is_running:
-            return
-        self.previewing = name, outcome
-        box = self.query_one("#preview")
-        box.update(view.preview(name, outcome, rules.queue(self.seen, self.entries)))
-        box.display = self.query_one("#command-row").display
+        is_open = self.query_one("#command-row").display
+        if is_open and typing_run:
+            self.tab = "queue"
+        self.typed = rules.typed_run(event.value) if is_open else None
 
     def on_input_submitted(self, event):
         """Run the command typed, or take the answer to `:enable`.
