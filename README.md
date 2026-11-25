@@ -196,14 +196,15 @@ test ends and names no fixture, and pytest's own output has neither timestamps n
 maintained tool writes these markers, so the plugin does.
 
 Each suite's `run.json` is written at session end, so a run that fails halfway still leaves
-everything up to that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
-line, the start and end times, and the exit status. The plugin reads whichever of a set of
-`BENCH_*` variables the runner set are present and writes each into `run.json` under its own
-field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
+everything up to that point: the runner's own version (`importlib.metadata.version("wisebench")`),
+the pytest command line, the start and end times, and the exit status. The plugin reads whichever of
+a set of `BENCH_*` variables the runner set are present and writes each into `run.json` under its
+own field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
 `BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
-one -- and `board` from `BENCH_BOARD`, present only for a run on an added board. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
-it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds
-the verdict for a merge-queue entry.
+one -- and `board` from `BENCH_BOARD`, present only for a run on an added board. `BENCH_TREE` (the
+checkout path) is set for every hook and suite but stays a hook-only variable; it never reaches
+`run.json`. `bench test` itself never opens one. `bench run` adds the verdict for a merge-queue
+entry.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
 stderr to `proxy-<test>-<n>.log` beside that suite's `report.jsonl`, one file per fixture use, with
@@ -344,10 +345,10 @@ systemctl --user start bench-run@<name>.timer
   states its own address. `bench run` refuses two boards on one file, and cannot see two files that
   name one address. The rest of `bench.env`, `PYTEST_ADDOPTS` included, reaches every board.
 - **A board is off until `bench on <name>`,** and stays as set. Its timer does not: after a reboot
-  the board may be on and nothing starts until the timer is started by hand. While it is off `bench run` starts
-  nothing on it and runs queued for it wait; a run in progress when it is turned off finishes.
-  `bench on` and `bench off` touch neither the timer nor `DISABLED`, which are `:disable`'s and
-  `:enable`'s, and nothing of the merge queue.
+  the board may be on and nothing starts until the timer is started by hand. While it is off `bench
+  run` starts nothing on it and runs queued for it wait; a run in progress when it is turned off
+  finishes. `bench on` and `bench off` touch neither the timer nor `DISABLED`, which are
+  `:disable`'s and `:enable`'s, and nothing of the merge queue.
 - **Boards run at the same time, and the runner keeps no build lock.** One build at a time on the
   host comes from the layer's own build entry point, which waits for the host's other builds.
   Turning a board on before every commit it will run has that lock lets two builds overlap.
