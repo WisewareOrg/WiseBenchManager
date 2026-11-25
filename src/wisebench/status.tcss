@@ -10,19 +10,23 @@ Screen { background: $ground; color: $ink; padding: 0 1; }
 Tabs { width: 1fr; height: 1; }
 Tabs Underline { display: none; }
 Tab, Tabs:focus Tab { color: $dim; background: $ground; text-style: none; }
-Tab.-active, Tabs:focus Tab.-active { color: $ground; background: $ink; text-style: none; }
+Tab.-active { color: $ground; background: $ink; text-style: none; }
+Tabs:focus Tab.-active { color: $ground; background: $blue; text-style: none; }
 #views { height: 1fr; }
 
 DataTable, Tree, Log, Input { background: $ground; color: $ink; }
 DataTable > .datatable--header, DataTable:focus > .datatable--header { color: $dim; background: $ground; text-style: none; }
 DataTable > .datatable--even-row, DataTable > .datatable--odd-row { background: $ground; }
 DataTable > .datatable--cursor, DataTable:focus > .datatable--cursor { background: $selection; color: $ink; text-style: none; }
-Tree > .tree--cursor, Tree:focus > .tree--cursor { background: $selection; color: $ink; text-style: none; }
+Tree > .tree--cursor { background: $ground; color: $ink; text-style: none; }
+Tree:focus > .tree--cursor { background: $selection; color: $ink; text-style: none; }
 Tree > .tree--guides, Tree:focus > .tree--guides, Tree > .tree--guides-selected, Tree:focus > .tree--guides-selected { color: $ground; background: $ground; }
 Log { color: #a8a8a8; }
 
 #title { height: 2; }
-#stages { width: 36; height: 1fr; }
+#stages { width: 37; height: 1fr; }
+Rows { border-left: blank; }
+Rows:focus, #pane:focus-within { border-left: heavy $blue; }
 #stages.none > .datatable--cursor { background: $ground; }
 #stages.running > .datatable--cursor { background: $running; }
 #stages.failed > .datatable--cursor { background: $failed; }
