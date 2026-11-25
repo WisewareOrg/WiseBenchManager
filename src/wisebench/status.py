@@ -431,7 +431,7 @@ class RunView(Vertical):
         if self.stage is None:
             self.picked = event.row_key.value
         tests = self.query_one(Tree)
-        (tests if tests.display else self.query_one(Log)).focus()
+        self.screen.set_focus(tests if tests.display else self.query_one(Log))
 
     def find(self):
         """Go to the next line holding the search, opening the test it is in.
@@ -471,7 +471,7 @@ class RunView(Vertical):
         if row:
             node.expand()
             self.fill(node)
-        tests.focus()
+        self.screen.set_focus(tests)
         self.call_after_refresh(tests.move_cursor, node.children[row - 1] if row else node)
 
 
@@ -527,18 +527,26 @@ class Watch(App):
         self.animation_level = "none"
 
     async def on_event(self, event):
-        """Dispatch an event; a vim key is first made the key it stands for, so keys act in order.
+        """Act on a key at once, so that keys read together act in the order typed.
+
+        A key posted to a widget acts only after it has bubbled back up, and a key read meanwhile is
+        posted to the focus the first one left; so a key is resolved here, against the bindings of
+        the focus as it stands, and nothing is posted. A vim key stands for the key it names, except
+        in the command line, where every printable key is text.
 
         Args:
             event (events.Event): The event.
         """
-        if (
-            isinstance(event, events.Key)
-            and event.key in VIM
-            and not isinstance(self.focused, Input)
-        ):
-            event = events.Key(VIM[event.key], None)
-        await super().on_event(event)
+        if not isinstance(event, events.Key) or event.is_forwarded:
+            await super().on_event(event)
+            return
+        typing = isinstance(self.focused, Input)
+        if typing and event.is_printable:
+            await self.focused.on_event(event)
+            return
+        key = event.key if typing else VIM.get(event.key, event.key)
+        if bound := self.screen.active_bindings.get(key):
+            await self.run_action(bound.binding.action, bound.node)
 
     def compose(self):
         """Lay out the tab line, the views, the status bar and the command line.
@@ -694,7 +702,7 @@ class Watch(App):
         """
         self.query_one(Tabs).active = f"tab-{name}"
         self.query_one(ContentSwitcher).current = name
-        self.query_one("#stages" if name == "run" else f"#{name}-rows").focus()
+        self.screen.set_focus(self.query_one("#stages" if name == "run" else f"#{name}-rows"))
 
     def action_live(self):
         """Show the newest run, at the stage the bench's state calls for."""
@@ -752,7 +760,7 @@ class Watch(App):
         self.query_one("#command-row").display = True
         command.placeholder = ""
         command.value, command.cursor_position = text, len(text)
-        command.focus()
+        self.screen.set_focus(command)
 
     def action_close(self):
         """Close the command line."""

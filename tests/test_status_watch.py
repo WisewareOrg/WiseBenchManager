@@ -957,6 +957,22 @@ class TestKeys(WatchCase):
 
             assert OLDER in self.shown("#title"), "the one j moved to"
 
+    async def test_keys_typed_after_a_colon_in_one_burst_are_text(self):
+        async with self.watch():
+            for key, character in (
+                ("colon", ":"),
+                ("r", "r"),
+                ("u", "u"),
+                ("n", "n"),
+                ("space", " "),
+                ("1", "1"),
+                ("n", "n"),
+            ):
+                self.app.post_message(events.Key(key, character))
+            await self.eventually(lambda: self.typed == ":run 1n", "the whole burst is text")
+
+            assert self.tab == "queue", "`:run ` showed the Queue, and the `1` did not take it back"
+
     async def from_row_30(self, key):
         """The row a key moves History's cursor to from row 30."""
         table = self.app.query_one("#history-rows", DataTable)
