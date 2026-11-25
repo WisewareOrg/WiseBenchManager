@@ -973,6 +973,57 @@ class TestKeys(WatchCase):
 
             assert self.tab == "queue", "`:run ` showed the Queue, and the `1` did not take it back"
 
+    async def test_keys_that_arrive_in_one_burst_act_as_if_typed_one_by_one(self):
+        for name in (STAMP, OLDER, OLDEST):
+            self.record(run_log(), name)
+        queue = Queue(self.clone.checkout, self.records)
+        for _ in range(3):
+            queue.add("HEAD", None, False, [])
+        self.periods(queue=OFTEN)
+        names = {":": "colon", "/": "slash", " ": "space", "\r": "enter", "\b": "backspace"}
+        for label, before, burst, outcome in (
+            (
+                "a key after a vim key",
+                "",
+                ["3", "down", "\r"],
+                lambda: OLDER in self.shown("#title"),
+            ),
+            (
+                "an edit before Enter",
+                "",
+                [*":run ab", "\b", "c", "\r"],
+                lambda: self.says("ac does not resolve"),
+            ),
+            (
+                "a search, then n",
+                "",
+                [*"/ab", "\r", "n"],
+                lambda: self.says("no match for ab") and self.typed is None,
+            ),
+            (
+                "a vim key after Esc",
+                "2",
+                [*":x", "escape", "j"],
+                lambda: self.row_of("#queue-rows") == "hand 2",
+            ),
+            (
+                "a command after a vim key",
+                "2",
+                ["j", *":remove", "\r"],
+                lambda: [e["id"] for e in queue.entries() if e["kind"] == "test"] == [1, 3],
+            ),
+        ):
+            with self.subTest(label):
+                async with self.watch():
+                    if before:
+                        await self.press(before)
+                        await self.eventually(lambda: self.tab == "queue", "the Queue shows")
+                        await self.eventually(lambda: len(self.keys_of("#queue-rows")) == 3, "rows")
+                    for key in burst:
+                        character = key if len(key) == 1 else None
+                        self.app.post_message(events.Key(names.get(key, key), character))
+                    await self.eventually(outcome, f"{label}: the keys acted in order")
+
     async def from_row_30(self, key):
         """The row a key moves History's cursor to from row 30."""
         table = self.app.query_one("#history-rows", DataTable)
