@@ -47,8 +47,8 @@ from wisebench.queue import Queue
 from wisebench.records import Records
 
 ENABLE = (
-    "Enable the bench? Clears DISABLED and starts the timer; the next run checks the board first."
-    " [y/N]"
+    "Enable the bench? [y/N] Clears DISABLED and starts the timer;"
+    " the next run checks the board first."
 )
 
 KEYS = Text.assemble((" ? ", Style(color="#0c0c0c", bgcolor="#cccccc")), " keys")
@@ -622,7 +622,7 @@ class Watch(App):
             self.record = None
         if not runs:
             self.query_one("#title").update(self.count)
-        if self.shown == "history":
+        if self.shown == "history" or len(runs) != len(self.query_one("#history-rows").rows_shown):
             self.show_history()
         state = view.state_line(bench, stopped, runs[0] if runs else None)
         self.query_one("#state").update(state)
@@ -666,8 +666,6 @@ class Watch(App):
         self.query_one(ContentSwitcher).current = event.tab.id.removeprefix("tab-")
         if self.shown == "queue":
             self.read_queue()
-        elif self.shown == "history":
-            self.show_history()
 
     def action_tab(self, name):
         """Show a view and focus its list.
