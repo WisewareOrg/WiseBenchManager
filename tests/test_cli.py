@@ -258,7 +258,7 @@ def test_main_run_on_sigterm_writes_disabled_and_stops_the_timer(
     monkeypatch.setenv("LG_ENV", "unused.yaml")
 
     class _StubQueue:
-        def __init__(self, checkout, directory):
+        def __init__(self, checkout, directory, merge=True):
             pass
 
         def take(self):
@@ -306,7 +306,7 @@ def watched(monkeypatch):
 def test_main_status_watch_reaches_the_watch_loop_without_lg_env(watched, bench_clone):
     """`bench status --watch` skips `LG_ENV`, watches the clone's records and returns its code."""
     assert cli.main(["status", "--watch"]) == 7
-    assert watched == [((bench_clone.checkout, bench_clone.records), {})]
+    assert watched == [((bench_clone.checkout, bench_clone.records, None), {})]
 
 
 def test_main_status_without_watch_exits_2_asking_for_it(watched, capsys):

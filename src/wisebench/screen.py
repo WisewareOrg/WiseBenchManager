@@ -409,11 +409,12 @@ def _running(frame, stage):
 
 
 def _tab_line(frame):
-    """The top row: `bench`, the three tabs with the shown one filled, and the clock."""
+    """The top row: `bench` and an added board's name, the tabs, the shown one filled, the clock."""
     run_label = " 1 Run "
     if frame.run is not None and not frame.newest:
         run_label = f" 1 Run  {frame.run.record} "
-    markup = [(_attr(TEXT, None, True), "bench  ")]
+    title = "bench" if frame.bench.board is None else f"bench {frame.bench.board}"
+    markup = [(_attr(TEXT, None, True), f"{title}  ")]
     for label, tab in ((run_label, "run"), (" 2 Queue ", "queue"), (" 3 History ", "history")):
         filled = frame.tab == tab
         markup.append((_attr(GROUND, TEXT) if filled else _attr(DIM), _text(label)))
@@ -436,7 +437,7 @@ def _command_row(frame):
 
 
 def _status_bar(frame):
-    """The badge (running, disabled or idle), the timer, the pending key and the `? keys` box."""
+    """The badge (running, disabled or idle), an added board's switch, the timer, the keys."""
     bench = frame.bench
     if bench.live:
         badge, fg, bg = " RUNNING ", GROUND, AMBER
@@ -445,8 +446,13 @@ def _status_bar(frame):
     else:
         badge, fg, bg = " IDLE ", BRIGHT, RULE
     timer_colour = {"on": GREEN, "off": RED}.get(bench.timer, DIM)
+    switch = []
+    if bench.board is not None:
+        word, ground = (" ON ", GREEN) if bench.on else (" OFF ", RED)
+        switch = [(_attr(GROUND), " "), (_attr(GROUND, ground, True), word)]
     left = [
         (_attr(fg, bg, True), badge),
+        *switch,
         (_attr(DIM), "  timer "),
         (_attr(timer_colour), bench.timer),
     ]

@@ -5,7 +5,7 @@ Yocto layer through build and test to a verdict, and it knows nothing about the 
 runs — installing a candidate on the board is the layer's own job, through its own fixture. Design
 decisions are in [`docs/decisions/`](docs/decisions/README.md).
 
-## Four commands
+## The commands
 
 ```sh
 bench run                      # on a timer: take one entry -- the oldest run queued by hand, else the
@@ -21,7 +21,12 @@ bench test <ref> [-C <dir>] [--set <name>] [--skip-build] [-- <pytest args>]
                                # build and no install
 bench unqueue <id>             # remove a run queued by hand that `bench run` has not taken yet
 bench status --watch           # the run in progress, what waits to run, and every run on disk
+bench on <name>                # let `bench run --board <name>` start runs on that board
+bench off <name>               # stop it from starting another
 ```
+
+Every command but `on` and `off` acts on the first board, or on the one `--board <name>` names (see
+"More than one board").
 
 `bench` acts on the clone of this repository it is installed from, from whatever directory it is
 started in: one queue, one history, one lock. `bench test` runs nothing. It resolves the ref to a
@@ -173,7 +178,7 @@ the suites run with `--capture=tee-sys` and `PYTHONUNBUFFERED=1`, so a line is i
 printed. The runner's own lines start `bench: <ISO time> ` and sit on their own line:
 
 - `run started kind=<test|run> ref=<ref>`, with ` pr=<n>` (the PR its queue entry names) for a
-  merge-queue run;
+  merge-queue run and ` board=<name>` for a run on an added board;
 - `stage <name> started`, then `passed`, `failed` or `error`, for `checkout`, `precondition`,
   `build`, `bundle`, `host_suite`, `target_suite` and, when the result is posted, `posted`;
   `stage <name> skipped` for `build`, `bundle` and `host_suite` of a `--skip-build` run;
@@ -196,7 +201,7 @@ line, the start and end times, and the exit status. The plugin reads whichever o
 `BENCH_*` variables the runner set are present and writes each into `run.json` under its own
 field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
 `BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
-one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
+one -- and `board` from `BENCH_BOARD`, present only for a run on an added board. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
 it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds
 the verdict for a merge-queue entry.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
@@ -291,8 +296,9 @@ Bitbake shows its task progress only on the terminal that ran the build, so the 
 ### Installing `bench run`
 
 In this clone, edit `contrib/bench-run.service`'s `ExecStart` (this clone's own `.venv/bin/bench`)
-and `TimeoutStartSec` (comfortably longer than one build-and-test cycle -- `RuntimeMaxSec` has no
-effect on a `Type=oneshot` service; `TimeoutStartSec` is what bounds one); rename both
+and `TimeoutStartSec` (longer than one build-and-test cycle and the longest build it may wait
+behind -- `RuntimeMaxSec` has no effect on a `Type=oneshot` service; `TimeoutStartSec` is what
+bounds one); rename both
 `contrib/bench-run.service` and `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if the
 settings file's `[run] unit` is not `bench-run`. Create `~/.config/wisebench/bench.toml` with
 `[github]` and `[run]` (see "What a layer provides"). Write `LG_ENV` and `LG_BENCH_ADDRESS` into
@@ -307,6 +313,45 @@ itself: read `DISABLED`, then `:enable` in `bench status --watch`, or by hand re
 `systemctl --user start <unit>.timer`. The run that faulted is not queued again; queue it again
 after clearing `DISABLED`. If the reason is a database error, remove `records/queue.db` as well;
 the runs queued by hand in it are lost.
+
+### More than one board
+
+The first board is the one above. Each further board is a table in `~/.config/wisebench/bench.toml`
+and a clone of the layer (ADR 0007 rev 1):
+
+```toml
+[boards.<name>]
+lg_env = "/path/to/that/board's/env.yaml"
+unit   = "bench-run@<name>"   # bench run stops bench-run@<name>.timer on that board's own fault
+```
+
+```sh
+git clone <the layer repository> WiseBenchManager/boards/<name>/checkout
+systemctl --user link <this clone>/contrib/bench-run@.service <this clone>/contrib/bench-run@.timer
+systemctl --user start bench-run@<name>.timer
+```
+
+- **A name** is letters, digits, `-` and `_`.
+- **Everything of a board is its own:** `boards/<name>/` holds its `checkout/` and its `records/`,
+  with its `queue.db`, `lock` and `DISABLED`. A fault on one board stops that board alone.
+- **An added board takes only runs queued with `bench test --board <name>`.** The merge queue is the
+  first board's.
+- **`lg_env` replaces `LG_ENV`** in the environment of that board's hooks and suites. The file states
+  its own address; a template of `LG_BENCH_ADDRESS` is the first board's. `bench run` refuses two
+  boards on one file, and cannot see two files that name one address. The rest of `bench.env`,
+  `PYTEST_ADDOPTS` included, reaches every board.
+- **A board is off until `bench on <name>`,** and stays as set. While it is off `bench run` starts
+  nothing on it and runs queued for it wait; a run in progress when it is turned off finishes.
+  `bench on` and `bench off` touch neither the timer nor `DISABLED`, which are `:disable`'s and
+  `:enable`'s, and nothing of the merge queue.
+- **Boards run at the same time, and the runner keeps no build lock.** One build at a time on the
+  host comes from the layer's own build entry point, which waits for the host's other builds.
+  Turning a board on before every commit it will run has that lock lets two builds overlap.
+- `contrib/bench-run@.service` sets `TimeoutStartSec=infinity`, because a run may wait behind another
+  board's build and a limit reached there would write `DISABLED`.
+
+`bench status --watch --board <name>` is the same view of that board, with its name in the top row
+and `ON` or `OFF` in the status bar.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

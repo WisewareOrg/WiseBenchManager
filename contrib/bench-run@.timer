@@ -1,0 +1,6 @@
+[Unit]
+Description=Run bench run on the added board %i on a schedule
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min

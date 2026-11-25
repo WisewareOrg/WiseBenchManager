@@ -5,11 +5,10 @@ It also changes the timer and `DISABLED`: `stop_timer` and `enable`.
 
 import os
 import subprocess
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from wisebench.config import settings_path
+from wisebench.config import read_settings, settings_path
 
 DASH = "—"
 DISABLED = "DISABLED"
@@ -23,11 +22,15 @@ class Bench:
         live (bool): The newest run is executing.
         disabled (bool): `DISABLED` exists in the records directory.
         timer (str): "on", "off" or "—".
+        board (str | None): The added board's name; None for the first board.
+        on (bool): The added board is turned on.
     """
 
     live: bool
     disabled: bool
     timer: str
+    board: str | None = None
+    on: bool = False
 
 
 def is_live(directory, run, proc_root):
@@ -149,20 +152,20 @@ def read_run_unit():
         str | None: The unit base name.
     """
     try:
-        with open(settings_path(), "rb") as f:
-            return tomllib.load(f).get("run", {}).get("unit")
-    except (OSError, tomllib.TOMLDecodeError):
+        return read_settings(settings_path()).get("run", {}).get("unit")
+    except (OSError, ValueError):
         return None
 
 
-def read_bench(directory, newest, run_unit, proc_root):
-    """Read whether the newest run is live, whether DISABLED exists, and the timer's state.
+def read_bench(directory, newest, run_unit, proc_root, board=None):
+    """Read whether the newest run is live, whether DISABLED exists, the timer and the switch.
 
     Args:
         directory (pathlib.Path): The records directory; DISABLED is checked for presence only.
         newest (Run | None): The newest run.
         run_unit (str | None): The systemd unit base name; None gives the timer "—".
         proc_root (pathlib.Path): The `/proc` directory.
+        board (wisebench.board.Board | None): The added board; None for the first board.
 
     Returns:
         Bench: The bench's state.
@@ -171,4 +174,6 @@ def read_bench(directory, newest, run_unit, proc_root):
         live=newest is not None and is_live(directory, newest, proc_root),
         disabled=(Path(directory) / DISABLED).exists(),
         timer=DASH if run_unit is None else timer_state(run_unit),
+        board=board and board.name,
+        on=board is not None and board.is_on(),
     )

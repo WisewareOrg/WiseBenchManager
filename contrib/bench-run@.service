@@ -1,0 +1,9 @@
+[Unit]
+Description=bench run on the added board %i: build the next run queued by hand and test it on that board
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/the/clone
+EnvironmentFile=%h/.config/wisebench/bench.env
+ExecStart=/path/to/the/venv/bin/bench run --board %i
+TimeoutStartSec=infinity

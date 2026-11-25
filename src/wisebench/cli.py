@@ -1,6 +1,7 @@
 """`bench` command line.
 
-Argument parsing for `bench test`/`bench unqueue`/`bench run`/`bench status` and their exit mapping.
+Argument parsing for `bench test`, `unqueue`, `run`, `status`, `on` and `off`, and their exit
+mapping.
 """
 
 import argparse
@@ -14,6 +15,7 @@ from pathlib import Path
 from wisebench import status
 from wisebench.bench_run import BenchRun
 from wisebench.bench_test import BenchFailure
+from wisebench.board import find_board, refuse_shared_file
 from wisebench.clone import locate
 from wisebench.config import Config, settings_path
 from wisebench.lock import Lock
@@ -57,18 +59,18 @@ def _load_bench_env():
 
 
 def main(argv=None):
-    """Parse arguments and run one `bench test`, `bench unqueue`, `bench run` or `bench status`.
+    """Parse arguments and run one `bench` command, on the first board unless it names another.
 
     `test` and `unqueue` change the queue only, needing neither `LG_ENV` nor the `Lock`; `run`
-    holds the `Lock` for the whole of its run.
+    holds the `Lock` for the whole of its run; `on` and `off` change an added board's switch only.
 
     Args:
         argv (list[str] | None): Arguments to parse, defaulting to `sys.argv[1:]`.
 
     Returns:
-        int: 0 queued/removed (or, for `run`, finished/no job/disabled/lock held), 2 a ref that
-        is not a commit, an id not queued, an unreadable queue, or the bench's own failure; for
-        `status`, the watch loop's exit code.
+        int: 0 queued/removed/switched (or, for `run`, finished/no job/off/disabled/lock held), 2
+        a board with no table, a ref that is not a commit, an id not queued, an unreadable queue,
+        or the bench's own failure; for `status`, the watch loop's exit code.
 
     Raises:
         SystemExit: argparse rejected the arguments, or printed `--help`.
@@ -89,14 +91,28 @@ def main(argv=None):
     test_parser.add_argument("-C", dest="source", default=None)
     unqueue_parser = subparsers.add_parser("unqueue")
     unqueue_parser.add_argument("entry_id", type=int)
-    subparsers.add_parser("run")
+    run_parser = subparsers.add_parser("run")
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--watch", action="store_true", required=True)
+    for board_parser in (test_parser, unqueue_parser, run_parser, status_parser):
+        board_parser.add_argument("--board", default=None)
+    for word in ("on", "off"):
+        subparsers.add_parser(word).add_argument("board")
     args = parser.parse_args(own_args)
 
-    checkout, directory = locate()
+    try:
+        board = None if args.board is None else find_board(args.board)
+        if args.command in ("on", "off"):
+            board.switch(args.command == "on")
+            print(f"{board.name} is {args.command}")
+            return 0
+    except Exception as exc:
+        print(f"BENCH ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    checkout, directory = locate(args.board)
     if args.command == "status":
-        return status.watch(checkout, directory)
+        return status.watch(checkout, directory, board)
 
     if args.command == "test":
         try:
@@ -124,11 +140,17 @@ def main(argv=None):
         print(f"removed {args.entry_id}")
         return 0
 
+    if board is not None and not board.is_on():
+        print(f"bench run: {board.name} is off")
+        return 0
     try:
         _load_bench_env()
-    except BenchFailure as exc:
+        refuse_shared_file(os.environ.get("LG_ENV"))
+    except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2
+    if board is not None:
+        os.environ["LG_ENV"] = board.lg_env
     lg_env = os.environ.get("LG_ENV")
     if not lg_env:
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
@@ -136,7 +158,7 @@ def main(argv=None):
 
     try:
         config = Config.load(checkout / "bench.toml", settings_path())
-        bench_run = BenchRun(checkout, config, directory)
+        bench_run = BenchRun(checkout, config, directory, board)
     except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2

@@ -1,4 +1,4 @@
-"""The WiseBenchManager clone that is the bench: where its records and layer checkout live."""
+"""The WiseBenchManager clone that is the bench: where each board's records and checkout live."""
 
 from pathlib import Path
 
@@ -14,12 +14,15 @@ def root():
     return Path(wisebench.__file__).resolve().parents[2]
 
 
-def locate():
-    """Name the layer checkout and the records directory in the clone `root` finds.
+def locate(board=None):
+    """Name one board's layer checkout and records directory in the clone `root` finds.
+
+    Args:
+        board (str | None): An added board's name; None is the first board.
 
     Returns:
-        tuple[pathlib.Path, pathlib.Path]: The layer checkout (`<clone>/checkout`) and the records
-        directory (`<clone>/records`).
+        tuple[pathlib.Path, pathlib.Path]: The layer checkout and the records directory:
+        `<clone>/checkout` and `<clone>/records`, or the two under `<clone>/boards/<board>`.
     """
-    clone = root()
-    return clone / "checkout", clone / "records"
+    home = root() if board is None else root() / "boards" / board
+    return home / "checkout", home / "records"

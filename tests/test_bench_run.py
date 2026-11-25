@@ -49,7 +49,7 @@ class _FakeQueue:
 
     constructed = []
 
-    def __init__(self, checkout, directory):
+    def __init__(self, checkout, directory, merge=True):
         self.checkout = checkout
         self.directory = directory
         _FakeQueue.constructed.append((checkout, directory))
