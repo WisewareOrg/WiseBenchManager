@@ -6,6 +6,7 @@ Nothing here draws; `status` puts these words in Textual's widgets.
 import re
 from datetime import datetime
 
+from rich.style import Style
 from rich.text import Text
 
 from wisebench.bench_state import DASH
@@ -17,6 +18,9 @@ COLOURS = {
     "running": "#e5c07b",
     "hand": "#61afef",
     "dim": "#8b8b8b",
+    "log": "#a8a8a8",
+    "bright": "#ffffff",
+    "rule": "#3a3a3a",
 }
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
@@ -238,105 +242,252 @@ def split_run(text):
     return (found.group(1), found.group(2)) if found else (None, text)
 
 
-def styled(text, meaning=None):
+def styled(text, meaning=None, bold=False):
     """Text safe to draw, in the colour of its meaning.
 
     Args:
         text (str): The text, from anywhere.
         meaning (str | None): A key of `COLOURS`, or None for the text colour.
+        bold (bool): Draw it bold.
 
     Returns:
         Text: The cleaned text.
     """
-    return Text(clean(text), COLOURS.get(meaning, ""))
+    return Text(clean(text), Style(color=COLOURS.get(meaning), bold=bold))
 
 
-def node(name, state, started, ended, running, now):
-    """A stage's or a test's line in the tree: glyph, name, start and how long it took.
+def line(*parts):
+    """One line of several colours.
 
     Args:
-        name (str): Its name.
-        state (str): A `Stage.state` or `Section.outcome`.
-        started (datetime | None): Its start.
-        ended (datetime | None): Its end, or None.
+        *parts (tuple): Arguments of `styled`.
+
+    Returns:
+        Text: The parts joined.
+    """
+    return Text.assemble(*(styled(*part) for part in parts), no_wrap=True, overflow="ellipsis")
+
+
+def section_ends(stage):
+    """When each section ended: the next started section's start, else the stage's end.
+
+    Args:
+        stage (Stage): The stage.
+
+    Returns:
+        list[datetime | None]: One end per section, in section order.
+    """
+    ends, following = [], stage.ended
+    for section in reversed(stage.sections):
+        ends.append(following)
+        following = section.started or following
+    return ends[::-1]
+
+
+def run_title(run, newest, bench):
+    """The line over the Run tab.
+
+    Args:
+        run (Run): The run shown.
+        newest (bool): It is the newest run.
+        bench (Bench): The bench's state.
+
+    Returns:
+        Text: What it tested, its sha and record; `last run` first while the bench is idle, and
+        its result and end when it is a past run.
+    """
+    parts = [(what(run), "bright", True), (f"  {sha7(run)}  record {run.record}", "dim")]
+    if not newest:
+        ended = f"  ended {clock(run.ended)}" if run.ended else ""
+        parts += [("  ",), (*result(run, False), True), (ended, "dim")]
+    elif not bench.live and not bench.disabled:
+        parts.insert(0, ("last run  ", "dim"))
+    return line(*parts)
+
+
+def stage_cells(stage, running, now):
+    """A stage's cells in the stage list.
+
+    Args:
+        stage (Stage): The stage.
         running (bool): The bench is running its run.
         now (datetime): The current time.
 
     Returns:
-        Text: The line in its state's colour.
+        tuple: Glyph and name, start and took, in the stage's colour.
     """
-    glyph, meaning = tone(state, running)
-    label = f"{glyph} {name}"
-    if started and state != "skipped":
-        label += f"  {clock(started)}  {took(started, ended, running and state == 'open', now)}"
-    return styled(label, meaning)
+    glyph, meaning = tone(stage.state, running)
+    times = ("", "")
+    if stage.started and stage.state != "skipped":
+        open_ = running and stage.state == "open"
+        times = clock(stage.started), took(stage.started, stage.ended, open_, now)
+    cells = (f"{glyph} {display_name(stage.name)}", *times)
+    return tuple(styled(cell, meaning, meaning in ("running", "failed")) for cell in cells)
 
 
-def log_lines(stage, section):
-    """The log of what the tree has highlighted.
+def section_label(section, end, running, now):
+    """A test's or setup's line in the suite's log.
 
     Args:
-        stage (Stage | None): The stage, or None for nothing to show.
-        section (Section | None): The test or setup in it, or None for the whole stage.
+        section (Section): The section.
+        end (datetime | None): When it ended.
+        running (bool): The bench is running its run.
+        now (datetime): The current time.
 
     Returns:
-        list[str]: The section's output and failure; else the stage's own output, then each
-        section's name and output.
+        Text: Glyph, `setup` for a setup, its name, and how long it took.
     """
-    if stage is None:
-        return []
-    if section:
-        return [*section.lines, *section.failure]
-    lines = [shown_line(line) for line in stage.lines]
-    for each in stage.sections:
-        if each.started or each.failure:
-            lines += [f"--- {each.name}", *each.lines, *each.failure]
-    return lines
+    glyph, meaning = tone(section.outcome, running)
+    parts = [(f"{glyph} ", meaning, True)]
+    if section.kind == "setup":
+        parts.append(("setup ", "hand", True))
+    parts.append((section.name, meaning, meaning in ("running", "failed")))
+    if section.started:
+        length = took(section.started, end, running and section.outcome == "open", now)
+        parts.append((f"  {length}", "dim"))
+    return line(*parts)
 
 
 def head(run, stage, live, now):
-    """The lines over the log: a suite's tally, a build's progress, else the run's summary.
+    """The lines over a stage's log.
 
     Args:
         run (Run): The run shown.
-        stage (Stage | None): The stage shown, or None for the summary.
+        stage (Stage | None): The stage shown, or None for the run's summary.
         live (bool): The bench is running this run.
         now (datetime): The current time.
 
     Returns:
-        Text: The lines.
+        Text: The summary, or a suite's tally, or a build's progress, bar and running tasks.
     """
     rows = []
     if stage is None:
         word, meaning = result(run, live)
-        rows.append(styled(f"{word}, took {run_took(run, live, now)}", meaning))
-    for suite in [stage] if stage else run.stages:
-        started, queued, passed, failed = counts(suite)
-        if queued:
-            tally = f"{display_name(suite.name)}  {started} of {queued}  {passed} passed"
-            rows.append(styled(tally + f"  {failed} failed" * bool(failed), failed and "failed"))
-    if stage and stage.progress:
-        progress = stage.progress
-        rows.append(styled(f"{progress.phase} {progress.done} of {progress.total}"))
-        if live and stage.state == "open":
-            oldest = sorted(progress.tasks, key=lambda t: (t.started is None, t.started or now))
-            for t in oldest[:8]:
+        ended = f"  ended {clock(run.ended)}, took {run_took(run, live, now)}" if run.ended else ""
+        rows.append(line((word, meaning, True), (ended, "dim")))
+        for suite in run.stages:
+            _, queued, passed, failed = counts(suite)
+            if queued:
+                tally = f"{passed} passed" + f"  {failed} failed" * bool(failed)
+                rows.append(line((f"{display_name(suite.name):<14}", "dim"), (tally,)))
+        return Text("\n").join(rows)
+    _, meaning = tone(stage.state, live)
+    name = (display_name(stage.name), meaning, True)
+    if stage.sections:
+        started, queued, passed, failed = counts(stage)
+        tally = [(f"  {started} of {queued}  ",), (f"{passed} passed", "passed")]
+        tally.append((f"  {failed} failed", "failed" if failed else "dim"))
+        return line(name, *tally)
+    if stage.progress:
+        done, total = stage.progress.done, stage.progress.total
+        share = done / total if total else 0
+        numbers = f"  {stage.progress.phase} {done} of {total}  {share:.0%}"
+        filled = round(33 * share)
+        rows.append(line(name, (numbers,)))
+        rows.append(line(("█" * filled, meaning), ("█" * (33 - filled), "rule")))
+        rows.append(Text())
+        if live and stage.state == "open" and stage.progress.tasks:
+            rows.append(line(("running now", "dim")))
+            tasks = sorted(stage.progress.tasks, key=lambda t: (not t.started, t.started or now))[
+                :8
+            ]
+            recipe, task = (max(len(getattr(t, f)) for t in tasks) + 2 for f in ("recipe", "task"))
+            for t in tasks:
                 elapsed = took(t.started, None, True, now) if t.started else DASH
-                rows.append(styled(f"  {t.recipe}  {t.task}  {elapsed}", "running"))
-    return Text("\n").join(rows)
+                rows.append(line((f"{t.recipe:<{recipe}}{t.task:<{task}}{elapsed}",)))
+            rows.append(Text())
+    return Text("\n").join([*rows, line(("this stage's output", "dim"))])
 
 
-def failure(stopped):
+def failure(stopped, run):
     """The box a disabled bench shows.
 
     Args:
-        stopped (str): The `DISABLED` file's text: its time, then its reason.
+        stopped (str): The `DISABLED` file's text: its UTC time, then its reason.
+        run (Run): The newest run.
 
     Returns:
-        Text: Whose failure it is, then the file's lines.
+        Text: Whose failure it is, the reason, and the setup it stopped in and when.
     """
-    lines = ("bench failure, not the candidate's", *stopped.splitlines())
-    return Text("\n").join(styled(line, "failed") for line in lines)
+    stamp, _, reason = stopped.partition("\n")
+    setups = [
+        each.name
+        for stage in run.stages
+        for each in stage.sections
+        if each.kind == "setup" and each.outcome in ("failed", "open")
+    ]
+    where = f"in setup {setups[-1]}; " if setups else ""
+    return Text("\n").join(
+        [
+            line(("bench failure, not the candidate's", "failed", True)),
+            line((reason.strip(),)),
+            line((f"{where}from the DISABLED file, {since(stamp)}", "dim")),
+        ]
+    )
+
+
+def since(stamp):
+    """The `DISABLED` file's time as shown.
+
+    Args:
+        stamp (str): Its first line.
+
+    Returns:
+        str: The local time, or a dash when it does not parse.
+    """
+    try:
+        return clock(datetime.fromisoformat(stamp.strip()))
+    except ValueError:
+        return DASH
+
+
+def state_line(bench, stopped, run):
+    """The status bar.
+
+    Args:
+        bench (Bench): The bench's state.
+        stopped (str): The `DISABLED` file's text.
+        run (Run | None): The newest run.
+
+    Returns:
+        Text: The state's badge, the timer, and since when the bench is disabled.
+    """
+    word, meaning = ("RUNNING", "running") if bench.live else ("IDLE", "rule")
+    if bench.disabled and not bench.live:
+        word, meaning = "DISABLED", "failed"
+    badge = Text(f" {word} ", Style(color="#0c0c0c", bgcolor=COLOURS[meaning], bold=True))
+    timer = {"on": "passed", "off": "failed"}.get(bench.timer, "dim")
+    text = Text.assemble(badge, line(("  timer ", "dim"), (bench.timer, timer)))
+    if bench.disabled and run:
+        unposted = any(s.name == "posted" and s.state != "passed" for s in run.stages)
+        at = since(stopped.partition("\n")[0]) + ", nothing posted" * unposted
+        text += line(("  since ", "dim"), (at,))
+    return text
+
+
+def keys_hint():
+    """The status bar's right end.
+
+    Returns:
+        Text: `? keys`.
+    """
+    return Text.assemble((" ? ", Style(color="#0c0c0c", bgcolor="#cccccc")), " keys")
+
+
+def table(rows):
+    """Table rows with every cell padded to its column, so a row's ground has no gaps.
+
+    Args:
+        rows (list[tuple]): Per row, its key and its cells.
+
+    Returns:
+        list[tuple]: The rows.
+    """
+    for column in zip(*(cells for _, cells in rows), strict=True):
+        width = max(cell.cell_len for cell in column) + 2
+        for cell in column:
+            cell.pad_right(width - cell.cell_len)
+    return rows
 
 
 def history_rows(runs, bench, now):
@@ -345,22 +496,28 @@ def history_rows(runs, bench, now):
     Args:
         runs (list[Run]): Every run, newest first.
         bench (Bench): The bench's state.
-        now (datetime): The current time.
+        now (datetime | None): The current time while a run is live.
 
     Returns:
-        list[tuple]: Per run, its record and its cells: record, what, sha, result, took, the stage
-        that failed, and `by hand`.
+        list[tuple]: Per run, its record and its cells: record, what, sha, result, took, and the
+        stage that failed or `by hand`.
     """
     rows = []
     for i, run in enumerate(runs):
         live = bench.live and i == 0
-        failing = next((s.name for s in run.stages if s.state in ("failed", "error")), "")
-        hand = styled("by hand" if run.kind == "test" else "", "hand")
-        text = (run.record, what(run), sha7(run))
-        ended = (run_took(run, live, now), display_name(failing))
-        cells = (*map(styled, text), styled(*result(run, live)), *map(styled, ended), hand)
+        failing = next((s.name for s in run.stages if s.state in ("failed", "error")), None)
+        hand = ("by hand", "hand") if run.kind == "test" else ("",)
+        note = (display_name(failing), "dim") if failing else hand
+        cells = (
+            styled(run.record),
+            styled(what(run)[:40]),
+            styled(sha7(run)),
+            styled(*result(run, live)),
+            styled(f"{run_took(run, live, now):>4}"),
+            styled(*note),
+        )
         rows.append((run.record, cells))
-    return rows
+    return table(rows)
 
 
 def queue_rows(runs, bench, entries):
@@ -379,54 +536,54 @@ def queue_rows(runs, bench, entries):
         place, source, what, sha, added, and the running run's stage.
     """
     rows, running_sha = [], None
-
-    def add(key, place, source, label, sha, added="", stage=""):
-        """Add a row.
-
-        Args:
-            key (str): Its key.
-            place (str): Its place.
-            source (str): Where it came from.
-            label (str): What it runs.
-            sha (str | None): The commit.
-            added (str): When it was queued by hand.
-            stage (str): The stage the running run is in.
-        """
-        hand = styled(source, "hand" if source == "by hand" else None)
-        text = (label, (sha or "")[:7], added)
-        rows.append((key, (styled(place), hand, *map(styled, text), styled(stage, "running"))))
-
     if bench.live and runs:
         run = runs[0]
         opened = next((display_name(s.name) for s in run.stages if s.state == "open"), "")
         running_sha = next((s.sha for s in run.stages if s.name == "checkout"), None)
         merge = next((e for e in entries if e["kind"] == "run" and e["pr"] == run.pr), None)
         label = what(run) + (f" {merge['title']}" if run.pr and merge else "")
-        add("running", "▶", "by hand" if run.kind == "test" else "merge queue", label, running_sha,
-            stage=opened)  # fmt: skip
+        source = "by hand" if run.kind == "test" else "merge queue"
+        cells = [("▶", "running"), (source,), (label,), ((running_sha or "")[:7],), ("",)]
+        cells.append((f"running, {opened}", "running"))
+        rows.append(("running", tuple(styled(*cell) for cell in cells)))
+        for cell in rows[0][1]:
+            cell.style += Style(bgcolor="#2a2614")
     for entry in entries:
-        place, sha = str(len(rows) + 1), entry["sha"]
+        place, sha = (str(len(rows) + 1),), ((entry["sha"] or "")[:7],)
         if entry["kind"] == "test":
             added = datetime.fromisoformat(entry["added"]).astimezone().strftime("%H:%M")
-            add(f"hand {entry['id']}", place, "by hand", entry["ref"], sha, added)
-        elif not sha or sha != running_sha:
-            label = f"PR #{entry['pr']} {entry['title']}"
-            add(f"merge {entry['pr']}", place, "merge queue", label, sha)
-    return rows
+            key, cells = (
+                f"hand {entry['id']}",
+                (("by hand", "hand"), (entry["ref"],), sha, (added,)),
+            )
+        elif not entry["sha"] or entry["sha"] != running_sha:
+            title = f"PR #{entry['pr']} {entry['title']}"
+            key, cells = f"merge {entry['pr']}", (("merge queue",), (title,), sha, ("",))
+        else:
+            continue
+        rows.append((key, tuple(styled(*cell) for cell in (place, *cells, ("",)))))
+    return table(rows)
 
 
-def preview(ref, outcome):
-    """What `:run <ref>` would queue.
+def preview(ref, outcome, rows):
+    """The box `:run <ref>` shows while it is typed.
 
     Args:
         ref (str): The ref typed.
         outcome (dict | Exception): `Queue.preview`'s result, or what it raised.
+        rows (list[tuple]): The Queue table's rows.
 
     Returns:
-        Text: The commit, its subject and whether the checkout is clean; or that it does not
-        resolve.
+        Text: The commit and its subject, whether the checkout is clean, and its place: after the
+        running run and the hand-queued runs; or that the ref does not resolve.
     """
     if isinstance(outcome, Exception):
-        return styled(f"{ref} does not resolve", "failed")
+        return line((f"{ref} does not resolve", "failed"))
     state = "clean tree" if outcome["clean"] else "uncommitted changes in the checkout"
-    return styled(f'will queue {outcome["sha"][:7]} "{outcome["subject"]}", {state}', "hand")
+    ahead = [cells for key, cells in rows if key == "running" or key.startswith("hand")]
+    place = f"joins as {len(ahead) + 1}"
+    place += f", after {ahead[-1][2].plain.strip()}" if ahead else ""
+    resolved = f'resolves to {outcome["sha"][:7]} "{outcome["subject"]}", {state}'
+    return Text("\n").join(
+        [line(("will queue", "hand", True)), line((resolved, "dim")), line((place, "dim"))]
+    )
