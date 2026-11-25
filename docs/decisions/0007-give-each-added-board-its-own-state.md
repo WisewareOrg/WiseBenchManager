@@ -1,7 +1,7 @@
 # 0007 — Give each added board its own state, its switch included
 
 **Status:** proposed
-**Decided:** not decided; proposed 2026-11-25 (S14 multi-board spike), three points open below
+**Decided:** not decided; proposed 2026-11-25 (S14 multi-board spike), one point open below
 **Rev:** 1
 
 ## Revisions
@@ -10,8 +10,11 @@
 
 ## Context
 
-The bench drives one board, so a second board beside it idles while a run is on the first. What the
-choice is held to:
+The bench drives one board, so a second board beside it idles while a run is on the first. One bench
+per host was the rule because the runner was never designed for more than one board, and what
+conflicts on the host is several builds at once. Several boards per host is a requirement, and it
+replaces only the part of #74 one-bench defect that it contradicts, the second board left out there;
+everything else #74 settled stands. What the choice is held to:
 
 - Only one build runs on the host at a time, whichever board it is for.
 - Each board's queue is its own.
@@ -34,10 +37,10 @@ directory in the clone.**
    with no table, ends the command with exit 2. `bench run` refuses, with exit 2, when two boards'
    labgrid files, the first board's `LG_ENV` included, are one file. An added board's run sees one
    `LG_` variable, `LG_ENV`, so its labgrid file cannot take the first board's address.
-3. **A board has its own checkout** (open point 1). A run checks out its commit and its suite runs
+3. **A board has its own checkout.** A run checks out its commit and its suite runs
    from that tree to the end, a `--skip-build` run included, so with one tree a second board's run
    changes the tests under the first.
-4. **The runner holds no lock across boards** (open point 3). What may not overlap on the host is
+4. **The runner holds no lock across boards** (open below). What may not overlap on the host is
    the layer's: its hooks and suites start the builds, so the layer's one build entry point takes the
    host's build lock and waits for it. A wait is inside the run's own stage, so it counts in
    `TimeoutStartSec`.
@@ -47,18 +50,13 @@ directory in the clone.**
    `bench on <name>` makes it and `bench off <name>` removes it; both leave the queue, `DISABLED`
    and the timer alone. `bench run --board <name>` without it exits 0 before the lock, the queue,
    the checkout or the board is touched. Queueing works while a board is off, and a run in progress
-   finishes when its board is turned off. It stays as set across a reboot (open point 2). The words
+   finishes when its board is turned off. It is the bench's own setting and stays as set. The words
    are not the view's `:enable` and `:disable`, which act on the timer and `DISABLED`.
 
 ## Open
 
-Built one way, each a small change to the other:
-
-1. **A second layer checkout with its own build directory** per added board. The other way: one
-   checkout, one run at a time across boards.
-2. **The switch stays as set across a reboot.** The other way: off at every boot.
-3. **The build lock is the layer's,** in its one build entry point. The other way: in the runner,
-   held for a built run.
+- **The build lock is the layer's,** in its one build entry point. The other way: in the runner, held
+  for a built run.
 
 ## Alternatives considered
 
@@ -73,8 +71,10 @@ Built one way, each a small change to the other:
   drives the other board.
 - **A `unit` key in the table.** Rejected: one that names another board's unit stops that board's
   timer, and the unit is derivable.
-- **The timer as the switch.** Rejected: a `bench run` by hand ignores it, and a reboot re-arms it.
-- **A second clone of this repository.** Rejected: one host has one bench.
+- **The timer as the switch.** Rejected: a `bench run` by hand ignores it.
+- **A second clone of this repository.** Rejected: both would read the one settings file and
+  environment in `~/.config/wisebench`, so both would take the merge queue's entries and drive the
+  same first board.
 - **One labgrid file with several targets.** Rejected: labgrid's `target` fixture requires a target
   named `main`, so the layer's fixtures would have to know of boards.
 
