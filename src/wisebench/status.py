@@ -34,6 +34,7 @@ from wisebench.bench_state import (
     read_run_unit,
     stop_timer,
 )
+from wisebench.command_line import CommandLine
 from wisebench.history_view import HistoryView
 from wisebench.queue import Queue
 from wisebench.queue_view import QueueView
@@ -136,8 +137,6 @@ class Watch(App):
         self.theme = palette.THEME.name
         self.directory, self.records = directory, Records(directory)
         self.queue, self.unit = Queue(checkout, directory), read_run_unit()
-        self.target = None
-        self.asking = False
         self.animation_level = "none"
 
     async def on_event(self, event):
@@ -184,9 +183,7 @@ class Watch(App):
             yield Static(id="state")
             yield Static(palette.KEYS, id="keys")
         yield Static(id="message")
-        with Horizontal(id="command-row"):
-            yield Input(id="command", compact=True, select_on_focus=False)
-            yield Static("Enter queue it  Esc cancel", id="runhint")
+        yield CommandLine(id="command-row")
 
     def on_mount(self):
         """Start the clock and the reads."""
@@ -346,26 +343,21 @@ class Watch(App):
         else:
             self.action_show_help_panel()
 
-    def action_command(self, text):
+    def action_command(self, text, question=""):
         """Open the command line; `:remove` means the queue row selected at this moment.
 
         Args:
             text (str): What it starts with.
+            question (str): What it asks, when it takes an answer, not a command.
         """
-        self.asking = False
         self.say("")
-        self.target = self.query_one("#queue-rows").key if self.tab == "queue" else None
-        command = self.query_one(Input)
-        self.query_one("#command-row").display = True
-        command.placeholder = ""
-        command.value, command.cursor_position = text, len(text)
-        self.screen.set_focus(command)
+        target = self.query_one("#queue-rows").key if self.tab == "queue" else None
+        self.query_one(CommandLine).open(text, target, question)
 
     def action_close(self):
         """Close the command line."""
-        self.asking = False
         self.say("")
-        self.query_one("#command-row").display = False
+        self.query_one(CommandLine).display = False
         self.typed = None
         self.action_tab(self.tab)
 
@@ -375,10 +367,8 @@ class Watch(App):
         Args:
             event (Input.Changed): The change.
         """
-        typing_run = event.value.startswith(":run ")
-        self.query_one("#runhint").display = typing_run
-        is_open = self.query_one("#command-row").display
-        if is_open and typing_run:
+        is_open = self.query_one(CommandLine).display
+        if is_open and event.value.startswith(":run "):
             self.tab = "queue"
         self.typed = rules.typed_run(event.value) if is_open else None
 
@@ -388,18 +378,19 @@ class Watch(App):
         Args:
             event (Input.Submitted): The command line.
         """
-        text, asking = event.value.strip(), self.asking
+        line, text = self.query_one(CommandLine), event.value.strip()
         self.action_close()
-        if not asking:
-            self.command(text)
+        if not line.asked:
+            self.command(text, line.target)
         elif text == "y":
             self.write(lambda: enable(self.directory, self.unit) or "bench enabled")
 
-    def command(self, text):
+    def command(self, text, target):
         """Do what a command typed says.
 
         Args:
             text (str): The command.
+            target (str | None): The queue row that was selected when the line was opened.
         """
         if text in (":disable", ":enable") and self.unit is None:
             self.say("no [run] unit in the bench's settings file")
@@ -408,11 +399,9 @@ class Watch(App):
         elif text == ":disable":
             self.write(lambda: stop_timer(self.unit) or "bench disabled")
         elif text == ":enable":
-            self.action_command("")
-            self.query_one(Input).placeholder = ENABLE
-            self.asking = True
+            self.action_command("", ENABLE)
         elif text == ":remove":
-            kind, _, entry = (self.target or "").partition(" ")
+            kind, _, entry = (target or "").partition(" ")
             if kind == "hand":
                 self.write(lambda: self.remove_entry(int(entry)))
             else:
