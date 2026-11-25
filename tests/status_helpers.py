@@ -1,16 +1,18 @@
-"""Builders shared by the status tests: marker text, run models and the text a frame shows."""
+"""Builders shared by the status tests: marker text, run models and a test draw surface."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from wisebench import bench_state, runlog, screen
+from wisebench import bench_state, runlog
 
 STAMP = "20261110T030715Z"
 OLDER = "20261109T030715Z"
 OLDEST = "20261108T030715Z"
 SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")
+SIZE = (24, 80)
 DIRECTORY = "records"
 LIVE = bench_state.Bench(live=True, disabled=False, timer="on")
 IDLE = bench_state.Bench(live=False, disabled=False, timer="on")
@@ -180,11 +182,38 @@ LONG = run(host_suite=suite("host_suite", ["passed"] * 30, {3: ("boot one",), 7:
 MANY = [run(record=f"2026{i:04d}") for i in range(40, 0, -1)]
 
 
-def shown(frame, cols=80, rows=24):
-    """The text `screen.Screen` shows for `frame` on a `cols` by `rows` terminal, a line per row."""
-    drawn = screen.Screen()
-    drawn.update(frame)
-    return "\n".join(line.decode() for line in drawn.widget.render((cols, rows)).text)
+class Grid:
+    """A draw surface for tests: a grid of (char, fg, bg, bold) cells, clipped at the right edge."""
+
+    def __init__(self, rows, cols):
+        """An empty grid of blank cells."""
+        self.rows, self.cols = rows, cols
+        self.cells = [[(" ", None, None, False)] * cols for _ in range(rows)]
+
+    def put(self, y, x, text, fg, bg=None, bold=False):
+        """Write `text` at (y, x), clipped at the right edge."""
+        assert 0 <= y < self.rows, f"row {y} is off a {self.rows}-row screen"
+        for offset, char in enumerate(text):
+            if 0 <= x + offset < self.cols:
+                self.cells[y][x + offset] = (char, fg, bg, bold)
+
+    def text(self, y):
+        """The characters of row `y` as a string."""
+        return "".join(cell[0] for cell in self.cells[y])
+
+    def find(self, pattern):
+        """(row, start, end) of the first match of `pattern`; the span of group 1 if it has one."""
+        for y in range(self.rows):
+            found = re.search(pattern, self.text(y))
+            if found:
+                group = 1 if found.re.groups else 0
+                return y, found.start(group), found.end(group)
+        raise AssertionError(f"{pattern!r} is not drawn")
+
+    def span(self, pattern):
+        """The cells of the first match of `pattern`."""
+        y, start, end = self.find(pattern)
+        return self.cells[y][start:end]
 
 
 REAL_RUN = Path(__file__).parent / "fixtures" / "real_run"

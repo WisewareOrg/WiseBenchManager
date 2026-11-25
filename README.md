@@ -231,6 +231,8 @@ is `KEY=value` lines, blank lines and `#` comments.
 
 `uv sync --frozen` installs exactly the versions in `uv.lock`. The package's version is derived from
 the checked-out tag by hatch-vcs when uv builds it; `run.json` carries that version.
+Checking out another tag takes both syncs again, after the checkout: without the `tools/mitmproxy` one
+a suite that uses `proxy` is a bench fault, or replays with the `mitmdump` of the tag before it.
 
 mitmproxy has its own locked environment, the uv project `tools/mitmproxy/`, so that its pins never
 set the runner's; the second link puts its `mitmdump` on `PATH`. The `proxy` fixture runs that
@@ -272,26 +274,48 @@ GitHub App (`Check.merge_queue`), whose verdict it posts as a GitHub check run (
 waiting run queued by hand starts only when that read of the merge queue succeeds: a `git fetch`
 fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before the hand entry
 runs.
-`bench status --watch` is the view of all of it, run from any directory. It is a urwid screen
-refreshed once a second: Run shows the newest run's stages and the selected stage's log, headed by
-bitbake's task progress while a build runs, Queue lists what waits (the running run, the runs queued
-by hand, then every merge-queue entry) and History lists every run on disk. `Tab` and `Shift-Tab`
-cycle the views and `1` to `3` jump to one; in Queue, `:run [-C <dir>] <ref>` previews the ref as
-you type and `Enter` queues it, and `dd` removes the selected run queued by hand. `:disable` stops
-the run timer (a run in progress finishes) and `:enable`, after a `y` to its prompt, removes
-`DISABLED` and starts the timer. It reads `records/*/bench.log`, each suite's `report.jsonl`,
-whether `records/DISABLED` exists, the holder of the `lock` file from `/proc/locks`, the run timer's
-state from `systemctl --user`, and the settings file's `[run] unit`. It takes no lock and runs no
-git itself. The Queue tab reads and changes the queue only through `Queue`, the same entry point as
-`bench test` and `bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`),
-and only `:disable` and `:enable` change the timer. No maintained viewer reads the runner's markers
-or joins them to pytest-reportlog's outcomes, so the view is the runner's own, on urwid (ADR 0006
-rev 1). urwid has no key sequences, no search over a list's hidden rows, and a list focus that
-follows an index rather than a row, so the chords, `/` search across folded sections and the Queue
-selection are ours.
-Bitbake shows its task progress only on the terminal that ran the build, so the view reads bitbake's
-`NOTE:` lines from the log; and it asks the kernel's `/proc/locks` who holds the lock rather than
-`lslocks`, which resolves holders by path through `/proc/<pid>/fd`.
+
+`bench status --watch` is the view of all of it, run from any directory. It is a Textual app
+(ADR 0006 rev 1) with three tabs: Run shows a run's stages and the selected stage's log, headed by
+bitbake's task progress while a build runs; Queue lists what waits (the running run, the runs queued
+by hand, then every merge-queue entry); History lists every run on disk. It follows the newest run,
+and shows a run from History or with `[` and `]` in the same layout.
+
+| Key | Does |
+|---|---|
+| `1` `2` `3` | Run on the newest run, Queue, History |
+| `j` `k` `h` `l` `g` `G` `^d` `^u` | press Down, Up, Left, Right, Home, End, PgDn, PgUp; `G` in a log also follows it as it grows |
+| `Tab` `Shift-Tab` | move focus between the tab line, the list and the log; on the tab line Left and Right change tab |
+| `Enter` | on a stage, go into its log; on a test, open or close it; in History, show that run |
+| `Space` | open or close a test |
+| `Esc` | back to the list; with the command line open, close it |
+| `[` `]` | in Run, the next older or newer run |
+| `/` `n` | in Run, search the log shown, and go to the next match |
+| `:` `;` | open the command line |
+| `?` | open or close Textual's keys panel, which lists the focused widget's keys and the view's |
+| `q` `^c` | quit |
+
+Anything that changes the bench is a typed command. `:run [-C <dir>] <ref>` shows Queue, previews
+the ref as you type, and `Enter` queues it. `:remove` in Queue removes the run queued by hand that
+was selected when the command line opened. `:disable` stops the run timer; a run in progress
+finishes. `:enable` asks first, and `y` then `Enter` removes `DISABLED` and starts the timer; any
+other answer leaves the bench as it is. `:q` quits. Without a terminal the view prints a
+`BENCH ERROR` line and exits 2.
+
+Each second, off the screen's thread, it reads `records/*/bench.log`, each suite's `report.jsonl`,
+`records/DISABLED`, the holder of the `lock` file from `/proc/locks`, and the run timer's state from
+`systemctl --user`; the settings file's `[run] unit` is read when it starts. While Queue shows, it
+reads the queue every 30 s, and again after a change. It takes no lock and runs no git itself. It
+reads and changes the queue only through `Queue`, the same entry point as `bench test` and
+`bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`), and only
+`:disable` and `:enable` change the timer. Control characters in anything read are shown as text,
+and mouse reporting stays off.
+
+No maintained viewer reads the runner's markers or joins them to pytest-reportlog's outcomes, so the
+view's rules and words are the runner's own, on Textual's widgets and keys. Bitbake shows its task
+progress only on the terminal that ran the build, so the view reads bitbake's `NOTE:` lines from the
+log; and it asks the kernel's `/proc/locks` who holds the lock rather than `lslocks`, which resolves
+holders by path through `/proc/<pid>/fd`.
 
 ### Installing `bench run`
 

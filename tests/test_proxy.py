@@ -408,8 +408,8 @@ def test_a_cut_trailing_flow_record_yields_the_complete_flows_before_it(har, tmp
     assert server.killed() == []
 
 
-def test_a_flow_record_corrupted_before_the_trailing_record_raises(har, tmp_path):
-    """Only a cut trailing record is tolerated; a read failure anywhere else propagates."""
+def test_a_flow_record_corrupted_before_the_trailing_record_raises(har, tmp_path, capfd):
+    """Only a cut trailing record is tolerated; any other read failure raises, its cause shown."""
     recorded = _recorded_hit_then_miss(har, tmp_path)
     end = _end_of_first_record(recorded)
     flows_path = tmp_path / "corrupted.flows"
@@ -418,6 +418,7 @@ def test_a_flow_record_corrupted_before_the_trailing_record_raises(har, tmp_path
     server = proxy.Proxy(har, tmp_path / "proxy.log", flows_path)
     with pytest.raises(subprocess.CalledProcessError):
         server.served()
+    assert "FlowReadException" in capfd.readouterr().err
 
 
 def test_served_matches_on_method_and_url_together_not_on_the_url_alone(get_and_post_har, tmp_path):
@@ -429,6 +430,24 @@ def test_served_matches_on_method_and_url_together_not_on_the_url_alone(get_and_
     finally:
         server.stop()
     assert server.served() == {("GET", _BOTH_METHODS_URL): 1, ("POST", _BOTH_METHODS_URL): 0}
+
+
+def test_a_killed_request_is_never_counted_as_served_though_its_url_is_recorded(
+    get_and_post_har, tmp_path
+):
+    """A POST whose body is not the recorded one is killed; only the recorded body is served."""
+    server = proxy.Proxy(get_and_post_har, tmp_path / "proxy.log", tmp_path / "proxy.flows")
+    server.start()
+    try:
+        recorded = urllib.request.Request(_BOTH_METHODS_URL, data=b"field=value")
+        assert _fetch(server.port, recorded).read() == _POST_RESPONSE.encode()
+        other = urllib.request.Request(_BOTH_METHODS_URL, data=b"field=other")
+        with pytest.raises((urllib.error.URLError, ConnectionError)):
+            _fetch(server.port, other)
+    finally:
+        server.stop()
+    assert server.served() == {("GET", _BOTH_METHODS_URL): 0, ("POST", _BOTH_METHODS_URL): 1}
+    assert server.killed() == [_BOTH_METHODS_URL]
 
 
 def test_start_runs_the_clones_own_mitmdump_never_one_found_on_path(har, tmp_path, monkeypatch):

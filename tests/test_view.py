@@ -12,8 +12,10 @@ from status_helpers import (
     OLDER,
     OLDEST,
     SHA,
+    SIZE,
     STAMP,
     TESTS,
+    Grid,
     building,
     failing_at,
     live,
@@ -26,10 +28,9 @@ from status_helpers import (
     t,
 )
 
-from wisebench import view
+from wisebench import screen, view
 
 ENTER, ESC, HALF_DOWN, HALF_UP = "\n", "\x1b", "\x04", "\x15"
-PAGE = 5
 THREE = [live("build"), failing_at(OLDER, "bundle"), run(OLDEST)]
 PLAIN_BUILD = live("build", build=plain("build", 40))
 TAB, BTAB = "\t", "\x1b[Z"
@@ -60,24 +61,25 @@ WAITING = {"kind": "run", "pr": 15, "title": "Fix probe", "sha": None}
 NOT_REMOVABLE = "only hand-queued runs can be removed"
 
 
-def resolve(runs, bench=IDLE, state=None, **read):
+def resolve(runs, bench=IDLE, state=None, size=SIZE, **read):
     """Resolve the frame for `runs` in `state` (a fresh State by default).
 
     `read` is the Snapshot's `queue` and `preview`, passed only when given.
     """
     state = view.State() if state is None else state
-    return view.resolve(state, view.Snapshot(runs, bench, NOW, DIRECTORY, **read))
+    return view.resolve(state, view.Snapshot(runs, bench, NOW, DIRECTORY, **read), *size)
 
 
-def press(state, runs, keys, bench=IDLE, **read):
-    """Resolve and handle each key in turn with a half page of `PAGE` rows, as the shell does.
+def press(state, runs, keys, bench=IDLE, size=SIZE, **read):
+    """Resolve, write the scroll back and handle each key in turn, as the loop does.
 
     Returns the last key's quit flag.
     """
     quits = False
     for key in keys:
-        frame = resolve(runs, bench, state, **read)
-        quits = view.handle(state, key, frame, PAGE)
+        frame = resolve(runs, bench, state, size, **read)
+        state.scroll, state.history_scroll = frame.scroll, frame.history_scroll
+        quits = view.handle(state, key, frame)
     return quits
 
 
@@ -167,6 +169,7 @@ def test_live_is_the_live_bench_and_the_newest_run_shown():
 def test_the_default_cursor_is_derived_from_the_stage(runs, expected):
     frame = resolve(runs, LIVE)
     assert frame.cursor == expected(frame)
+    assert frame.scroll <= frame.cursor < frame.scroll + frame.room
 
 
 def test_the_default_cursor_follows_the_running_test_and_an_explicit_one_stays():
@@ -186,6 +189,7 @@ def test_tail_is_the_last_row_and_carries_across_an_automatic_stage_change():
     state = view.State(cursor=view.TAIL)
     build = resolve([PLAIN_BUILD], LIVE, state)
     assert build.cursor == len(build.rows) - 1
+    assert build.scroll == len(build.rows) - build.room
 
     host = suite("host_suite", ["passed", "open", "not-started"], {1: ("b",)}, state="open")
     suite_frame = resolve([live("host_suite", host_suite=host)], LIVE, state)
@@ -223,6 +227,24 @@ def test_running_and_failed_sections_open_by_default_and_a_fold_overrides_either
 
 
 @pytest.mark.parametrize(
+    ("memo", "at", "expected"),
+    [
+        (0, 25, lambda room: 25 - room + 1),
+        (20, 5, lambda room: 5),
+        (5, 10, lambda room: 5),
+        (99, 29, lambda room: 30 - room),
+    ],
+    ids=["cursor below", "cursor above", "cursor in view", "past the end"],
+)
+def test_scroll_moves_only_as_far_as_keeps_the_cursor_on_screen(memo, at, expected):
+    anchor = host_rows()[at].anchor
+    frame = resolve([LONG], state=view.State(stage="host_suite", cursor=anchor, scroll=memo))
+    assert len(frame.rows) == 30
+    assert 10 < frame.room < 30
+    assert frame.scroll == expected(frame.room)
+
+
+@pytest.mark.parametrize(
     ("runs", "bench", "kind"),
     [
         ([building(1)], LIVE, "build"),
@@ -233,6 +255,37 @@ def test_running_and_failed_sections_open_by_default_and_a_fold_overrides_either
 )
 def test_the_pane_head_is_chosen_by_the_stage_shown(runs, bench, kind):
     assert resolve(runs, bench).pane_head == kind
+
+
+@pytest.mark.parametrize(
+    "runs", [[building(2)], [running_test(2)], [PLAIN_BUILD]], ids=["build", "suite", "plain"]
+)
+def test_the_room_is_the_pane_less_its_head_and_an_open_prompt_takes_one_row(runs):
+    closed = resolve(runs, LIVE)
+    opened = resolve(runs, LIVE, view.State(prompt=":"))
+    for frame in (closed, opened):
+        lay = frame.layout
+        assert frame.room == lay.pane_bottom - lay.pane_top - frame.head_height
+    assert opened.room == closed.room - 1
+
+
+def test_a_suite_or_plain_head_is_one_row_and_each_running_task_adds_one():
+    assert resolve([running_test(2)], LIVE).head_height == 1
+    assert resolve([PLAIN_BUILD], LIVE).head_height == 1
+    three, one = resolve([building(3)], LIVE), resolve([building(1)], LIVE)
+    assert three.head_height - one.head_height == 2
+
+
+def test_running_tasks_are_capped_so_that_three_log_rows_remain():
+    assert resolve([building(40)], LIVE).room == 3
+
+
+@pytest.mark.parametrize(
+    ("size", "too_small"),
+    [((10, 40), True), ((23, 80), True), ((24, 79), True), ((24, 80), False)],
+)
+def test_a_screen_below_the_drawable_size_is_too_small(size, too_small):
+    assert resolve([run()], size=size).layout.too_small is too_small
 
 
 def test_history_selects_the_shown_run_until_a_record_is_chosen():
@@ -338,18 +391,20 @@ def test_stage_list_keys_set_the_stage_from_the_one_shown(keys, expected):
 @pytest.mark.parametrize(
     ("keys", "expected"),
     [
-        ("j", 11),
-        ("k", 9),
-        ("gg", 0),
-        (HALF_DOWN, 10 + PAGE),
-        (HALF_UP, 10 - PAGE),
+        ("j", lambda room: 11),
+        ("k", lambda room: 9),
+        ("gg", lambda room: 0),
+        (HALF_DOWN, lambda room: 10 + room // 2),
+        (HALF_UP, lambda room: 10 - room // 2),
     ],
     ids=["j", "k", "gg", "^d", "^u"],
 )
 def test_log_keys_move_the_cursor_over_the_frames_rows(keys, expected):
     state = view.State(stage="host_suite", focus="log", cursor=host_rows()[10].anchor)
+    frame = resolve([LONG], state=state)
+    assert frame.room // 2 < 10
     press(state, [LONG], keys)
-    assert state.cursor == host_rows()[expected].anchor
+    assert state.cursor == frame.rows[expected(frame.room)].anchor
     assert state.stage == "host_suite"
 
 
@@ -401,29 +456,52 @@ def test_search_unfolds_a_match_and_n_and_capital_n_step_between_matches():
 @pytest.mark.parametrize(
     ("keys", "expected"),
     [
-        ("j", 1),
-        ("G", 39),
-        ("Gk", 38),
-        ("Ggg", 0),
-        (HALF_DOWN, PAGE),
+        ("j", lambda room: 1),
+        ("G", lambda room: 39),
+        ("Gk", lambda room: 38),
+        ("Ggg", lambda room: 0),
+        (HALF_DOWN, lambda room: room // 2),
     ],
     ids=["j", "G", "G k", "G gg", "^d"],
 )
 def test_history_keys_move_the_selection(keys, expected):
     state = view.State(tab="history")
+    frame = resolve(MANY, state=state)
     press(state, MANY, keys)
-    assert state.history_record == MANY[expected].record
+    assert state.history_record == MANY[expected(frame.history_room)].record
+
+
+def test_history_scrolls_only_as_far_as_keeps_the_selection_on_screen():
+    state = view.State(tab="history")
+    press(state, MANY, "G")
+    bottom = resolve(MANY, state=state)
+    assert (bottom.history_cursor, bottom.history_scroll) == (39, 40 - bottom.history_room)
+    press(state, MANY, "gg")
+    assert resolve(MANY, state=state).history_scroll == 0
 
 
 EVERY_KEY = "jkGgg[]\n/za:q\x1bzRnN?"
 
 
 @pytest.mark.parametrize("tab", ["run", "history"])
+@pytest.mark.parametrize("size", [SIZE, (10, 40), (3, 5)])
 @pytest.mark.parametrize("runs", [[], [run()]], ids=["no runs", "one run"])
-def test_no_key_raises_on_no_runs(runs, tab):
+def test_no_key_raises_on_no_runs_or_a_tiny_terminal(runs, size, tab):
     state = view.State(tab=tab)
+    screen.draw(Grid(*size), resolve(runs, state=state, size=size))
     for key in EVERY_KEY:
-        press(state, runs, key)
+        press(state, runs, key, size=size)
+        screen.draw(Grid(*size), resolve(runs, state=state, size=size))
+
+
+def test_no_runs_says_so_and_a_tiny_terminal_says_too_small():
+    empty = Grid(*SIZE)
+    screen.draw(empty, resolve([]))
+    assert "0 records in" in "".join(empty.text(y) for y in range(SIZE[0]))
+
+    tiny = Grid(10, 40)
+    screen.draw(tiny, resolve([run()], size=(10, 40)))
+    assert "terminal too small" in tiny.text(0)
 
 
 @pytest.mark.parametrize(
@@ -490,6 +568,12 @@ def test_the_command_line_edits_one_character_and_runs_only_a_real_command(keys,
     assert press(state, [LONG], keys) is False
     assert state.prompt == prompt
     assert state.pattern is None
+
+
+def test_an_unmapped_key_code_leaves_the_command_line_text_alone():
+    state = view.State(prompt=":q")
+    assert view.handle(state, 259, resolve([run()], state=state)) is False
+    assert state.prompt == ":q"
 
 
 @pytest.mark.parametrize(
@@ -615,6 +699,13 @@ def test_h_and_l_no_longer_switch_views(tab, key):
     assert (state.tab, state.history_record) == (tab, OLDER)
 
 
+def test_the_panes_start_on_row_3_and_end_two_rows_above_the_status_bar():
+    lay = resolve([run()]).layout
+    assert (lay.pane_top, lay.bar, lay.pane_bottom) == (3, SIZE[0] - 1, SIZE[0] - 3)
+    prompted = resolve([run()], state=view.State(prompt=":")).layout
+    assert (prompted.pane_top, prompted.bar, prompted.pane_bottom) == (3, SIZE[0] - 2, SIZE[0] - 4)
+
+
 KAS_LINES = [
     "2026-11-10 03:10:00 - INFO     - NOTE: first",
     "2026-11-10 03:10:01 - WARNING  - NOTE: second",
@@ -715,15 +806,28 @@ def test_j_k_gg_and_capital_g_move_the_queue_cursor_and_clamp(keys, at):
 
 
 def _crowded(count=29):
-    """`count` hand entries, with refs r00, r01, ..."""
+    """`count` hand entries, more than a 24-row Queue pane draws, with refs r00, r01, ..."""
     return [{**HAND1, "id": i + 1, "ref": f"r{i:02d}"} for i in range(count)]
 
 
-def test_half_page_keys_move_the_queue_selection_by_the_page():
+@pytest.mark.parametrize(
+    "keys",
+    ["G", "j" * 40, HALF_DOWN * 6, "j" * 25 + "G"],
+    ids=["G", "j past the end", "^d past the end", "j then G"],
+)
+def test_the_queue_cursor_stops_on_the_last_drawn_row_so_dd_never_acts_on_an_undrawn_one(keys):
     entries = _crowded()
     state = view.State()
-    press(state, [run()], "2" + HALF_DOWN + HALF_DOWN + HALF_UP, queue=entries)
-    assert resolve([run()], state=state, queue=entries).queue_cursor == PAGE
+    press(state, [run()], "2" + keys, queue=entries)
+    frame = resolve([run()], state=state, queue=entries)
+    grid = Grid(*SIZE)
+    screen.draw(grid, frame)
+    drawn = "\n".join(grid.text(y) for y in range(grid.rows))
+    at = frame.queue_cursor
+    assert f"r{at:02d}" in drawn
+    assert f"r{at + 1:02d}" not in drawn
+    press(state, [run()], "dd", queue=entries)
+    assert state.remove_id == frame.queue_rows[at].id
 
 
 @pytest.mark.parametrize(
@@ -772,6 +876,12 @@ def test_the_second_key_or_esc_clears_the_pending_key_from_the_frame(tab, first,
     assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending == first
     press(state, THREE, second, LIVE, queue=[HAND1, HAND2])
     assert resolve(THREE, LIVE, state, queue=[HAND1, HAND2]).pending is None
+
+
+def test_a_pending_key_shifts_no_row_of_the_layout():
+    plain_frame = resolve(THREE, LIVE, queue_state(), queue=[HAND1])
+    waiting = resolve(THREE, LIVE, queue_state(pending="d"), queue=[HAND1])
+    assert waiting.layout == plain_frame.layout
 
 
 def test_the_queue_has_a_running_row_then_hand_entries_then_the_merge_entry():
@@ -1033,11 +1143,15 @@ def test_a_message_is_cleared_by_esc():
     assert state.message is None
 
 
-def test_the_frame_carries_the_message():
+def test_the_frame_shows_the_message_and_it_takes_the_prompt_row_so_the_bar_shifts_up():
     plain_frame = resolve([run()])
     shown = resolve([run()], state=view.State(message="no queued run 3"))
     assert shown.message == "no queued run 3"
     assert plain_frame.message is None
+    assert (shown.layout.bar, shown.layout.pane_bottom) == (
+        plain_frame.layout.bar - 1,
+        plain_frame.layout.pane_bottom - 1,
+    )
 
 
 def _previewed(typed, result, ref=None, queue=(), bench=IDLE):

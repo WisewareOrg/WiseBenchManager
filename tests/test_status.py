@@ -11,15 +11,17 @@ from pathlib import Path
 
 import pytest
 from helpers import (
+    FakeScreen,
     add_settings,
     repo_with_one_commit,
     run_unit_settings,
     settings_file,
+    terminal,
     write_bench_toml,
     write_lg_env,
     write_suite,
 )
-from status_helpers import mark, real_run, rep, shown
+from status_helpers import mark, real_run, rep
 
 from wisebench import bench_state, bench_test, runlog, status
 from wisebench.lock import Lock
@@ -635,10 +637,11 @@ def snapshot(root):
 def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_reads_and_writes(
     tmp_path, monkeypatch, systemctl, bench_clone
 ):
-    """A `status.Shell` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes
-    and mtimes unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the
-    timer query (asserted on the `systemctl` fixture), and the only `Queue` methods called are
-    `entries`, `preview`, `add` and `remove` (stubbed)."""
+    """`_loop` over a read-only tree, keys driving the Queue tab, `:run` and `dd`: bytes and mtimes
+    unchanged, no flock/lockf call, no `Popen` started, the only `systemctl` call the timer query
+    (asserted on the `systemctl` fixture), and the only `Queue` methods called are `entries`,
+    `preview`, `add` and `remove` (stubbed)."""
+    import curses
     import fcntl
 
     from wisebench import queue
@@ -656,6 +659,7 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     add_settings(run_unit_settings())
     (records / "DISABLED").write_text("reason\n")
     (records / "lock").touch()
+    terminal(monkeypatch, tmp_path, 0)
     before = snapshot(tmp_path)
     forbidden, popen_argv, calls = [], [], []
     hand = {
@@ -695,20 +699,14 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
     monkeypatch.setattr(fcntl, "flock", refuse_lock)
     monkeypatch.setattr(fcntl, "lockf", refuse_lock)
     monkeypatch.setattr(subprocess, "Popen", record_popen)
-    now = datetime(2026, 11, 10, 10, 0, 0, tzinfo=UTC)
-    keys = ["2", *":run feature-c", "enter", "d", "d", "q"]
-    quit_on = None
+    timeout = curses.error("no input")
+    keys = ["2", timeout, timeout, *":run feature-c", "\n", timeout, "d", "d", timeout, "q"]
+    window = FakeScreen(keys=keys)
     paths = [p for p in [tmp_path, *tmp_path.rglob("*")]]
     for path in paths:
         path.chmod(0o555 if path.is_dir() else 0o444)
     try:
-        shell = status.Shell(bench_clone.checkout, records, run=lambda work: work())
-        shell.tick(now)
-        for key in keys:
-            if shell.press(key):
-                quit_on = key
-                break
-            shell.tick(now)
+        assert status._loop(window, bench_clone.checkout, records, run=lambda work: work()) == 0
     finally:
         for path in paths:
             path.chmod(0o755 if path.is_dir() else 0o644)
@@ -721,8 +719,7 @@ def test_the_watch_writes_nothing_takes_no_lock_and_calls_only_the_views_queue_r
         systemctl.calls
     )
     assert {"entries", "add", "remove"} <= set(calls) <= {"entries", "preview", "add", "remove"}
-    assert quit_on == "q"
-    assert "feature-a" in shown(shell.frame)
+    assert "feature-a" in "".join(window.frames[-1])
 
 
 NAMES = ("checkout", "precondition", "build", "bundle", "host_suite", "target_suite", "posted")

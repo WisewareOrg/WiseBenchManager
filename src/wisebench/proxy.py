@@ -190,13 +190,13 @@ def _flows(path, growing=False):
         `method` is None.
 
     Raises:
-        subprocess.CalledProcessError: The read failed; its `stderr` holds mitmproxy's error.
+        subprocess.CalledProcessError: The read failed; mitmproxy's error is on stderr.
     """
     tools = _tools()
     args = [str(tools / ".venv" / "bin" / "python"), "-I", str(tools / "flows.py")]
     if growing:
         args.append("--growing")
-    result = subprocess.run([*args, str(path)], check=True, capture_output=True, text=True)
+    result = subprocess.run([*args, str(path)], check=True, stdout=subprocess.PIPE, text=True)
     return [json.loads(line) for line in result.stdout.splitlines()]
 
 

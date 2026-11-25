@@ -1,402 +1,197 @@
-"""View: what the user chose, the frame derived from it, and the keys that act on that frame.
+"""The watch view's rules: what the operator sees of the runs, the bench and the queue.
 
-`State` holds the user's intent, and the commands (`run_ref`, `remove_id`, `disable_request`,
-`enable_request`) and message the shell exchanges with `handle`. `resolve` derives the `Frame` to
-show from it and one `Snapshot` of the disk. `handle` reads every position from the frame that was
-shown, and the shell passes it how many rows a half-page key moves. A field of `State` left None
-means "derive it every frame"; a value means the user chose it.
+Nothing here draws; `status` puts these words in Textual's widgets.
 """
 
 import re
-from dataclasses import dataclass, field
 from datetime import datetime
 
-from wisebench.bench_state import Bench
-from wisebench.runlog import KAS_STAMP, Run, Section, Stage, Task
+from rich.style import Style
+from rich.text import Text
 
-TAIL = "tail"
+from wisebench.bench_state import DASH
+from wisebench.runlog import KAS_STAMP, Section
 
+COLOURS = {
+    "passed": "#98c379",
+    "failed": "#e06c75",
+    "running": "#e5c07b",
+    "hand": "#61afef",
+    "dim": "#8b8b8b",
+    "log": "#a8a8a8",
+    "bright": "#ffffff",
+    "rule": "#3a3a3a",
+}
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
-_ENTER = ("\n", "\r")
-_BACKSPACE = ("\x7f", "\b")
-_ESC = "\x1b"
-_ENABLE_PROMPT = "Enable the bench? Clears DISABLED and starts the timer. [y/N]"
-_TAB, _BTAB = "\t", "\x1b[Z"
-_TABS = ("run", "queue", "history")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
-_RUNNING = "▶"
-_MOVES = {"j": "down", "k": "up", "G": "bottom", "\x04": "half_down", "\x15": "half_up"}
+_CONTROLS = {
+    **{code: "^" + chr(code ^ 64) for code in (*range(32), 127)},
+    **{code: f"<{code:x}>" for code in (*range(0x80, 0xA0), 0x2028, 0x2029)},
+}
+_RESULTS = {
+    "passed": ("passed", "passed"),
+    "failed": ("failed", "failed"),
+    "error": ("bench error", "failed"),
+    None: ("no result", "dim"),
+}
 
 
-@dataclass(frozen=True)
-class Snapshot:
-    """The disk and the clock, read once per refresh.
+def clean(text):
+    """`text` safe to put on a terminal: tabs expanded, controls and line separators shown as text.
+
+    See ADR 0006 rev 1.
 
     Args:
-        runs (list[Run]): Every run, newest first.
-        bench (Bench): The bench's live, disabled and timer state.
+        text (str): Text read from a log, a record name, git or GitHub.
+
+    Returns:
+        str: The text with no character a terminal acts on.
+    """
+    return text.expandtabs(8).translate(_CONTROLS)
+
+
+def shown_line(line):
+    """A stage's own output line as shown: kas's `<stamp> - LEVEL - ` prefix dropped.
+
+    Args:
+        line (str): The line as the log holds it.
+
+    Returns:
+        str: The line without the prefix.
+    """
+    return _LOG_PREFIX.sub("", line, count=1)
+
+
+def display_name(name):
+    """A stage name as shown: `host_suite` reads `host suite`.
+
+    Args:
+        name (str): The stage name.
+
+    Returns:
+        str: The name with spaces for underscores.
+    """
+    return name.replace("_", " ")
+
+
+def clock(moment):
+    """`HH:MM:SS` in local time.
+
+    Args:
+        moment (datetime): An aware time.
+
+    Returns:
+        str: The local wall-clock time.
+    """
+    return moment.astimezone().strftime("%H:%M:%S")
+
+
+def took(started, ended, running, now):
+    """How long something took as `MmSSs`: start to end, start to now while running, else a dash.
+
+    Args:
+        started (datetime): The start.
+        ended (datetime | None): The end, or None.
+        running (bool): It is still running.
         now (datetime): The current time.
-        directory (str): The records directory as the History footer names it.
-        queue (list[dict] | None): The last good `Queue.entries()` read; None before one.
-        preview (tuple[str, dict | str] | None): The last `Queue.preview` result: the ref it was
-            asked for, and its result or the error text.
+
+    Returns:
+        str: The duration, minutes unbounded, or a dash.
     """
-
-    runs: list[Run]
-    bench: Bench
-    now: datetime
-    directory: str
-    queue: list[dict] | None = None
-    preview: tuple[str, dict | str] | None = None
+    if ended is None and not running:
+        return DASH
+    seconds = int(((ended or now) - started).total_seconds())
+    return f"{seconds // 60}m{seconds % 60:02d}s"
 
 
-@dataclass
-class State:
-    """What the user chose; the only thing kept between refreshes.
+def run_took(run, running, now):
+    """A run's length in whole minutes: since its start while running, else start to end.
 
     Args:
-        tab (str): "run", "queue", "history" or "help".
-        back (str): The tab `?` and Esc return to from Help.
-        record (str | None): The run shown in Run; None is the newest.
-        stage (str | None): The stage shown; None is the automatic stage.
-        focus (str): "stages" or "log", the pane the movement keys act on.
-        cursor (tuple | str | None): The log cursor: an anchor, TAIL, or None for the default.
-        folds (dict): Section id to True (open) or False (folded), over the default.
-        history_record (str | None): The History selection; None is the run shown in Run.
-        prompt (str | None): The command line's text while it is open.
-        pattern (str | None): The last search pattern.
-        pending (str | None): "g", "z" or "d" while the first key of a pair waits for the second.
-        queue_at (tuple | None): The Queue selection: the identity of the selected row and its
-            index; None selects the first row. A row that has gone leaves its index to clamp.
-        run_ref (str | None): The ref `:run` asked to queue; the shell queues it and clears this.
-        remove_id (int | None): The hand entry `dd` asked to remove; the shell removes it and
-            clears this.
-        disable_request (bool): `:disable` asked to stop the timer; the shell does it and
-            clears this.
-        confirm_enable (bool): `:enable` asked and the next key answers y/N.
-        enable_request (bool): `y` confirmed `:enable`; the shell does it and clears this.
-        message (str | None): The text shown in the command line's row while it is closed.
+        run (Run): The run.
+        running (bool): The bench is running it.
+        now (datetime): The current time.
+
+    Returns:
+        str: `<n>m`, or a dash without a start, or without an end when not running.
     """
-
-    tab: str = "run"
-    back: str = "run"
-    record: str | None = None
-    stage: str | None = None
-    focus: str = "stages"
-    cursor: tuple | str | None = None
-    folds: dict = field(default_factory=dict)
-    history_record: str | None = None
-    prompt: str | None = None
-    pattern: str | None = None
-    pending: str | None = None
-    queue_at: tuple | None = None
-    run_ref: str | None = None
-    remove_id: int | None = None
-    disable_request: bool = False
-    confirm_enable: bool = False
-    enable_request: bool = False
-    message: str | None = None
+    end = now if running else run.ended
+    if run.started is None or end is None:
+        return DASH
+    return f"{int((end - run.started).total_seconds()) // 60}m"
 
 
-@dataclass(frozen=True)
-class Row:
-    """One row of a stage's log.
+def what(run):
+    """What a run tested: `PR #n`, else its ref.
 
     Args:
-        anchor (tuple): (stage name, section id or None, line); a section header is line 0.
-        kind (str): "line" for the stage's own lines, "head" for a section header, "body" for a
-            section's line.
-        text (str): The stage's own line without kas's log prefix, a section line raw, or the
-            section's name.
-        section (Section | None): The section a header or body line belongs to.
-        opened (bool): Whether a header's body shows.
-        end (datetime | None): When a header's section ended: the next section's start, else the
-            stage's end.
+        run (Run): The run.
+
+    Returns:
+        str: The label.
     """
-
-    anchor: tuple
-    kind: str
-    text: str
-    section: Section | None = None
-    opened: bool = False
-    end: datetime | None = None
+    return f"PR #{run.pr}" if run.pr is not None else run.ref or ""
 
 
-@dataclass(frozen=True)
-class QueueRow:
-    """One row of the Queue tab.
+def sha7(run):
+    """The first seven characters of the commit the run checked out, or a dash.
 
     Args:
-        marker (str): "▶" for the running run, else its place in the queue, the running run
-            counting as 1.
-        source (str): "by hand" or "merge queue".
-        what (str): A merge-queue entry reads "PR #<n> <title>"; the running run likewise when the
-            merge queue holds an entry with its PR, else "PR #<n>", or its ref when it has no
-            PR; a hand entry its ref.
-        sha7 (str): The commit's first 7 characters; blank until known (a merge-queue entry
-            GitHub has not built).
-        added (str): A hand entry's local `HH:MM`; blank for the others.
-        stage (str): The running run's open stage; blank for the others.
-        kind (str): "test" or "run".
-        id (int | None): A hand entry's id; None for the running run and the merge-queue entries.
-        pr (int | None): A merge-queue entry's PR number; None for the others.
+        run (Run): The run.
+
+    Returns:
+        str: The short sha.
     """
-
-    marker: str
-    source: str
-    what: str
-    sha7: str
-    added: str
-    stage: str
-    kind: str
-    id: int | None
-    pr: int | None
+    checkout = next((s for s in run.stages if s.name == "checkout"), None)
+    return checkout.sha[:7] if checkout and checkout.sha else DASH
 
 
-@dataclass(frozen=True)
-class Frame:
-    """What one refresh shows, resolved from a `State` and a `Snapshot`.
+def result(run, running):
+    """A run's result as a word and its meaning.
 
     Args:
-        tab (str): The tab shown.
-        prompt (str | None): The command line's text while it is open.
+        run (Run): The run.
+        running (bool): The bench is running it.
+
+    Returns:
+        tuple[str, str]: The word and its meaning: "running", "passed", "failed" or "dim".
+    """
+    return ("running", "running") if running else _RESULTS[run.result]
+
+
+def tone(state, running):
+    """The glyph and meaning of a stage or section state.
+
+    Args:
+        state (str): A `Stage.state` or `Section.outcome`.
+        running (bool): The run is live, so an open stage or section is running.
+
+    Returns:
+        tuple[str, str]: The glyph and the meaning: "passed", "failed", "running" or "dim".
+    """
+    if state == "passed":
+        return "✓", "passed"
+    if state in ("failed", "error"):
+        return "✗", "failed"
+    if state == "open":
+        return ("●", "running") if running else ("?", "dim")
+    return ("–" if state == "skipped" else "·"), "dim"
+
+
+def auto_stage(run, newest, bench):
+    """The stage shown when the operator has not chosen one; None is the run's summary.
+
+    The open stage of the newest run while the bench runs it; the summary of the newest run while
+    the bench is idle; else the first stage that failed, errored or was left open.
+
+    Args:
+        run (Run): The run shown.
+        newest (bool): It is the newest run.
         bench (Bench): The bench's state.
-        now (datetime): The time of the refresh.
-        directory (str): The records directory as the History footer names it.
-        run (Run | None): The run shown in Run.
-        newest (bool): The run shown is the newest.
-        live (bool): The run shown is the newest and the bench is running it.
-        stage (Stage | None): The stage shown; None is the run's summary.
-        pane_head (str): "build", "suite", "plain" or "summary".
-        tasks (tuple[Task, ...]): Every running build task, oldest first.
-        rows (list[Row]): The stage's log rows with folds applied.
-        cursor (int | None): Index of the log cursor in `rows`; None without rows.
-        history (list[Run]): Every run, newest first.
-        history_cursor (int): Index of the History selection.
-        focus (str): "stages" or "log", the pane with focus.
-        queue_rows (list[QueueRow]): The Queue tab's rows: the running run, the hand entries,
-            then the merge-queue entries.
-        queue_cursor (int | None): Index of the Queue selection; None without rows.
-        preview_lines (list[str] | None): The preview box's lines while `:run <ref>` is typed and
-            its result is in; None otherwise.
-        message (str | None): The text shown in the command line's row.
-        pending (str | None): The first key of a pair still waiting for its second.
-    """
-
-    tab: str
-    prompt: str | None
-    bench: Bench
-    now: datetime
-    directory: str
-    run: Run | None
-    newest: bool
-    live: bool
-    stage: Stage | None
-    pane_head: str
-    tasks: tuple[Task, ...]
-    rows: list[Row]
-    cursor: int | None
-    history: list[Run]
-    history_cursor: int
-    focus: str
-    queue_rows: list[QueueRow]
-    queue_cursor: int | None
-    preview_lines: list[str] | None
-    message: str | None
-    pending: str | None
-
-
-def resolve(state, snap):
-    """The frame to show for `state` over `snap`.
-
-    Args:
-        state (State): What the user chose.
-        snap (Snapshot): The runs, the bench and the time.
 
     Returns:
-        Frame: Everything the screen and `handle` need.
+        Stage | None: The stage, or None for the summary.
     """
-    runs = snap.runs
-    run = next((r for r in runs if r.record == state.record), runs[0] if runs else None)
-    newest = run is not None and run is runs[0]
-    live = snap.bench.live and newest
-    stage = _stage(state.stage, run, newest, snap.bench) if run is not None else None
-    pane_head, tasks = _head(stage, live)
-    log = _rows(stage, state.folds) if stage is not None else []
-    cursor = _cursor(state.cursor, stage, log)
-    history_cursor = 0
-    if run is not None:
-        records = [r.record for r in runs]
-        chosen = state.history_record if state.history_record in records else run.record
-        history_cursor = records.index(chosen)
-    queue_rows = _queue_rows(snap)
-    return Frame(
-        tab=state.tab,
-        prompt=state.prompt,
-        bench=snap.bench,
-        now=snap.now,
-        directory=snap.directory,
-        run=run,
-        newest=newest,
-        live=live,
-        stage=stage,
-        pane_head=pane_head,
-        tasks=tasks,
-        rows=log,
-        cursor=cursor,
-        history=runs,
-        history_cursor=history_cursor,
-        focus=state.focus,
-        queue_rows=queue_rows,
-        queue_cursor=_queue_cursor(state.queue_at, queue_rows),
-        preview_lines=_preview_lines(state.prompt, snap.preview, queue_rows),
-        message=state.message,
-        pending=state.pending,
-    )
-
-
-def _pr_label(entry):
-    """A merge-queue entry's `what`: `PR #<n> <title>`."""
-    return f"PR #{entry['pr']} {entry['title']}"
-
-
-def _queue_rows(snap):
-    """The Queue tab's rows: the running run, the hand entries, then the merge-queue entries.
-
-    The running run is the newest run while the bench is running it. A merge-queue entry is left
-    out while its sha is the sha the running run checked out; the running run takes its title
-    from the entry with its PR number.
-    """
-    rows, running_sha = [], None
-    if snap.bench.live and snap.runs:
-        run = snap.runs[0]
-        opened = next((s for s in run.stages if s.state == "open"), None)
-        checkout = next((s for s in run.stages if s.name == "checkout"), None)
-        running_sha = checkout.sha if checkout else None
-        what = run.ref or ""
-        if run.pr:
-            what = f"PR #{run.pr}"
-            merge_entry = next(
-                (e for e in snap.queue or [] if e["kind"] == "run" and e["pr"] == run.pr), None
-            )
-            if merge_entry:
-                what = _pr_label(merge_entry)
-        rows.append(
-            QueueRow(
-                _RUNNING,
-                "by hand" if run.kind == "test" else "merge queue",
-                what,
-                (running_sha or "")[:7],
-                "",
-                opened.name if opened else "",
-                run.kind or "",
-                None,
-                None,
-            )
-        )
-    for entry in snap.queue or []:
-        if entry["kind"] == "run" and entry["sha"] is not None and entry["sha"] == running_sha:
-            continue
-        hand = entry["kind"] == "test"
-        added = (
-            datetime.fromisoformat(entry["added"]).astimezone().strftime("%H:%M") if hand else ""
-        )
-        rows.append(
-            QueueRow(
-                str(len(rows) + 1),
-                "by hand" if hand else "merge queue",
-                entry["ref"] if hand else _pr_label(entry),
-                (entry["sha"] or "")[:7],
-                added,
-                "",
-                entry["kind"],
-                entry["id"] if hand else None,
-                None if hand else entry["pr"],
-            )
-        )
-    return rows
-
-
-def _identity(row):
-    """What keeps the Queue selection on a row as rows come and go."""
-    if row.marker == _RUNNING:
-        return ("running",)
-    return ("hand", row.id) if row.id is not None else ("merge", row.pr)
-
-
-def _queue_cursor(at, rows):
-    """Index of the Queue selection among `rows`; None without rows.
-
-    The selection is its row, else the index it had; either is held to the last row.
-    """
-    if not rows:
-        return None
-    last = len(rows) - 1
-    if at is None:
-        return 0
-    identity, index = at
-    found = next((i for i, row in enumerate(rows) if _identity(row) == identity), None)
-    return min(found if found is not None else index, last)
-
-
-def typed_ref(prompt):
-    """The ref typed after `:run `, stripped.
-
-    Args:
-        prompt (str | None): The command line's text, or None while it is closed.
-
-    Returns:
-        str | None: The ref; None when the command line holds no such ref.
-    """
-    found = prompt is not None and _RUN_PROMPT.fullmatch(prompt)
-    return (found.group(1).strip() or None) if found else None
-
-
-def split_run(text):
-    """Split what `:run ` was typed with into the directory after `-C` and the ref.
-
-    Args:
-        text (str): The text after `:run `, as `typed_ref` returns it.
-
-    Returns:
-        tuple[str | None, str]: The directory (no spaces in it) and the ref after `-C <dir> `; or
-        None and `text` as it is when it does not begin with `-C <dir> <ref>`.
-    """
-    found = re.fullmatch(r"-C\s+(\S+)\s+(\S.*)", text)
-    return (found.group(1), found.group(2)) if found else (None, text)
-
-
-def _preview_lines(prompt, preview, rows):
-    """The preview box for the ref typed after `:run `, once its result is in; else None.
-
-    The place counts the running run and the hand entries up to the new one; the merge-queue
-    entries come after it.
-    """
-    ref = typed_ref(prompt)
-    if ref is None or preview is None or preview[0] != ref:
-        return None
-    result = preview[1]
-    if isinstance(result, str):
-        return [f"{ref} does not resolve"]
-    state = "clean tree" if result["clean"] else "uncommitted changes in the checkout"
-    ahead = [row for row in rows if row.marker == _RUNNING or row.kind == "test"]
-    place = f"joins as {len(ahead) + 1}" + (f", after {ahead[-1].what}" if ahead else "")
-    return [
-        "will queue",
-        f'resolves to {result["sha"][:7]} "{result["subject"]}", {state}',
-        place,
-    ]
-
-
-def _stage(chosen, run, newest, bench):
-    """The stage shown: the one chosen, else the automatic stage.
-
-    The automatic stage is the open stage of the newest run while it is live, none (the summary)
-    for the newest run while the bench is idle, else the first stage that failed, errored or was
-    left open.
-    """
-    if chosen is not None:
-        return next((s for s in run.stages if s.name == chosen), None)
     if newest and bench.live:
         return next((s for s in run.stages if s.state == "open"), None)
     if newest and not bench.disabled:
@@ -404,71 +199,74 @@ def _stage(chosen, run, newest, bench):
     return next((s for s in run.stages if s.state in ("failed", "error", "open")), None)
 
 
-def _head(stage, live):
-    """(pane head, the running tasks) for the stage shown.
-
-    A suite's head is its counts line and a plain stage's its output label. A build adds its
-    progress line and bar, and while running a `running now` line and every running task, oldest
-    first.
-    """
-    if stage is None:
-        return "summary", ()
-    if stage.sections:
-        return "suite", ()
-    if stage.progress is None:
-        return "plain", ()
-    if not (live and stage.state == "open"):
-        return "build", ()
-    return "build", tuple(sorted(stage.progress.tasks, key=_by_start))
-
-
-def _by_start(task):
-    """Sort key for running tasks: by start time, a task without one last."""
-    return (task.started is None, task.started.timestamp() if task.started else 0)
-
-
-def _is_open(folds, section):
-    """Whether a section's body shows: the choice in `folds`, else open while running or failed.
+def counts(stage):
+    """A suite's test counts.
 
     Args:
-        folds (dict): Section id to True (open) or False (folded).
-        section (Section): The section.
+        stage (Stage): The suite stage.
 
     Returns:
-        bool: True if the body shows.
+        tuple[int, int, int, int]: Started or reported, queued, passed, failed.
     """
-    return folds.get(section.id, section.outcome in ("open", "failed"))
+    tests = [s for s in stage.sections if s.kind == "test"]
+    return (
+        sum(s.outcome != "not-started" for s in tests),
+        len(tests),
+        sum(s.outcome == "passed" for s in tests),
+        sum(s.outcome == "failed" for s in tests),
+    )
 
 
-def _rows(stage, folds, expand=False):
-    """The log rows of a stage: its own lines, then each section's header and open body.
+def typed_run(text):
+    """The directory and the ref typed after `:run `.
+
+    Args:
+        text (str): The command line's text.
+
+    Returns:
+        tuple[str | None, str] | None: The directory (no spaces in it) after `-C` and the ref, with
+        None as the directory when the ref is not `-C <dir> <ref>`; None when the text is not
+        `:run <ref>`.
+    """
+    found = _RUN_PROMPT.fullmatch(text)
+    ref = found.group(1).strip() if found else ""
+    if not ref:
+        return None
+    with_directory = re.fullmatch(r"-C\s+(\S+)\s+(\S.*)", ref)
+    return with_directory.groups() if with_directory else (None, ref)
+
+
+def styled(text, meaning=None, bold=False):
+    """Text safe to draw, in the colour of its meaning.
+
+    Args:
+        text (str): The text, from anywhere.
+        meaning (str | None): A key of `COLOURS`, or None for the text colour.
+        bold (bool): Draw it bold.
+
+    Returns:
+        Text: The cleaned text.
+    """
+    return Text(clean(text), Style(color=COLOURS.get(meaning), bold=bold))
+
+
+def line(*parts):
+    """One line of several colours.
+
+    Args:
+        *parts (tuple): Arguments of `styled`.
+
+    Returns:
+        Text: The parts joined.
+    """
+    return Text.assemble(*(styled(*part) for part in parts), no_wrap=True, overflow="ellipsis")
+
+
+def section_ends(stage):
+    """When each section ended: the next started section's start, else the stage's end.
 
     Args:
         stage (Stage): The stage.
-        folds (dict): Section id to True (open) or False (folded).
-        expand (bool): List the bodies of folded sections too, for search.
-
-    Returns:
-        list[Row]: The rows in display order.
-    """
-    rows = [
-        Row((stage.name, None, i), "line", _LOG_PREFIX.sub("", line))
-        for i, line in enumerate(stage.lines)
-    ]
-    for section, end in zip(stage.sections, _section_ends(stage), strict=True):
-        opened = _is_open(folds, section)
-        rows.append(Row((stage.name, section.id, 0), "head", section.name, section, opened, end))
-        if opened or expand:
-            body = [*section.lines, *section.failure]
-            rows.extend(
-                Row((stage.name, section.id, i), "body", line, section)
-                for i, line in enumerate(body, 1)
-            )
-    return rows
-
-
-def _section_ends(stage):
-    """When each section of a stage ended: the next started section's start, else the stage's end.
 
     Returns:
         list[datetime | None]: One end per section, in section order.
@@ -476,269 +274,383 @@ def _section_ends(stage):
     ends, following = [], stage.ended
     for section in reversed(stage.sections):
         ends.append(following)
-        if section.started is not None:
-            following = section.started
+        following = section.started or following
     return ends[::-1]
 
 
-def _cursor(chosen, stage, rows):
-    """Index of the log cursor among `rows`, or None without rows.
+def outline(stage):
+    """A suite's sections as its tree shows them, with when each ended.
 
-    TAIL is the last row. An anchor is its row, else its section's header when folded away, else
-    the default: the first failed section's header, else the running section's header, else the
-    first row; a stage without sections defaults to its last row.
-    """
-    if not rows:
-        return None
-    if chosen == TAIL:
-        return len(rows) - 1
-    anchors = [row.anchor for row in rows]
-    if chosen in anchors:
-        return anchors.index(chosen)
-    if chosen is not None and chosen[1] is not None:
-        header = (chosen[0], chosen[1], 0)
-        if header in anchors:
-            return anchors.index(header)
-    if not stage.sections:
-        return len(rows) - 1
-    wanted = next((s for s in stage.sections if s.outcome == "failed"), None) or next(
-        (s for s in stage.sections if s.outcome == "open"), None
-    )
-    return anchors.index((stage.name, wanted.id, 0)) if wanted else 0
-
-
-def handle(state, key, frame, page):
-    """Apply one key to `state`, reading every position from the frame that was shown.
+    A suite's own output, when it has any, comes first, as a section that failed when the stage
+    errored.
 
     Args:
-        state (State): What the user chose; changed in place.
-        key (str): A character, or a sequence the shell translated a named key to.
-        frame (Frame): The frame on screen when the key was pressed.
-        page (int): How many rows `^d` and `^u` move, at least 1.
+        stage (Stage): The suite.
 
     Returns:
-        bool: True to quit.
+        list[tuple[Section, datetime | None]]: Each section and its end.
     """
-    if state.confirm_enable:
-        state.confirm_enable, state.message = False, None
-        state.enable_request = key == "y"
-        return False
-    if state.prompt is not None:
-        return _prompt_key(state, key, frame)
-    if state.tab == "help":
-        return _help_key(state, key)
-    pending, state.pending = state.pending, None
-    if pending == "g":
-        if key == "g":
-            _move(state, "top", frame, page)
-        return False
-    if pending == "z":
-        if key in ("a", "R", "M"):
-            _fold(state, key, frame)
-        return False
-    if pending == "d":
-        if key == "d":
-            _remove(state, frame)
-        return False
-    if key == "q":
-        return True
-    if key in (":", ";"):
-        _open_prompt(state)
-    elif key == "/":
-        if state.tab == "run" and frame.rows:
-            state.prompt = "/"
-    elif key == "?":
-        state.back, state.tab = state.tab, "help"
-    elif key in (_TAB, _BTAB):
-        _show(state, _TABS[(_TABS.index(state.tab) + (1 if key == _TAB else -1)) % len(_TABS)])
-    elif key == "2":
-        _show(state, "queue")
-    elif key == "3":
-        _show(state, "history")
-    elif key == "1":
-        _open(state, None)
-    elif key in ("[", "]"):
-        if state.tab == "run":
-            _step(state, frame, 1 if key == "[" else -1)
-    elif key in ("g", "z"):
-        state.pending = key
-    elif key == "d":
-        if state.tab == "queue":
-            state.pending = key
-    elif key in _ENTER:
-        _enter(state, frame)
-    elif key == _ESC:
-        state.focus, state.message = "stages", None
-    elif key in ("n", "N"):
-        _search(state, frame, 1 if key == "n" else -1)
-    elif key in _MOVES:
-        _move(state, _MOVES[key], frame, page)
-    return False
+    rows = list(zip(stage.sections, section_ends(stage), strict=True))
+    if stage.lines:
+        outcome = "failed" if stage.state == "error" else "passed"
+        output = Section(
+            (stage.name, "output", "", 0), "output", "output", outcome, None, stage.lines, ()
+        )
+        rows.insert(0, (output, None))
+    return rows
 
 
-def _prompt_key(state, key, frame):
-    """A key while the command line is open: edit it, close it, or run it on Enter."""
-    if key == _ESC:
-        state.prompt = None
-    elif key in _ENTER:
-        text, state.prompt = state.prompt, None
-        if text == ":q":
-            return True
-        if text == ":disable":
-            state.disable_request = True
-        if text == ":enable":
-            state.confirm_enable, state.message = True, _ENABLE_PROMPT
-        if (ref := typed_ref(text)) is not None:
-            state.run_ref = ref
-        if text.startswith("/") and len(text) > 1:
-            state.pattern = text[1:]
-            _search(state, frame, 1)
-    elif key in _BACKSPACE:
-        state.prompt = state.prompt[:-1] or None
-    elif isinstance(key, str) and key.isprintable():
-        state.prompt += key
-        if state.prompt == ":run ":
-            _show(state, "queue")
-    return False
+def landing(sections):
+    """Where a suite's cursor lands: its first failed section, else its open one, else its first.
 
+    Args:
+        sections (list[Section]): The suite's sections as `outline` gives them.
 
-def _help_key(state, key):
-    """A key on the Help tab: back, quit or the command line; every other key is ignored."""
-    if key in ("?", _ESC):
-        state.tab = state.back
-    elif key == "q":
-        return True
-    elif key in (":", ";"):
-        _open_prompt(state)
-    return False
-
-
-def _open_prompt(state):
-    """Open the command line; it clears the message."""
-    state.prompt, state.message = ":", None
-
-
-def _show(state, tab):
-    """Show Run, Queue or History.
-
-    Entering Queue selects its first row; entering History selects the run shown in Run.
+    Returns:
+        int: The place.
     """
-    if tab == "history" and state.tab != "history":
-        state.history_record = None
-    if tab == "queue" and state.tab != "queue":
-        state.queue_at = None
-    state.tab = tab
+    rank = {"failed": 0, "open": 1}
+    return min(range(len(sections)), key=lambda i: rank.get(sections[i].outcome, 2))
 
 
-def _remove(state, frame):
-    """`dd`: ask to remove the selected hand entry; any other row says it cannot be."""
-    if frame.queue_cursor is None:
-        return
-    row = frame.queue_rows[frame.queue_cursor]
-    if row.id is None:
-        state.message = "only hand-queued runs can be removed"
-    else:
-        state.remove_id = row.id
+def run_title(run, newest, bench):
+    """The line over the Run tab.
 
+    Args:
+        run (Run): The run shown.
+        newest (bool): It is the newest run.
+        bench (Bench): The bench's state.
 
-def _open(state, record):
-    """Show a run in Run in its automatic state; None is the newest run."""
-    state.tab, state.record, state.stage, state.cursor = "run", record, None, None
-    state.focus = "stages"
-
-
-def _step(state, frame, direction):
-    """Show the next older (1) or newer (-1) run; nothing at either end."""
-    if frame.run is None:
-        return
-    index = frame.history.index(frame.run) + direction
-    if 0 <= index < len(frame.history):
-        _open(state, None if index == 0 else frame.history[index].record)
-
-
-def _enter(state, frame):
-    """Enter: open the History selection in Run, or move focus into a log that has rows."""
-    if state.tab == "history":
-        if frame.history:
-            index = frame.history_cursor
-            _open(state, None if index == 0 else frame.history[index].record)
-    elif frame.rows:
-        state.focus = "log"
-
-
-def _index_after(kind, at, count, page):
-    """The index a `kind` of movement reaches from `at` (None: no selection) among `count` rows."""
-    if kind == "top":
-        return 0
-    if kind == "bottom":
-        return count - 1
-    if at is None:
-        at = -1 if kind in ("down", "half_down") else count
-    step = {"down": 1, "up": -1, "half_down": page, "half_up": -page}[kind]
-    return min(max(at + step, 0), count - 1)
-
-
-def _move(state, kind, frame, page):
-    """Move the Queue or History selection, the log cursor or the stage, by the tab and focus.
-
-    A half-page move is `page` rows. In the log, `G` follows its tail. The log focus acts on the
-    stage list while the log has no rows.
+    Returns:
+        Text: What it tested, its sha and record; `last run` first while the bench is idle, and
+        its result and end when it is a past run.
     """
-    if state.tab == "queue":
-        if frame.queue_rows:
-            index = _index_after(kind, frame.queue_cursor, len(frame.queue_rows), page)
-            state.queue_at = (_identity(frame.queue_rows[index]), index)
-    elif state.tab == "history":
-        if frame.history:
-            index = _index_after(kind, frame.history_cursor, len(frame.history), page)
-            state.history_record = frame.history[index].record
-    elif state.focus == "log" and frame.rows:
-        if kind == "bottom":
-            state.cursor = TAIL
+    parts = [(what(run), "bright", True), (f"  {sha7(run)}  record {run.record}", "dim")]
+    if not newest:
+        ended = f"  ended {clock(run.ended)}" if run.ended else ""
+        parts += [("  ",), (*result(run, False), True), (ended, "dim")]
+    elif not bench.live and not bench.disabled:
+        parts.insert(0, ("last run  ", "dim"))
+    return line(*parts)
+
+
+def stage_cells(stage, running, now):
+    """A stage's cells in the stage list.
+
+    Args:
+        stage (Stage): The stage.
+        running (bool): The bench is running its run.
+        now (datetime): The current time.
+
+    Returns:
+        tuple: Glyph and name, start and took, in the stage's colour.
+    """
+    glyph, meaning = tone(stage.state, running)
+    times = ("", "")
+    if stage.started and stage.state != "skipped":
+        open_ = running and stage.state == "open"
+        times = clock(stage.started), took(stage.started, stage.ended, open_, now)
+    cells = (f"{glyph} {display_name(stage.name)}", *times)
+    return tuple(styled(cell, meaning, meaning in ("running", "failed")) for cell in cells)
+
+
+def section_label(section, end, running, now):
+    """A test's or setup's line in the suite's log.
+
+    Args:
+        section (Section): The section.
+        end (datetime | None): When it ended.
+        running (bool): The bench is running its run.
+        now (datetime): The current time.
+
+    Returns:
+        Text: Glyph, `setup` for a setup, its name, and how long it took.
+    """
+    glyph, meaning = tone(section.outcome, running)
+    parts = [(f"{glyph} ", meaning, True)]
+    if section.kind == "setup":
+        parts.append(("setup ", "hand", True))
+    parts.append((section.name, meaning, meaning in ("running", "failed")))
+    if section.started:
+        length = took(section.started, end, running and section.outcome == "open", now)
+        parts.append((f"  {length}", "dim"))
+    return line(*parts)
+
+
+def head(run, stage, live, now):
+    """The lines over a stage's log.
+
+    Args:
+        run (Run): The run shown.
+        stage (Stage | None): The stage shown, or None for the run's summary.
+        live (bool): The bench is running this run.
+        now (datetime): The current time.
+
+    Returns:
+        Text: The summary, or a suite's tally, or a build's progress, bar and running tasks.
+    """
+    if stage is None:
+        return summary(run, live, now)
+    _, meaning = tone(stage.state, live)
+    name = (display_name(stage.name), meaning, True)
+    if stage.sections:
+        return suite_tally(stage, name)
+    rows = []
+    if stage.progress:
+        rows = build_progress(stage, name, meaning, live, now)
+    return Text("\n").join([*rows, line(("this stage's output", "dim"))])
+
+
+def summary(run, live, now):
+    """A run's result and what each suite passed.
+
+    Args:
+        run (Run): The run.
+        live (bool): The bench is running it.
+        now (datetime): The current time.
+
+    Returns:
+        Text: The result line, then a line per suite that has tests.
+    """
+    word, meaning = result(run, live)
+    ended = f"  ended {clock(run.ended)}, took {run_took(run, live, now)}" if run.ended else ""
+    rows = [line((word, meaning, True), (ended, "dim"))]
+    for suite in run.stages:
+        _, queued, passed, failed = counts(suite)
+        if queued:
+            tally = f"{passed} passed"
+            if failed:
+                tally += f"  {failed} failed"
+            rows.append(line((f"{display_name(suite.name):<14}", "dim"), (tally,)))
+    return Text("\n").join(rows)
+
+
+def suite_tally(stage, name):
+    """A suite's name and how many of its tests started, passed and failed.
+
+    Args:
+        stage (Stage): The suite.
+        name (tuple): Its name, meaning and bold, for `line`.
+
+    Returns:
+        Text: The tally.
+    """
+    started, queued, passed, failed = counts(stage)
+    tally = [(f"  {started} of {queued}  ",), (f"{passed} passed", "passed")]
+    tally.append((f"  {failed} failed", "failed" if failed else "dim"))
+    return line(name, *tally)
+
+
+def build_progress(stage, name, meaning, live, now):
+    """A build's progress line and bar, and the tasks running while it is live.
+
+    Args:
+        stage (Stage): The build, with `progress`.
+        name (tuple): Its name, meaning and bold, for `line`.
+        meaning (str): The stage's colour.
+        live (bool): The bench is running it.
+        now (datetime): The current time.
+
+    Returns:
+        list[Text]: The lines.
+    """
+    progress = stage.progress
+    share = progress.done / progress.total if progress.total else 0
+    numbers = f"  {progress.phase} {progress.done} of {progress.total}  {share:.0%}"
+    filled = round(33 * share)
+    rows = [
+        line(name, (numbers,)),
+        line(("█" * filled, meaning), ("█" * (33 - filled), "rule")),
+        Text(),
+    ]
+    if live and stage.state == "open" and progress.tasks:
+        first_eight = sorted(progress.tasks, key=lambda t: (not t.started, t.started or now))[:8]
+        recipe = max(len(t.recipe) for t in first_eight) + 2
+        task = max(len(t.task) for t in first_eight) + 2
+        rows.append(line(("running now", "dim")))
+        for each in first_eight:
+            elapsed = took(each.started, None, True, now) if each.started else DASH
+            rows.append(line((f"{each.recipe:<{recipe}}{each.task:<{task}}{elapsed}",)))
+        rows.append(Text())
+    return rows
+
+
+def failure(stopped, run):
+    """The box a disabled bench shows.
+
+    Args:
+        stopped (str): The `DISABLED` file's text: its UTC time, then its reason.
+        run (Run): The newest run.
+
+    Returns:
+        Text: Whose failure it is, the reason, and the setup it stopped in and when.
+    """
+    stamp, _, reason = stopped.partition("\n")
+    setups = [
+        each.name
+        for stage in run.stages
+        for each in stage.sections
+        if each.kind == "setup" and each.outcome in ("failed", "open")
+    ]
+    where = f"in setup {setups[-1]}; " if setups else ""
+    return Text("\n").join(
+        [
+            line(("bench failure, not the candidate's", "failed", True)),
+            line((reason.strip(),)),
+            line((f"{where}from the DISABLED file, {since(stamp)}", "dim")),
+        ]
+    )
+
+
+def since(stamp):
+    """The `DISABLED` file's time as shown.
+
+    Args:
+        stamp (str): Its first line.
+
+    Returns:
+        str: The local time, or a dash when it does not parse.
+    """
+    try:
+        return clock(datetime.fromisoformat(stamp.strip()))
+    except ValueError:
+        return DASH
+
+
+def state_line(bench, stopped, run):
+    """The status bar.
+
+    Args:
+        bench (Bench): The bench's state.
+        stopped (str): The `DISABLED` file's text.
+        run (Run | None): The newest run.
+
+    Returns:
+        Text: The state's badge, the timer, and since when the bench is disabled.
+    """
+    word, meaning = ("RUNNING", "running") if bench.live else ("IDLE", "rule")
+    if bench.disabled and not bench.live:
+        word, meaning = "DISABLED", "failed"
+    badge = Text(f" {word} ", Style(color="#0c0c0c", bgcolor=COLOURS[meaning], bold=True))
+    timer = {"on": "passed", "off": "failed"}.get(bench.timer, "dim")
+    text = Text.assemble(badge, line(("  timer ", "dim"), (bench.timer, timer)))
+    if bench.disabled and run:
+        unposted = any(s.name == "posted" and s.state != "passed" for s in run.stages)
+        since_when = since(stopped.partition("\n")[0])
+        text += line(("  since ", "dim"), (since_when + (", nothing posted" if unposted else ""),))
+    return text
+
+
+def table(rows):
+    """Table rows with every cell padded to its column, so a row's ground has no gaps.
+
+    Args:
+        rows (list[tuple]): Per row, its key and its cells.
+
+    Returns:
+        list[tuple]: The rows.
+    """
+    for column in zip(*(cells for _, cells in rows), strict=True):
+        width = max(cell.cell_len for cell in column) + 2
+        for cell in column:
+            cell.pad_right(width - cell.cell_len)
+    return rows
+
+
+def history_rows(runs, bench, now):
+    """The History table's rows.
+
+    Args:
+        runs (list[Run]): Every run, newest first.
+        bench (Bench): The bench's state.
+        now (datetime | None): The current time while a run is live.
+
+    Returns:
+        list[tuple]: Per run, its record and its cells: record, what, sha, result, took, and the
+        stage that failed or `by hand`.
+    """
+    rows = []
+    for i, run in enumerate(runs):
+        live = bench.live and i == 0
+        failing = next((s.name for s in run.stages if s.state in ("failed", "error")), None)
+        hand = ("by hand", "hand") if run.kind == "test" else ("",)
+        note = (display_name(failing), "dim") if failing else hand
+        cells = (
+            styled(run.record),
+            styled(what(run)[:40]),
+            styled(sha7(run)),
+            styled(*result(run, live)),
+            styled(f"{run_took(run, live, now):>4}"),
+            styled(*note),
+        )
+        rows.append((run.record, cells))
+    return table(rows)
+
+
+def queue_rows(runs, bench, entries):
+    """The Queue table's rows: the running run, the hand entries, then the merge-queue entries.
+
+    The running run takes its title from the merge entry with its PR, and the merge entry for the
+    commit it checked out is left out.
+
+    Args:
+        runs (list[Run]): Every run, newest first.
+        bench (Bench): The bench's state.
+        entries (list[dict]): `Queue.entries()`.
+
+    Returns:
+        list[tuple]: Per row, its key (`running`, `hand <id>` or `merge <pr>`) and its cells:
+        place, source, what, sha, added, and the running run's stage.
+    """
+    rows, running_sha = [], None
+    if bench.live and runs:
+        run = runs[0]
+        opened = next((display_name(s.name) for s in run.stages if s.state == "open"), "")
+        running_sha = next((s.sha for s in run.stages if s.name == "checkout"), None)
+        merge = next((e for e in entries if e["kind"] == "run" and e["pr"] == run.pr), None)
+        label = what(run) + (f" {merge['title']}" if run.pr and merge else "")
+        source = "by hand" if run.kind == "test" else "merge queue"
+        cells = [("▶", "running"), (source,), (label,), ((running_sha or "")[:7],), ("",)]
+        cells.append((f"running, {opened}", "running"))
+        rows.append(("running", tuple(styled(*cell) for cell in cells)))
+        for cell in rows[0][1]:
+            cell.style += Style(bgcolor="#2a2614")
+    for entry in entries:
+        place, sha = (str(len(rows) + 1),), ((entry["sha"] or "")[:7],)
+        if entry["kind"] == "test":
+            added = datetime.fromisoformat(entry["added"]).astimezone().strftime("%H:%M")
+            key, cells = (
+                f"hand {entry['id']}",
+                (("by hand", "hand"), (entry["ref"],), sha, (added,)),
+            )
+        elif not entry["sha"] or entry["sha"] != running_sha:
+            title = f"PR #{entry['pr']} {entry['title']}"
+            key, cells = f"merge {entry['pr']}", (("merge queue",), (title,), sha, ("",))
         else:
-            index = _index_after(kind, frame.cursor, len(frame.rows), page)
-            state.cursor = frame.rows[index].anchor
-    elif frame.run is not None:
-        names = [stage.name for stage in frame.run.stages]
-        at = names.index(frame.stage.name) if frame.stage is not None else None
-        state.stage = names[_index_after(kind, at, len(names), page)]
+            continue
+        rows.append((key, tuple(styled(*cell) for cell in (place, *cells, ("",)))))
+    return table(rows)
 
 
-def _fold(state, op, frame):
-    """Fold in the log: `za` the cursor's section, `zR` and `zM` every section of the stage.
+def preview(ref, outcome, rows):
+    """The box `:run <ref>` shows while it is typed.
 
-    `za` toggles the section and puts the cursor on its header; `zR` opens all, `zM` folds all.
+    Args:
+        ref (str): The ref typed.
+        outcome (dict | Exception): `Queue.preview`'s result, or what it raised.
+        rows (list[tuple]): The Queue table's rows.
+
+    Returns:
+        Text: The commit and its subject, whether the checkout is clean, and its place: after the
+        running run and the hand-queued runs; or that the ref does not resolve.
     """
-    if state.tab != "run" or state.focus != "log" or not frame.rows:
-        return
-    if op == "a":
-        section = frame.rows[frame.cursor].section
-        if section is None:
-            return
-        state.folds[section.id] = not _is_open(state.folds, section)
-        state.cursor = (frame.stage.name, section.id, 0)
-    else:
-        for section in frame.stage.sections:
-            state.folds[section.id] = op == "R"
-
-
-def _search(state, frame, direction):
-    """Move the cursor to the next (1) or previous (-1) line holding the pattern.
-
-    It wraps and covers every line of the stage, folded bodies included; a match in a folded body
-    unfolds its section, and a match takes focus. Nothing moves on a miss.
-    """
-    if state.tab != "run" or not frame.rows or not state.pattern:
-        return
-    rows = _rows(frame.stage, state.folds, expand=True)
-    current = frame.rows[frame.cursor].anchor
-    at = next(i for i, row in enumerate(rows) if row.anchor == current)
-    for step in range(1, len(rows) + 1):
-        row = rows[(at + direction * step) % len(rows)]
-        if state.pattern in row.text:
-            break
-    else:
-        return
-    if row.kind == "body" and not _is_open(state.folds, row.section):
-        state.folds[row.section.id] = True
-    state.cursor, state.focus = row.anchor, "log"
+    if isinstance(outcome, Exception):
+        return line((f"{ref} does not resolve", "failed"))
+    state = "clean tree" if outcome["clean"] else "uncommitted changes in the checkout"
+    ahead = [cells for key, cells in rows if key == "running" or key.startswith("hand")]
+    place = f"joins as {len(ahead) + 1}"
+    place += f", after {ahead[-1][2].plain.strip()}" if ahead else ""
+    resolved = f'resolves to {outcome["sha"][:7]} "{outcome["subject"]}", {state}'
+    return Text("\n").join(
+        [line(("will queue", "hand", True)), line((resolved, "dim")), line((place, "dim"))]
+    )
