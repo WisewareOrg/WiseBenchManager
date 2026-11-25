@@ -14,7 +14,7 @@ Tabs:focus Tab.-active { color: $ground; background: $hand; text-style: none; }
 
 DataTable > .datatable--header, DataTable:focus > .datatable--header { color: $dim; text-style: none; }
 DataTable > .datatable--cursor, DataTable:focus > .datatable--cursor { background: $selection; color: $ink; text-style: none; }
-Tree > .tree--cursor { text-style: none; }
+Tree > .tree--cursor { background: $ground; color: $ink; text-style: none; }
 Tree:focus > .tree--cursor { background: $selection; color: $ink; text-style: none; }
 Tree > .tree--guides, Tree:focus > .tree--guides, Tree > .tree--guides-selected, Tree:focus > .tree--guides-selected { color: $ground; }
 Log { color: $log; }
