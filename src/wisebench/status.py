@@ -5,6 +5,7 @@ Writes go through `Queue` and `bench_state` only; nothing here takes a lock or r
 
 import asyncio
 import contextlib
+import subprocess
 import sys
 import threading
 from datetime import UTC, datetime
@@ -48,6 +49,8 @@ ENABLE = (
     " [y/N]"
 )
 
+NO_UNIT = "no [run] unit in the bench's settings file"
+
 VIM = {
     "j": "down",
     "k": "up",
@@ -80,6 +83,12 @@ async def in_daemon_thread(call, *args):
     future = loop.create_future()
 
     def settle(result, exc):
+        """Give the future what `call` came to, unless the future was cancelled.
+
+        Args:
+            result (object): What `call` returned; None when it raised.
+            exc (Exception | None): What `call` raised.
+        """
         if not future.cancelled():
             if exc is None:
                 future.set_result(result)
@@ -87,6 +96,7 @@ async def in_daemon_thread(call, *args):
                 future.set_exception(exc)
 
     def run():
+        """Call `call` and hand what came of it to the loop, unless the loop has closed."""
         try:
             result, exc = call(*args), None
         except Exception as caught:
@@ -283,9 +293,9 @@ class RunView(Vertical):
         if suite:
             self.show_tests(tests, stage, new, live, now)
         elif stage and stage is not self.drawn:
-            lines = [view.shown_line(text) for text in stage.lines]
-            log.write_lines([view.clean(text) or " " for text in lines[len(self.lines) :]])
-            self.lines = lines
+            shown = [view.shown_line(text) for text in stage.lines[len(self.lines) :]]
+            log.write_lines([view.clean(text) or " " for text in shown])
+            self.lines += shown
         self.drawn = stage
 
     watch_picked = watch_seen
@@ -363,7 +373,10 @@ class RunView(Vertical):
             bool: Whether a line holds it.
         """
         stage = self.run and self.stage
-        rows = [(None, i, text) for i, text in enumerate(stage.lines if stage else ())]
+        rows = [
+            (None, i, text)
+            for i, text in enumerate(map(view.shown_line, stage.lines if stage else ()))
+        ]
         for i, each in enumerate(stage.sections if stage else ()):
             body = (each.name, *each.lines, *each.failure)
             rows += [(i, j, text) for j, text in enumerate(body)]
@@ -434,6 +447,7 @@ class Watch(App):
         self.directory, self.records = Path(directory), Records(directory)
         self.queue, self.unit = Queue(Path(checkout), Path(directory)), read_run_unit()
         self.target, self.asking, self.animation_level = None, False, "none"
+        self.made = {}
 
     def compose(self):
         """Lay out the tab line, the views, the status bar and the command line.
@@ -510,13 +524,14 @@ class Watch(App):
             try:
                 self.entries = await in_daemon_thread(self.queue.entries)
             except Exception as exc:
-                self.say(exc)
+                if not self.query_one("#command-row").display:
+                    self.say(exc)
             await asyncio.sleep(30)
 
     def watch_seen(self):
         """Show the new read."""
         runs, bench, stopped, now = self.seen
-        self.query_one("#history-rows").rows_shown = view.history_rows(runs, bench, now)
+        self.query_one("#history-rows").rows_shown = view.history_rows(runs, bench, now, self.made)
         self.query_one("#count").update(f"{len(runs)} records in {self.directory.name}/")
         state = view.state_line(bench, stopped, runs[0] if runs else None)
         self.query_one("#state").update(state)
@@ -610,6 +625,7 @@ class Watch(App):
         Args:
             text (str): What it starts with.
         """
+        self.asking = False
         self.say("")
         self.target = self.query_one("#queue-rows").key if self.shown == "queue" else None
         line = self.query_one(Input)
@@ -654,12 +670,13 @@ class Watch(App):
         text, asking = event.value.strip(), self.asking
         self.action_close()
         if asking:
-            if text == "y":
+            if text == "y" and not self.unit_missing():
                 self.write(lambda: enable(self.directory, self.unit) or "bench enabled")
         elif text == ":q":
             self.exit()
         elif text == ":disable":
-            self.write(lambda: stop_timer(self.unit) or "bench disabled")
+            if not self.unit_missing():
+                self.write(lambda: stop_timer(self.unit) or "bench disabled")
         elif text == ":enable":
             self.action_command("")
             self.asking = True
@@ -677,6 +694,16 @@ class Watch(App):
             run = self.query_one(RunView)
             run.pattern, run.match = text[1:], -1
             self.action_find()
+
+    def unit_missing(self):
+        """Say so when the settings file has no `[run] unit`, which the timer commands need.
+
+        Returns:
+            bool: Whether there is no unit.
+        """
+        if self.unit is None:
+            self.say(NO_UNIT)
+        return self.unit is None
 
     @work
     async def write(self, call):
@@ -699,9 +726,12 @@ class Watch(App):
             source (str | None): The directory to resolve it in.
 
         Returns:
-            str: What was queued.
+            str: What was queued, or that `ref` does not resolve.
         """
-        entry, sha, _ = self.queue.add(ref, None, False, [], source)
+        try:
+            entry, sha, _ = self.queue.add(ref, None, False, [], source)
+        except subprocess.CalledProcessError:
+            return f"{ref} does not resolve to a commit"
         return f"queued {entry} {sha[:7]}"
 
     def remove_entry(self, entry):
@@ -731,10 +761,11 @@ def watch(checkout, directory):
         directory (pathlib.Path): The records directory.
 
     Returns:
-        int: 0 on quit or Ctrl-C; 2 when not on a terminal.
+        int: The app's return code, 0 when it has none (quit or Ctrl-C); 2 when not on a terminal.
     """
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print("BENCH ERROR: bench status --watch needs a terminal", file=sys.stderr)
         return 2
-    Watch(checkout, directory).run(mouse=False)
-    return 0
+    app = Watch(checkout, directory)
+    app.run(mouse=False)
+    return app.return_code or 0

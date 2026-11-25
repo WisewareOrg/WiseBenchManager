@@ -34,6 +34,9 @@ _RESULTS = {
     "error": ("bench error", "failed"),
     None: ("no result", "dim"),
 }
+# Widths of the History table's columns: record, what, sha, result, took, note; each is its longest
+# cell and two spaces, so a run's cells do not depend on the other runs.
+HISTORY_WIDTHS = (18, 42, 9, 13, 6, 14)
 
 
 def clean(text):
@@ -490,34 +493,48 @@ def table(rows):
     return rows
 
 
-def history_rows(runs, bench, now):
+def history_rows(runs, bench, now, made):
     """The History table's rows.
+
+    A run's cells are made again only when its `Run` is a different object, or it is or was the live
+    run; otherwise the cells made before are reused.
 
     Args:
         runs (list[Run]): Every run, newest first.
         bench (Bench): The bench's state.
         now (datetime | None): The current time while a run is live.
+        made (dict): Per record, the run, whether it was live, and the cells made for it; updated
+            here, and holding only the records in `runs` afterwards.
 
     Returns:
         list[tuple]: Per run, its record and its cells: record, what, sha, result, took, and the
-        stage that failed or `by hand`.
+        stage that failed or `by hand`; each padded to `HISTORY_WIDTHS`.
     """
-    rows = []
+    rows, kept = [], {}
     for i, run in enumerate(runs):
         live = bench.live and i == 0
-        failing = next((s.name for s in run.stages if s.state in ("failed", "error")), None)
-        hand = ("by hand", "hand") if run.kind == "test" else ("",)
-        note = (display_name(failing), "dim") if failing else hand
-        cells = (
-            styled(run.record),
-            styled(what(run)[:40]),
-            styled(sha7(run)),
-            styled(*result(run, live)),
-            styled(f"{run_took(run, live, now):>4}"),
-            styled(*note),
-        )
+        before = made.get(run.record)
+        if before and before[0] is run and not before[1] and not live:
+            cells = before[2]
+        else:
+            failing = next((s.name for s in run.stages if s.state in ("failed", "error")), None)
+            hand = ("by hand", "hand") if run.kind == "test" else ("",)
+            note = (display_name(failing), "dim") if failing else hand
+            cells = (
+                styled(run.record),
+                styled(what(run)[:40]),
+                styled(sha7(run)),
+                styled(*result(run, live)),
+                styled(f"{run_took(run, live, now):>4}"),
+                styled(*note),
+            )
+            for cell, width in zip(cells, HISTORY_WIDTHS, strict=True):
+                cell.pad_right(width - cell.cell_len)
+        kept[run.record] = (run, live, cells)
         rows.append((run.record, cells))
-    return table(rows)
+    made.clear()
+    made.update(kept)
+    return rows
 
 
 def queue_rows(runs, bench, entries):
