@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 
 from wisebench import status
-from wisebench.bench_run import ON, BenchRun
+from wisebench.bench_run import BenchRun
+from wisebench.bench_state import switch
 from wisebench.bench_test import BenchFailure
 from wisebench.clone import locate
 from wisebench.config import Config, settings_path
@@ -61,7 +62,7 @@ def main(argv=None):
     """Parse arguments and run one `bench` command, on the first board unless it names another.
 
     `test` and `unqueue` change the queue only, needing neither `LG_ENV` nor the `Lock`; `run`
-    holds the `Lock` for the whole of its run; `on` and `off` change an added board's `ON` only.
+    holds the `Lock` for the whole of its run; `on` and `off` are `switch`.
 
     Args:
         argv (list[str] | None): Arguments to parse, defaulting to `sys.argv[1:]`.
@@ -103,12 +104,7 @@ def main(argv=None):
     try:
         checkout, directory = locate(args.board)
         if args.command in ("on", "off"):
-            if args.command == "on":
-                directory.mkdir(exist_ok=True)
-                (directory / ON).touch()
-            else:
-                (directory / ON).unlink(missing_ok=True)
-            print(f"{args.board} is {args.command}")
+            print(switch(args.board, args.command == "on"))
             return 0
     except (OSError, ValueError) as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)

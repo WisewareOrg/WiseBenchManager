@@ -195,7 +195,7 @@ def test_an_added_board_never_reads_the_merge_queue_nor_takes_the_first_boards_r
     assert waiting() == [1]
 
 
-def test_an_added_boards_fault_turns_it_off_and_touches_nothing_else(boards, capsys, systemctl):
+def test_an_added_boards_fault_turns_it_off_and_touches_no_other(boards, capsys, systemctl):
     cli.main(["on", "a"])
     for name in ("a", "a", None):
         enqueue(name)
@@ -206,11 +206,17 @@ def test_an_added_boards_fault_turns_it_off_and_touches_nothing_else(boards, cap
     assert "BENCH ERROR: precondition" in capsys.readouterr().err
     assert run("a") == 0
     assert capsys.readouterr().out == "bench run: the board is off\n"
-    assert not list(boards.clone.root.rglob("DISABLED"))
+    marker = locate("a")[1] / "DISABLED"
+    assert list(boards.clone.root.rglob("DISABLED")) == [marker]
+    assert marker.read_text().endswith("\nprecondition\n")
     assert systemctl.calls == []
     assert waiting("a") == [2]
     assert run() == 0
+    cli.main(["off", "a"])
+    assert marker.exists()
     cli.main(["on", "a"])
+    assert capsys.readouterr().out.endswith("a is off\na is on; fault cleared: precondition\n")
+    assert not marker.exists()
     assert run("a") == 0
     assert (waiting("a"), waiting()) == ([], [])
 

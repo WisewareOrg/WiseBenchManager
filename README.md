@@ -336,9 +336,9 @@ An added board is off until `bench on <name>`. While it is off its queued runs w
 progress when it is turned off finishes. It takes only runs queued with `bench test --board <name>`;
 the merge queue is the first board's. Its records, queue and lock are in `boards/<name>/records/`.
 
-A failure of the bench on an added board turns that board off and touches no other: read why in the
-`BENCH ERROR` line of its unit's journal, and in the run's `bench.log` when it came after a record was
-made, then `bench on <name>`.
+A failure of the bench on an added board writes `DISABLED` beside that board's records, turns it off
+and touches no other board or timer. `bench on <name>` clears it and says what it said; the same reason
+is the `BENCH ERROR` line of the unit's journal, and in the run's `bench.log` when a record was made.
 
 `env.yaml` becomes `LG_ENV`, the only `LG_` variable of that board's run, so the file states its own
 address. Two labgrid files that name one board drive it under two locks, and nothing says so. The

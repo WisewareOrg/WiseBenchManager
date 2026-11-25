@@ -3,13 +3,11 @@
 import sys
 from datetime import UTC, datetime
 
-from wisebench.bench_state import DISABLED, stop_timer
+from wisebench.bench_state import DISABLED, ON, stop_timer
 from wisebench.bench_test import BenchTest, CandidateFailure
 from wisebench.check import Check
 from wisebench.config import settings_path
 from wisebench.queue import Queue
-
-ON = "ON"
 
 
 class BenchRun:
@@ -34,7 +32,7 @@ class BenchRun:
                 folder goes in it; the CLI's own value.
             merge (bool): Whether this is the first board's run. False, for an added board, runs
                 only while `ON` is in `result_dir`, takes runs queued by hand only, and removes
-                `ON` on its own failure in place of writing `DISABLED` and stopping a timer.
+                `ON` on its own failure in place of stopping a timer.
 
         Raises:
             ValueError: `merge` and `config.run_unit` is None (the settings file has no
@@ -59,8 +57,8 @@ class BenchRun:
 
         Raises:
             Exception: A failure that is this runner's own, not the candidate's -- the
-                `DISABLED` marker is written and `config.run_unit`'s timer stopped first (an added
-                board's `ON` is removed), then this is re-raised as-is so the CLI exits 2.
+                `DISABLED` marker is written and `config.run_unit`'s timer stopped first (or an
+                added board's `ON` removed), then this is re-raised as-is so the CLI exits 2.
         """
         on_path = self._result_dir / ON
         if not self._merge and not on_path.exists():
@@ -112,12 +110,12 @@ class BenchRun:
             except CandidateFailure:
                 return
         except Exception as exc:
-            if not self._merge:
-                on_path.unlink(missing_ok=True)
-                raise
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""
             disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{reason}\n")
+            if not self._merge:
+                on_path.unlink(missing_ok=True)
+                raise
             failure = stop_timer(self.config.run_unit)
             if failure:
                 print(f"bench run: {failure}", file=sys.stderr)

@@ -14,6 +14,15 @@ def root():
     return Path(wisebench.__file__).resolve().parents[2]
 
 
+def boards():
+    """Name the added boards: the directories of `<clone>/boards` that hold a `checkout`.
+
+    Returns:
+        list[str]: The names, sorted; empty on a one-board bench.
+    """
+    return sorted(path.parent.name for path in (root() / "boards").glob("*/checkout"))
+
+
 def locate(board=None):
     """Name one board's layer checkout and records directory in the clone `root` finds.
 
@@ -25,12 +34,11 @@ def locate(board=None):
         `<clone>/checkout` and `<clone>/records`, or the two in `<clone>/boards/<board>`.
 
     Raises:
-        ValueError: No directory of `<clone>/boards` has that name and a `checkout`.
+        ValueError: `board` is not one of `boards()`.
     """
     home = root()
     if board is not None:
-        homes = {path.parent.name: path.parent for path in (home / "boards").glob("*/checkout")}
-        if board not in homes:
+        if board not in boards():
             raise ValueError(f"no board {board!r}: {home / 'boards'} has no such checkout")
-        home = homes[board]
+        home = home / "boards" / board
     return home / "checkout", home / "records"

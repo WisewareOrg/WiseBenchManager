@@ -33,20 +33,20 @@ and state.**
 3. **A board has its own checkout.** A run's suite runs from its tree to the end, a `--skip-build`
    run included, so with one tree a second board's run changes the tests under the first.
 4. **A run on an added board sees one `LG_` variable, `LG_ENV`, naming its `env.yaml`.** labgrid
-   substitutes every `LG_` variable in that file, so another one could hold the first board's address.
+   substitutes every `LG_` variable in that file, so another one could hold the first board's
+   address.
 5. **The runner holds no lock across boards.** Two boards' runs overlap. A layer whose builds must
    not overlap keeps them apart itself; a wait there is inside the run's own stage, so it counts in
    `TimeoutStartSec`.
 6. **Only the first board reads the merge queue.** An added board's queue lists runs queued by hand,
    builds no `Check` and posts nothing.
-7. **An added board's one state file is `ON` in its records directory, absent at first.** `bench on
-   <name>` makes it, `bench off <name>` removes it, and neither changes anything else. Without it
-   `bench run --board <name>` exits 0 before the queue, git or any hook. Queueing still works, and a
-   run in progress finishes.
-8. **A failure of the bench on an added board removes its `ON`,** writes no `DISABLED` and stops no
-   timer. `bench on` is how the board runs again. The reason is the `BENCH ERROR` line in the unit's
-   journal, and the run's `bench.log` when it came after a record was made; a failed `git fetch` has
-   none.
+7. **`ON` in its records directory alone decides whether an added board runs; it is absent at
+   first.** `bench on <name>` makes it, `bench off <name>` removes it, and neither touches the queue
+   or a timer. Without it `bench run --board <name>` exits 0 before the queue, git or any hook.
+   Queueing still works, and a run in progress finishes.
+8. **A failure of the bench on an added board writes its `DISABLED`, then removes its `ON` and stops
+   no timer.** `DISABLED` there is the reason and nothing more. `bench on` removes it and says what it
+   said, so no command leaves a board on and disabled; `bench off` leaves it.
 
 ## Alternatives considered
 
@@ -61,10 +61,10 @@ and state.**
   the other board.
 - **A table per board in the bench's settings file.** Rejected: its one field was the path of the
   file that already defines the board.
-- **`DISABLED` as the switch.** Rejected: absent would mean on, so a missed step in setting a board up,
-  or a lost records directory, would turn it on.
-- **`ON` beside `DISABLED`.** Rejected: a board could be on and disabled, so `bench on` would say it is
-  on and nothing would run.
+- **`DISABLED` as the switch.** Rejected: absent would mean on, so a missed step in setting a board
+  up, or a lost records directory, would turn it on.
+- **`DISABLED` stopping an added board's runs, beside `ON`.** Rejected: a board could be on and
+  disabled, so `bench on` would say it is on and nothing would run.
 - **The timer as the switch.** Rejected: a `bench run` by hand ignores it.
 
 ## Consequences

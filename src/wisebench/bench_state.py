@@ -1,6 +1,7 @@
 """Bench state: whether a run is executing, whether the bench is disabled, the timer's state.
 
-It also changes the timer and `DISABLED`: `stop_timer` and `enable`.
+It also changes the timer, `DISABLED` and an added board's `ON`: `stop_timer`, `enable` and
+`switch`.
 """
 
 import os
@@ -9,10 +10,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from wisebench.clone import locate
 from wisebench.config import settings_path
 
 DASH = "—"
 DISABLED = "DISABLED"
+ON = "ON"
 
 
 @dataclass(frozen=True)
@@ -140,6 +143,34 @@ def enable(directory, run_unit):
     except OSError as exc:
         return f"cannot remove DISABLED: {exc}"
     return _change_timer("start", run_unit)
+
+
+def switch(board, on):
+    """Turn an added board on or off; on also clears the fault its `DISABLED` records.
+
+    Args:
+        board (str): The board's name.
+        on (bool): Whether to turn it on.
+
+    Returns:
+        str: What was done, message-ready.
+
+    Raises:
+        ValueError: There is no such board.
+        OSError: A file could not be read, made or removed.
+    """
+    _, directory = locate(board)
+    if not on:
+        (directory / ON).unlink(missing_ok=True)
+        return f"{board} is off"
+    directory.mkdir(exist_ok=True)
+    marker, cleared = directory / DISABLED, ""
+    if marker.exists():
+        _, _, reason = marker.read_text().partition("\n")
+        cleared = f"; fault cleared: {reason.strip()}"
+        marker.unlink()
+    (directory / ON).touch()
+    return f"{board} is on{cleared}"
 
 
 def read_run_unit():
