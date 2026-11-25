@@ -27,9 +27,9 @@ maintained tool takes, and what is left here to maintain. What it is held to:
 
 Each candidate was built, except the Neovim plugin, which was estimated. Lines of code leave out
 docstrings and blank lines; CSS counts in both. Branching is ruff's C901, summed over functions,
-with the worst function after it. The builds not chosen were measured on 2026-11-25 as built,
-without the fixes made to the chosen build, and were not kept. The chosen build's figures are the
-code on the branch when this table was written: the view's ten modules and its CSS.
+with the worst function after it. The table was measured 2026-11-25. The builds not chosen were
+measured as built, without the fixes made to the chosen build, and were not kept; the chosen build's
+figures are the view's ten modules and its CSS.
 
 | Build | Lines | Code | Functions | Test lines | Branching, worst |
 |---|---|---|---|---|---|
@@ -93,8 +93,8 @@ The pieces kept as our own, and why no maintained tool covers each:
   window and cell positions, to do what a maintained toolkit does.
 - **urwid, porting the `curses` view, then adopting its own widgets.** Rejected: 1,109 lines of
   code, then 1,084, against 1,148. A port keeps the `curses` view's state, frame and key-routing
-  model, and those are the size. The port first drew every log row on each key, 958 to 1,140 ms per
-  key on a 7,882-line log and about 10 ms once fixed.
+  model, and those are the size. The port first drew every log row on each key, so a key was slow on
+  a long log until that was fixed.
 - **urwid, built fresh from the canvas.** The smallest of the fresh builds that kept keys of their
   own, at 792 lines of code against 803 for the same design on Textual; it keeps a list walker, a
   row widget and two-key commands of its own. Close in size, so rejected for Textual as the toolkit
@@ -106,11 +106,11 @@ The pieces kept as our own, and why no maintained tool covers each:
 - **Textual, porting the `curses` view.** Rejected: 1,118 lines of code and 108 functions, for the
   same reason as the urwid port.
 - **Textual, built fresh with one loop that redraws and one list widget of our own.** 803 lines of
-  code. Rejected: it drives widgets from its own loop, and the defects found came from there. A 2 s
-  `Queue.add` stalled its event loop 2.02 s (0.03 s in the build chosen). `:remove` after the
-  selected run had left the queue removed another run, in two cases; the build chosen takes the
-  target when the command line opens, and was right in both. Home, End, the arrows and the page keys
-  moved no cursor, because the scroll view under the list took them.
+  code. Rejected: it drives widgets from its own loop, and the defects found came from there. A slow
+  `Queue.add` stalled its event loop for as long as the call took; the build chosen does not stall.
+  `:remove` after the selected run had left the queue removed another run, in two cases; the build
+  chosen takes the target when the command line opens, and was right in both. Home, End, the arrows
+  and the page keys moved no cursor, because the scroll view under the list took them.
 - **Textual, built fresh and reactive, with widgets and keys of our own.** Nothing on screen was
   given up. Rejected: at 2,286 lines and 1,325 of code it was the largest of all, and its 132
   functions were custom keys and the widgets written to carry them.
@@ -120,16 +120,12 @@ The pieces kept as our own, and why no maintained tool covers each:
 
 ## Consequences
 
-- **The code left is the bench's own:** its rules, words, layout and colours;
-  the widgets, scrolling, colour depth, line editing, tests' driver and keys panel are Textual's.
-- **A key is cheap, except onto a very long open test.** On an 8,241-line log and an 11,728-line
-  suite a key takes 8 to 33 ms of CPU, `PgDn` in History over 594 runs about 69 ms, and opening
-  every test of that suite at once 463 to 495 ms. Stepping onto a suite with one open test of 12,000
-  lines takes a median of 469 ms with `j` and 416 ms with `]` (390 to 969 ms over 14 presses each),
-  because `Tree` adds its rows one at a time; the `curses` view took 57 to 111 ms, its disk read
-  included. Reading the disk takes about 160 ms each second and 2.3 s the first time (594 runs), on
-  a thread of its own, so Run is blank for those first seconds. `q` during a 6 s read of GitHub took
-  5.5 s on an executor thread and 0.6 s on a daemon thread.
+- **The code left is the bench's own:** its rules, words, layout and colours; the widgets,
+  scrolling, colour depth, line editing, tests' driver and keys panel are Textual's.
+- **A very long open test costs more a key.** A key that steps onto a suite with a very long open
+  test costs more than it did in the `curses` view, because `Tree` adds its rows one at a time; this
+  is accepted. The records are read on a thread of their own, so Run is blank until the first read
+  ends, and a read still running never holds up `q`, because it runs on a daemon thread.
 - **A dependency, with one maintainer.** `textual`, and `rich`, which the view also imports, join
   the runner's lock with the five packages they bring (`markdown-it-py`, `mdit-py-plugins`,
   `linkify-it-py`, `mdurl`, `platformdirs`). Textual's maintainer states that they continue to
