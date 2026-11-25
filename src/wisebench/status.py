@@ -12,7 +12,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
+from rich.cells import cell_len
 from rich.style import Style
+from rich.text import Text
 from textual import work
 from textual.app import App
 from textual.binding import Binding
@@ -195,7 +197,7 @@ class Tests(Tree):
         self.show_root, self.show_guides, self.guide_depth = False, False, 2
 
     def render_label(self, node, base_style, style):
-        """Draw a line.
+        """Draw a line; a line of a test's output is styled here, as it is drawn.
 
         Args:
             node (textual.widgets.tree.TreeNode): The line.
@@ -205,7 +207,25 @@ class Tests(Tree):
         Returns:
             Text: The line.
         """
-        return super().render_label(node, base_style, Style(bgcolor=style.bgcolor))
+        ground = Style(bgcolor=style.bgcolor)
+        if isinstance(node.data, str):
+            label = view.styled(node.data, "log")
+            label.stylize(ground)
+            return label
+        return super().render_label(node, base_style, ground)
+
+    def get_label_width(self, node):
+        """The width of a line, without styling a test's output lines that are not drawn.
+
+        Args:
+            node (textual.widgets.tree.TreeNode): The line.
+
+        Returns:
+            int: The width in cells.
+        """
+        if isinstance(node.data, str):
+            return cell_len(view.clean(node.data))
+        return super().get_label_width(node)
 
 
 class RunView(Vertical):
@@ -330,13 +350,21 @@ class RunView(Vertical):
 
     @staticmethod
     def fill(node):
-        """Put a test's output under it.
+        """Put a test's output, then its failure lines, under it.
+
+        The lines already under it stay when they are the first of the new ones; else all are
+        made again.
 
         Args:
             node (textual.widgets.tree.TreeNode): The test.
         """
-        for text in [*node.data.lines, *node.data.failure][len(node.children) :]:
-            node.add_leaf(view.styled(text, "log"))
+        rows = [*node.data.lines, *node.data.failure]
+        have = [leaf.data for leaf in node.children]
+        if rows[: len(have)] != have:
+            node.remove_children()
+            have = []
+        for text in rows[len(have) :]:
+            node.add_leaf(Text(), text)
 
     def on_tree_node_expanded(self, event):
         """Fill a test as it opens.
@@ -413,8 +441,14 @@ class Watch(App):
     Args:
         checkout (pathlib.Path): The bench's layer checkout.
         directory (pathlib.Path): The records directory.
+
+    Attributes:
+        READ_EVERY (int): Seconds between reads of the records.
+        QUEUE_EVERY (int): Seconds between reads of the queue while its tab shows.
     """
 
+    READ_EVERY = 1
+    QUEUE_EVERY = 30
     CSS_PATH = "status.tcss"
     ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
@@ -447,6 +481,7 @@ class Watch(App):
         self.directory, self.records = Path(directory), Records(directory)
         self.queue, self.unit = Queue(Path(checkout), Path(directory)), read_run_unit()
         self.target, self.asking, self.animation_level = None, False, "none"
+        self.held, self.previewing = "", None
         self.made = {}
 
     def compose(self):
@@ -498,10 +533,10 @@ class Watch(App):
 
     @work
     async def read_disk(self):
-        """Read the records and the bench every second, off the screen's thread."""
+        """Read the records and the bench every `READ_EVERY` seconds, off the screen's thread."""
         while True:
             self.seen = await in_daemon_thread(self.look)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.READ_EVERY)
 
     def look(self):
         """Read the records, the bench and `DISABLED`.
@@ -519,18 +554,20 @@ class Watch(App):
 
     @work(exclusive=True, group="queue")
     async def read_queue(self):
-        """Read the queue every 30 s while its tab shows."""
+        """Read the queue every `QUEUE_EVERY` seconds while its tab shows."""
         while self.shown == "queue":
             try:
                 self.entries = await in_daemon_thread(self.queue.entries)
             except Exception as exc:
                 if not self.query_one("#command-row").display:
                     self.say(exc)
-            await asyncio.sleep(30)
+            await asyncio.sleep(self.QUEUE_EVERY)
 
     def watch_seen(self):
         """Show the new read."""
         runs, bench, stopped, now = self.seen
+        if self.record and all(run.record != self.record for run in runs):
+            self.record = None
         self.query_one("#history-rows").rows_shown = view.history_rows(runs, bench, now, self.made)
         self.query_one("#count").update(f"{len(runs)} records in {self.directory.name}/")
         state = view.state_line(bench, stopped, runs[0] if runs else None)
@@ -541,18 +578,26 @@ class Watch(App):
         """Show the queue."""
         rows = view.queue_rows(self.seen.runs, self.seen.bench, self.entries)
         self.query_one("#queue-rows").rows_shown = rows
+        box = self.query_one("#preview")
+        if box.display and self.previewing:
+            box.update(view.preview(*self.previewing, rows))
 
     def watch_record(self):
         """Name a past run on its tab."""
-        label = f"1 Run  {self.record}" if self.record else "1 Run"
+        label = view.styled(f"1 Run  {self.record}" if self.record else "1 Run")
         self.query_one("#tab-run", Tab).label = label
 
-    def say(self, text):
-        """Show a message under the status bar.
+    def say(self, text, held=""):
+        """Show a message under the status bar; while `:enable` asks, hold it until that closes.
 
         Args:
             text (object): The message; blank clears it.
+            held (str): A message held while `:enable` asked, shown ahead of `text`.
         """
+        if self.asking:
+            self.held = str(text)
+            return
+        text = f"{held} {text}" if held and text else text
         message = self.query_one("#message")
         message.update(view.styled(str(text)))
         message.display = bool(text)
@@ -626,7 +671,8 @@ class Watch(App):
             text (str): What it starts with.
         """
         self.asking = False
-        self.say("")
+        self.say(self.held)
+        self.held = ""
         self.target = self.query_one("#queue-rows").key if self.shown == "queue" else None
         line = self.query_one(Input)
         self.query_one("#command-row").display = True
@@ -636,7 +682,8 @@ class Watch(App):
     def action_close(self):
         """Close the command line."""
         self.asking = False
-        self.say("")
+        self.say(self.held)
+        self.held = ""
         self.query_one("#command-row").display = self.query_one("#preview").display = False
         self.action_tab(self.shown)
 
@@ -651,13 +698,14 @@ class Watch(App):
         self.query_one("#runhint").display = event.value.startswith(":run ")
         if event.value == ":run ":
             self.query_one(Tabs).active = "tab-queue"
-        box.display = False
+        box.display, self.previewing = False, None
         if ref:
             source, name = view.split_run(ref)
             try:
                 outcome = await in_daemon_thread(self.queue.preview, name, source)
             except Exception as exc:
                 outcome = exc
+            self.previewing = name, outcome
             box.update(view.preview(name, outcome, self.query_one("#queue-rows").rows_shown))
             box.display = self.query_one("#command-row").display
 
@@ -667,11 +715,11 @@ class Watch(App):
         Args:
             event (Input.Submitted): The command line.
         """
-        text, asking = event.value.strip(), self.asking
+        text, asking, held = event.value.strip(), self.asking, self.held
         self.action_close()
         if asking:
-            if text == "y" and not self.unit_missing():
-                self.write(lambda: enable(self.directory, self.unit) or "bench enabled")
+            if text == "y" and not self.unit_missing(held):
+                self.write(lambda: enable(self.directory, self.unit) or "bench enabled", held)
         elif text == ":q":
             self.exit()
         elif text == ":disable":
@@ -679,8 +727,8 @@ class Watch(App):
                 self.write(lambda: stop_timer(self.unit) or "bench disabled")
         elif text == ":enable":
             self.action_command("")
-            self.asking = True
             self.say(ENABLE)
+            self.asking = True
         elif text == ":remove":
             kind, _, entry = (self.target or "").partition(" ")
             if kind == "hand":
@@ -695,27 +743,31 @@ class Watch(App):
             run.pattern, run.match = text[1:], -1
             self.action_find()
 
-    def unit_missing(self):
+    def unit_missing(self, held=""):
         """Say so when the settings file has no `[run] unit`, which the timer commands need.
+
+        Args:
+            held (str): A message held while `:enable` asked, shown ahead of the saying.
 
         Returns:
             bool: Whether there is no unit.
         """
         if self.unit is None:
-            self.say(NO_UNIT)
+            self.say(NO_UNIT, held)
         return self.unit is None
 
     @work
-    async def write(self, call):
+    async def write(self, call, held=""):
         """Make a change off the screen's thread, say what came of it, and read the queue again.
 
         Args:
             call (Callable[[], str]): Makes the change and returns what to say.
+            held (str): A message held while `:enable` asked, said ahead of what came of it.
         """
         try:
-            self.say(await asyncio.to_thread(call))
+            self.say(await asyncio.to_thread(call), held)
         except Exception as exc:
-            self.say(exc)
+            self.say(exc, held)
         self.read_queue()
 
     def add_run(self, ref, source):
