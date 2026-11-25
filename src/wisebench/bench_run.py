@@ -127,7 +127,6 @@ class BenchRun:
             skip_build=entry["skip_build"],
             kind=entry["kind"],
             sha=entry["sha"],
-            board_name=self._board and self._board.name,
         )
         try:
             hand.run(lg_env, entry["args"])

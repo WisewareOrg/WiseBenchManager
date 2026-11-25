@@ -9,9 +9,7 @@ POSTED = "posted"
 
 _SEVERITY = {"passed": 0, "skipped": 1, "failed": 2}
 _MARKER = re.compile(r"^bench: (?P<ts>\S+) (?P<event>.*)$")
-_RUN_STARTED = re.compile(
-    r"^run started kind=(?P<kind>\S+) ref=(?P<ref>.*?)(?: pr=(?P<pr>\d+))?(?: board=\S+)?$"
-)
+_RUN_STARTED = re.compile(r"^run started kind=(?P<kind>\S+) ref=(?P<ref>.*?)(?: pr=(?P<pr>\d+))?$")
 _RUN_RESULT = re.compile(r"^run (?P<result>passed|failed|error)$")
 _STAGE_STARTED = re.compile(r"^stage (?P<name>\S+) started$")
 _STAGE_RESULT = re.compile(

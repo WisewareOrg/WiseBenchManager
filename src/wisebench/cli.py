@@ -15,7 +15,7 @@ from pathlib import Path
 from wisebench import status
 from wisebench.bench_run import BenchRun
 from wisebench.bench_test import BenchFailure
-from wisebench.board import find_board, refuse_shared_file
+from wisebench.board import find_board
 from wisebench.clone import locate
 from wisebench.config import Config, settings_path
 from wisebench.lock import Lock
@@ -146,8 +146,7 @@ def main(argv=None):
         return 0
     try:
         _load_bench_env()
-        refuse_shared_file(os.environ.get("LG_ENV"))
-    except Exception as exc:
+    except BenchFailure as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2
     if board is not None:

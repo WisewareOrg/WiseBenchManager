@@ -30,7 +30,6 @@ BENCH_SHA = "BENCH_SHA"
 BENCH_TREE = "BENCH_TREE"
 BENCH_SET = "BENCH_SET"
 BENCH_SKIP_BUILD = "BENCH_SKIP_BUILD"
-BENCH_BOARD = "BENCH_BOARD"
 
 BENCH_CANDIDATE_OPTION = "--bench-candidate"
 
@@ -39,7 +38,6 @@ BENCH_FIELDS = {
     "test_commit": BENCH_SHA,
     "set": BENCH_SET,
     "skip_build": BENCH_SKIP_BUILD,
-    "board": BENCH_BOARD,
 }
 
 # Exit status substituted for pytest's own when the session reports any error: a collection

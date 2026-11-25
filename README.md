@@ -178,7 +178,7 @@ the suites run with `--capture=tee-sys` and `PYTHONUNBUFFERED=1`, so a line is i
 printed. The runner's own lines start `bench: <ISO time> ` and sit on their own line:
 
 - `run started kind=<test|run> ref=<ref>`, with ` pr=<n>` (the PR its queue entry names) for a
-  merge-queue run and ` board=<name>` for a run on an added board;
+  merge-queue run;
 - `stage <name> started`, then `passed`, `failed` or `error`, for `checkout`, `precondition`,
   `build`, `bundle`, `host_suite`, `target_suite` and, when the result is posted, `posted`;
   `stage <name> skipped` for `build`, `bundle` and `host_suite` of a `--skip-build` run;
@@ -196,15 +196,14 @@ test ends and names no fixture, and pytest's own output has neither timestamps n
 maintained tool writes these markers, so the plugin does.
 
 Each suite's `run.json` is written at session end, so a run that fails halfway still leaves
-everything up to that point: the runner's own version (`importlib.metadata.version("wisebench")`),
-the pytest command line, the start and end times, and the exit status. The plugin reads whichever of
-a set of `BENCH_*` variables the runner set are present and writes each into `run.json` under its
-own field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
+everything up to that point: the runner's own version (`importlib.metadata.version("wisebench")`), the pytest command
+line, the start and end times, and the exit status. The plugin reads whichever of a set of
+`BENCH_*` variables the runner set are present and writes each into `run.json` under its own
+field name: `test_commit` from `BENCH_SHA`, `set` from `BENCH_SET`, `skip_build` from
 `BENCH_SKIP_BUILD` -- present only for a `--skip-build` run, so its presence is itself the mark of
-one -- and `board` from `BENCH_BOARD`, present only for a run on an added board. `BENCH_TREE` (the
-checkout path) is set for every hook and suite but stays a hook-only variable; it never reaches
-`run.json`. `bench test` itself never opens one. `bench run` adds the verdict for a merge-queue
-entry.
+one. `BENCH_TREE` (the checkout path) is set for every hook and suite but stays a hook-only variable;
+it never reaches `run.json`. `bench test` itself never opens one. `bench run` adds
+the verdict for a merge-queue entry.
 A per-item credit map is not built. The `proxy` fixture attaches the recording's sha256 through
 `record_property` under the key `recording_sha256`, and writes mitmdump's combined stdout and
 stderr to `proxy-<test>-<n>.log` beside that suite's `report.jsonl`, one file per fixture use, with
@@ -317,46 +316,35 @@ the runs queued by hand in it are lost.
 
 ### More than one board
 
-The first board is the one above. Each further board is a table in `~/.config/wisebench/bench.toml`
-and a clone of the layer (ADR 0007 rev 1):
+The first board is the one above. A further board (ADR 0007 rev 1) is a table in
+`~/.config/wisebench/bench.toml`, a clone of the layer and a timer; edit
+`contrib/bench-run@.service`'s `ExecStart` as above first. Rename both templates with the first
+board's units: a board's unit is the `[run] unit` with `@<name>`.
 
 ```toml
 [boards.<name>]
 lg_env = "/path/to/that/board's/env.yaml"
 ```
 
-Edit `contrib/bench-run@.service`'s `ExecStart` to this clone's own `.venv/bin/bench`, as above, then:
-
 ```sh
 git clone <the layer repository> WiseBenchManager/boards/<name>/checkout
 systemctl --user link <this clone>/contrib/bench-run@.service <this clone>/contrib/bench-run@.timer
-systemctl --user start bench-run@<name>.timer
+systemctl --user enable --now bench-run@<name>.timer
+bench on <name>
 ```
 
-- **A name** is letters, digits, `-` and `_`. A table with another name or without `lg_env` stops
-  every board's `bench run`, the first's too, with exit 2 and the table's name.
-- **Everything of a board is its own:** `boards/<name>/` holds its `checkout/` and its `records/`,
-  with its `queue.db`, `lock` and `DISABLED`. A fault on one board stops that board alone: its unit
-  is the `[run] unit` with `@<name>`, so both templates are renamed with the first board's units.
-- **An added board takes only runs queued with `bench test --board <name>`.** The merge queue is the
-  first board's.
-- **`lg_env` is the only `LG_` variable of an added board's run,** as `LG_ENV`; every other one is
-  removed from its environment, so a file that takes one of the first board's fails and the file
-  states its own address. `bench run` refuses two boards on one file, and cannot see two files that
-  name one address. The rest of `bench.env`, `PYTEST_ADDOPTS` included, reaches every board.
-- **A board is off until `bench on <name>`,** and stays as set. Its timer does not: after a reboot
-  the board may be on and nothing starts until the timer is started by hand. While it is off `bench
-  run` starts nothing on it and runs queued for it wait; a run in progress when it is turned off
-  finishes. `bench on` and `bench off` touch neither the timer nor `DISABLED`, which are
-  `:disable`'s and `:enable`'s, and nothing of the merge queue.
-- **Boards run at the same time, and the runner keeps no build lock.** One build at a time on the
-  host comes from the layer's own build entry point, which waits for the host's other builds.
-  Turning a board on before every commit it will run has that lock lets two builds overlap.
-- `contrib/bench-run@.service` sets `TimeoutStartSec=infinity`, because a run may wait behind another
-  board's build and a limit reached there would write `DISABLED`.
+An added board is off until `bench on <name>`. While it is off its queued runs wait, and a run in
+progress when it is turned off finishes. It takes only runs queued with `bench test --board <name>`;
+the merge queue is the first board's. Its records, queue, lock and `DISABLED` are in
+`boards/<name>/records/`, and `bench status --watch --board <name>` shows them.
 
-`bench status --watch --board <name>` is the same view of that board, with its name in the top row
-and `ON` or `OFF` in the status bar.
+`lg_env` becomes `LG_ENV`, the only `LG_` variable of that board's run, so the file states its own
+address. Two labgrid files that name one board drive it under two locks, and nothing says so. The
+rest of `bench.env` reaches every board.
+
+Runs on two boards overlap. One build at a time comes from the layer's own build entry point, which
+waits for the host's other builds; that wait is why the template's `TimeoutStartSec` is `infinity`.
+Turning a board on before every commit it will run has that lock lets two builds overlap.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

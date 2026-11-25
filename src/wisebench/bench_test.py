@@ -10,7 +10,6 @@ from pathlib import Path
 from wisebench.config import Config, settings_path
 from wisebench.plugin import (
     _TIMESTAMP,
-    BENCH_BOARD,
     BENCH_CANDIDATE_OPTION,
     BENCH_RECORD_DIR,
     BENCH_SET,
@@ -46,7 +45,6 @@ class BenchTest:
         kind="test",
         pr=None,
         sha=None,
-        board_name=None,
     ):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
@@ -63,8 +61,6 @@ class BenchTest:
                 `pr=<n>` when given; set by `BenchRun`.
             sha (str | None): The commit to build, when queued by hand; `ref` is then only the
                 name the record shows. None resolves `ref` at run time.
-            board_name (str | None): The added board the run is on, appended to the run-started
-                line as `board=<name>`; None is the first board. Set by `BenchRun`.
         """
         self.checkout = checkout
         self.result_dir = Path(result_dir)
@@ -74,14 +70,12 @@ class BenchTest:
         self.kind = kind
         self.pr = pr
         self.sha = sha
-        self.board_name = board_name
 
     def run(self, lg_env, pytest_args, post=None):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
 
-        Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`,
-        `BENCH_SKIP_BUILD` when skipping the build and `BENCH_BOARD` on an added board; each suite
-        also gets
+        Every hook and suite inherits `BENCH_SHA`, `BENCH_TREE`, `BENCH_SET`
+        and `BENCH_SKIP_BUILD` when skipping the build; each suite also gets
         `BENCH_RECORD_DIR` and `PYTHONUNBUFFERED` (see `_run_suite`). Runs
         `precondition`; unless skipping the build, runs `build`, `bundle` and the host suite,
         and passes the commit to the target suite as `--bench-candidate`. Every hook's and
@@ -109,8 +103,7 @@ class BenchTest:
         try:
             try:
                 pr = f" pr={self.pr}" if self.pr is not None else ""
-                board = f" board={self.board_name}" if self.board_name is not None else ""
-                self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}{board}")
+                self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}")
                 with self._stage(log, "checkout") as info:
                     commit = self._checkout_commit(log)
                     config = Config.load(self.checkout / "bench.toml", settings_path())
@@ -123,8 +116,6 @@ class BenchTest:
                 }
                 if self.skip_build:
                     env[BENCH_SKIP_BUILD] = "true"
-                if self.board_name is not None:
-                    env[BENCH_BOARD] = self.board_name
 
                 with self._stage(log, "precondition"):
                     self._run_hook(

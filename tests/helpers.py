@@ -104,7 +104,7 @@ def run_unit_settings(unit="bench-run"):
 
 def board_settings(name, lg_env):
     """The settings `[boards]` table of an added board."""
-    return f'\n[boards."{name}"]\nlg_env = "{lg_env}"\n'
+    return f'\n[boards.{name}]\nlg_env = "{lg_env}"\n'
 
 
 def write_lg_env(repo):
