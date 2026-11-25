@@ -5,11 +5,9 @@ Writes go through `Queue` and `bench_state` only; nothing here takes a lock or r
 
 import asyncio
 import concurrent.futures
-import subprocess
 import sys
 import threading
 from datetime import UTC, datetime
-from pathlib import Path
 
 from textual import events, on, work
 from textual.app import App
@@ -27,18 +25,10 @@ from textual.widgets import (
 )
 
 from wisebench import palette, rules, view
-from wisebench.bench_state import (
-    DISABLED,
-    enable,
-    read_bench,
-    read_run_unit,
-    stop_timer,
-)
+from wisebench.bench_io import BenchIO
 from wisebench.command_line import CommandLine
 from wisebench.history_view import HistoryView
-from wisebench.queue import Queue
 from wisebench.queue_view import QueueView
-from wisebench.records import Records
 from wisebench.run_view import RunView, StagePane
 
 ENABLE = (
@@ -135,8 +125,7 @@ class Watch(App):
         super().__init__()
         self.register_theme(palette.THEME)
         self.theme = palette.THEME.name
-        self.directory, self.records = directory, Records(directory)
-        self.queue, self.unit = Queue(checkout, directory), read_run_unit()
+        self.bench = BenchIO(checkout, directory)
         self.animation_level = "none"
 
     async def on_event(self, event):
@@ -200,34 +189,18 @@ class Watch(App):
     async def read_disk(self):
         """Read the records and the bench every `READ_EVERY` seconds, off the screen's thread."""
         while True:
-            seen = await in_daemon_thread(self.look)
+            seen = await in_daemon_thread(self.bench.look)
             if not self.is_running:
                 return
             self.seen = seen
             await asyncio.sleep(self.READ_EVERY)
-
-    def look(self):
-        """Read the records, the bench and `DISABLED`.
-
-        Returns:
-            Seen: What was read.
-        """
-        runs = self.records.runs()
-        bench = read_bench(self.directory, runs[0] if runs else None, self.unit, Path("/proc"))
-        try:
-            stopped = (self.directory / DISABLED).read_text(errors="replace")
-        except OSError:
-            stopped = ""
-        return rules.Seen(
-            runs, bench, stopped, datetime.now(UTC) if bench.live else None, self.directory.name
-        )
 
     @work(exclusive=True, group="queue")
     async def read_queue(self):
         """Read the queue every `QUEUE_EVERY` seconds while its tab shows."""
         while self.is_running and self.tab == "queue":
             try:
-                entries, error = await in_daemon_thread(self.queue.entries), None
+                entries, error = await in_daemon_thread(self.bench.queue.entries), None
             except Exception as exc:
                 entries, error = None, exc
             if not self.is_running:
@@ -245,7 +218,7 @@ class Watch(App):
             return
         source, ref = self.typed
         try:
-            outcome = await in_daemon_thread(self.queue.preview, ref, source)
+            outcome = await in_daemon_thread(self.bench.queue.preview, ref, source)
         except Exception as exc:
             outcome = exc
         if self.is_running:
@@ -383,7 +356,7 @@ class Watch(App):
         if not line.asked:
             self.command(text, line.target)
         elif text == "y":
-            self.write(lambda: enable(self.directory, self.unit) or "bench enabled")
+            self.write(self.bench.enable)
 
     def command(self, text, target):
         """Do what a command typed says.
@@ -392,68 +365,40 @@ class Watch(App):
             text (str): The command.
             target (str | None): The queue row that was selected when the line was opened.
         """
-        if text in (":disable", ":enable") and self.unit is None:
+        if text in (":disable", ":enable") and self.bench.unit is None:
             self.say("no [run] unit in the bench's settings file")
         elif text == ":q":
             self.exit()
         elif text == ":disable":
-            self.write(lambda: stop_timer(self.unit) or "bench disabled")
+            self.write(self.bench.disable)
         elif text == ":enable":
             self.action_command("", ENABLE)
         elif text == ":remove":
             kind, _, entry = (target or "").partition(" ")
             if kind == "hand":
-                self.write(lambda: self.remove_entry(int(entry)))
+                self.write(self.bench.remove, int(entry))
             else:
                 self.say("only hand-queued runs can be removed, from the Queue tab")
         elif typed := rules.typed_run(text):
-            source, name = typed
-            self.write(lambda: self.add_run(name, source))
+            self.write(self.bench.run, *typed)
         elif text.startswith("/"):
             self.action_find(text[1:])
 
     @work
-    async def write(self, call):
+    async def write(self, call, *args):
         """Make a change off the screen's thread, say what came of it, and read the queue again.
 
         Args:
-            call (Callable[[], str]): Makes the change and returns what to say.
+            call (Callable[..., str]): Makes the change and returns what to say.
+            *args: Its arguments.
         """
         try:
-            said = await asyncio.to_thread(call)
+            said = await asyncio.to_thread(call, *args)
         except Exception as exc:
             said = exc
         if self.is_running:
             self.say(said)
             self.read_queue()
-
-    def add_run(self, ref, source):
-        """Queue a run by hand.
-
-        Args:
-            ref (str): The ref.
-            source (str | None): The directory to resolve it in.
-
-        Returns:
-            str: What was queued, or that `ref` does not resolve.
-        """
-        try:
-            entry, sha, _ = self.queue.add(ref, None, False, [], source)
-        except subprocess.CalledProcessError:
-            return f"{ref} does not resolve to a commit"
-        return f"queued {entry} {sha[:7]}"
-
-    def remove_entry(self, entry):
-        """Remove a hand-queued run.
-
-        Args:
-            entry (int): Its id.
-
-        Returns:
-            str: Whether it was there.
-        """
-        gone = self.queue.remove(entry)
-        return f"removed queued run {entry}" if gone else f"no queued run {entry}"
 
     def action_find(self, pattern=None):
         """Go to the next line holding the search.

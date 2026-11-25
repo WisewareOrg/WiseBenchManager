@@ -45,7 +45,7 @@ from textual import events
 from textual.widget import Widget
 from textual.widgets import ContentSwitcher, DataTable, HelpPanel, Input, Log, Tab, Tree
 
-from wisebench import palette, status, view
+from wisebench import bench_io, palette, status, view
 from wisebench.queue import Queue
 from wisebench.records import Records
 
@@ -114,7 +114,7 @@ class WatchCase(unittest.IsolatedAsyncioTestCase):
         queue.entries.return_value = list(entries)
         queue.preview.return_value = {"sha": "5" * 40, "subject": "Fix it", "clean": True}
         queue.add.return_value = (5, "5" * 40, 1)
-        self.monkeypatch.setattr(status, "Queue", mock.create_autospec(Queue, return_value=queue))
+        self.monkeypatch.setattr(bench_io, "Queue", mock.create_autospec(Queue, return_value=queue))
         return queue
 
     @contextlib.asynccontextmanager
@@ -147,7 +147,7 @@ class WatchCase(unittest.IsolatedAsyncioTestCase):
 
     async def read(self):
         """Read the disk, as the view does on its period."""
-        self.app.seen = self.app.look()
+        self.app.seen = self.app.bench.look()
         await self.pilot.pause()
 
     async def press(self, *keys):

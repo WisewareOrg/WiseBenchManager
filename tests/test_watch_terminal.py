@@ -45,7 +45,7 @@ class TestTerminal:
     def start(self, prelude):
         """Start the view in a child process, after `prelude`."""
         code = (
-            "import sys, time\nfrom pathlib import Path\nfrom wisebench import status\n"
+            "import sys, time\nfrom pathlib import Path\nfrom wisebench import bench_io, status\n"
             f"{prelude}\n"
             f"sys.exit(status.watch(Path({str(self.clone.checkout)!r}), "
             f"Path({str(self.clone.records)!r})))"
@@ -83,7 +83,7 @@ class TestTerminal:
         assert not [m for m in (1000, 1002, 1003, 1006) if b"?%dh" % m in written], "no mouse mode"
 
     def test_a_crash_exits_1_with_its_traceback(self):
-        child = self.start("status.Records.runs = lambda self: 1 / 0")
+        child = self.start("bench_io.Records.runs = lambda self: 1 / 0")
         status = self.exit_status(child)
 
         assert status == 1, "a crash is a failure"
@@ -106,7 +106,7 @@ class TestTerminal:
         )
         entries = [merge(title=hostile("title"))]
 
-        child = self.watch(f"status.Queue.entries = lambda self: {entries!r}")
+        child = self.watch(f"bench_io.Queue.entries = lambda self: {entries!r}")
         for keys, labels in (
             ("", ("reason", "log")),
             ("2", ("title",)),
@@ -129,7 +129,7 @@ class TestTerminal:
             "def entries(self):\n"
             f"    Path({str(self.began)!r}).touch()\n"
             "    time.sleep(8)\n"
-            "status.Queue.entries = entries"
+            "bench_io.Queue.entries = entries"
         )
         child.send("2")
         self.wait_for(self.began)
