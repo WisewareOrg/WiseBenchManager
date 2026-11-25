@@ -46,6 +46,17 @@ ENABLE = (
     " [y/N]"
 )
 
+VIM = {
+    "j": "down",
+    "k": "up",
+    "h": "left",
+    "l": "right",
+    "g": "home",
+    "G": "end",
+    "ctrl+d": "pagedown",
+    "ctrl+u": "pageup",
+}
+
 
 class Seen(NamedTuple):
     """One read of the disk.
@@ -74,6 +85,7 @@ class Rows(DataTable):
         **kwargs: For `DataTable`.
     """
 
+    BINDINGS = [Binding("home", "scroll_top", "top"), Binding("end", "scroll_bottom", "bottom")]
     rows_shown = var(list, init=False)
 
     def __init__(self, *columns, **kwargs):
@@ -363,6 +375,7 @@ class Watch(App):
         Binding("right_square_bracket", "step(-1)", "newer run"),
         Binding("question_mark", "keys", "these keys"),
         Binding("escape", "close", "back to the list"),
+        *(Binding(vim, f"simulate_key('{key}')", f"as {key}") for vim, key in VIM.items()),
         Binding("q", "quit", "quit"),
         Binding("ctrl+c", "quit", "quit", priority=True, show=False),
     ]
