@@ -10,7 +10,6 @@ import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
 
 from rich.cells import cell_len
 from rich.style import Style
@@ -33,11 +32,9 @@ from textual.widgets import (
     Tree,
 )
 
-from wisebench import palette, view
+from wisebench import palette, rules, view
 from wisebench.bench_state import (
-    DASH,
     DISABLED,
-    Bench,
     enable,
     read_bench,
     read_run_unit,
@@ -90,25 +87,6 @@ async def in_daemon_thread(call, *args):
 
     threading.Thread(target=run, daemon=True).start()
     return await asyncio.wrap_future(future)
-
-
-class Seen(NamedTuple):
-    """One read of the disk.
-
-    Args:
-        runs (list[Run]): Every run, newest first.
-        bench (Bench): The bench's state.
-        stopped (str): The `DISABLED` file's text; blank while the bench is not disabled.
-        now (datetime | None): When it was read, while a run is live; nothing else shows the time.
-    """
-
-    runs: list
-    bench: Bench
-    stopped: str
-    now: datetime | None
-
-
-NOTHING = Seen([], Bench(False, False, DASH), "", None)
 
 
 class Rows(DataTable):
@@ -214,7 +192,7 @@ class Tests(Tree):
 class RunView(Vertical):
     """The Run tab: the stage list, and the stage shown beside it."""
 
-    seen = var(NOTHING, init=False)
+    seen = var(rules.NOTHING, init=False)
     record = var(None, init=False)
     picked = var(None, init=False)
 
@@ -248,14 +226,14 @@ class RunView(Vertical):
     @property
     def run(self):
         """Run | None: The run chosen, else the newest."""
-        runs = self.seen.runs
-        return next((r for r in runs if r.record == self.record), runs[0] if runs else None)
+        seen = self.seen
+        return next((r for r in seen.runs if r.record == self.record), seen.newest)
 
     @property
     def stage(self):
         """Stage | None: The stage picked, else the one the bench's state calls for."""
         picked = next((s for s in self.run.stages if s.name == self.picked), None)
-        return picked or view.auto_stage(self.run, self.run is self.seen.runs[0], self.seen.bench)
+        return picked or rules.auto_stage(self.run, self.run is self.seen.newest, self.seen.bench)
 
     def watch_record(self):
         """Show another run, with no stage picked."""
@@ -267,17 +245,16 @@ class RunView(Vertical):
         run = self.run
         if run is None:
             return
-        runs, bench, stopped, now = self.seen
-        newest, stage = run is runs[0], self.stage
-        live = bench.live and newest
-        self.query_one("#title").update(view.run_title(run, newest, bench))
-        self.show_stages(run, stage, live, now)
-        self.show_head(run, stage, live, now)
+        seen, stage = self.seen, self.stage
+        newest, live = run is seen.newest, run is seen.running
+        self.query_one("#title").update(view.run_title(run, newest, seen.bench))
+        self.show_stages(run, stage, live, seen.now)
+        self.show_head(run, stage, live, seen.now)
         failure = self.query_one("#failure")
-        failure.display = bench.disabled and newest
+        failure.display = seen.bench.disabled and newest
         if failure.display:
-            failure.update(view.failure(stopped, run))
-        self.show_log(run, stage, live, now)
+            failure.update(view.failure(seen.stopped, run))
+        self.show_log(run, stage, live, seen.now)
 
     watch_picked = watch_seen
 
@@ -348,7 +325,7 @@ class RunView(Vertical):
             live (bool): The bench is running this run.
             now (datetime | None): The current time.
         """
-        outline = view.outline(stage)
+        outline = rules.outline(stage)
         for i, (section, end) in enumerate(outline):
             label = view.section_label(section, end, live, now)
             opened = section.outcome in ("open", "failed")
@@ -366,7 +343,7 @@ class RunView(Vertical):
             if node.is_expanded:
                 self.fill(node)
         if not tests.has_focus:
-            node = tests.root.children[view.landing([section for section, _ in outline])]
+            node = tests.root.children[rules.landing([section for section, _ in outline])]
             self.call_after_refresh(tests.move_cursor, node)
 
     @staticmethod
@@ -426,7 +403,7 @@ class RunView(Vertical):
         if stage and stage.sections:
             rows = [
                 (i, j, text)
-                for i, (section, _) in enumerate(view.outline(stage))
+                for i, (section, _) in enumerate(rules.outline(stage))
                 for j, text in enumerate((section.name, *section.lines, *section.failure))
             ]
         else:
@@ -489,7 +466,7 @@ class Watch(App):
         Binding("q", "quit", "quit"),
         Binding("ctrl+c", "quit", "quit", priority=True, show=False),
     ]
-    seen = var(NOTHING, init=False)
+    seen = var(rules.NOTHING, init=False)
     entries = var(list, init=False)
     record = var(None, init=False)
 
@@ -600,7 +577,9 @@ class Watch(App):
             stopped = (self.directory / DISABLED).read_text(errors="replace")
         except OSError:
             stopped = ""
-        return Seen(runs, bench, stopped, datetime.now(UTC) if bench.live else None)
+        return rules.Seen(
+            runs, bench, stopped, datetime.now(UTC) if bench.live else None, self.directory.name
+        )
 
     @work(exclusive=True, group="queue")
     async def read_queue(self):
@@ -618,37 +597,31 @@ class Watch(App):
                 self.say(error)
             await asyncio.sleep(self.QUEUE_EVERY)
 
-    @property
-    def count(self):
-        """str: How many records the directory holds."""
-        return f"{len(self.seen.runs)} records in {self.directory.name}/"
-
     def watch_seen(self):
         """Show the new read."""
-        runs, bench, stopped, _ = self.seen
-        if self.record and all(run.record != self.record for run in runs):
+        seen = self.seen
+        if self.record and all(run.record != self.record for run in seen.runs):
             self.record = None
-        if not runs:
-            self.query_one("#title").update(self.count)
-        if self.shown == "history" or len(runs) != len(self.query_one("#history-rows").rows_shown):
+        if not seen.runs:
+            self.query_one("#title").update(view.count(seen))
+        history_rows = self.query_one("#history-rows").rows_shown
+        if self.shown == "history" or len(seen.runs) != len(history_rows):
             self.show_history()
-        state = view.state_line(bench, stopped, runs[0] if runs else None)
-        self.query_one("#state").update(state)
+        self.query_one("#state").update(view.state_line(seen))
         self.watch_entries()
 
     def show_history(self):
         """Show the records in the History table."""
-        runs, bench, _, now = self.seen
-        self.query_one("#history-rows").rows_shown = view.history_rows(runs, bench, now)
-        self.query_one("#count").update(self.count)
+        self.query_one("#history-rows").rows_shown = view.history_rows(self.seen)
+        self.query_one("#count").update(view.count(self.seen))
 
     def watch_entries(self):
         """Show the queue."""
-        rows = view.queue_rows(self.seen.runs, self.seen.bench, self.entries)
-        self.query_one("#queue-rows").rows_shown = rows
+        waiting = rules.queue(self.seen, self.entries)
+        self.query_one("#queue-rows").rows_shown = view.queue_rows(waiting)
         box = self.query_one("#preview")
         if box.display and self.previewing:
-            box.update(view.preview(*self.previewing, rows))
+            box.update(view.preview(*self.previewing, waiting))
 
     def watch_record(self):
         """Name a past run on its tab."""
@@ -764,7 +737,7 @@ class Watch(App):
             self.query_one(Tabs).active = "tab-queue"
         self.query_one("#preview").display = False
         self.previewing = None
-        if typed := view.typed_run(event.value):
+        if typed := rules.typed_run(event.value):
             self.preview(*typed)
 
     @work(exclusive=True, group="preview")
@@ -783,7 +756,7 @@ class Watch(App):
             return
         self.previewing = name, outcome
         box = self.query_one("#preview")
-        box.update(view.preview(name, outcome, self.query_one("#queue-rows").rows_shown))
+        box.update(view.preview(name, outcome, rules.queue(self.seen, self.entries)))
         box.display = self.query_one("#command-row").display
 
     def on_input_submitted(self, event):
@@ -821,7 +794,7 @@ class Watch(App):
                 self.write(lambda: self.remove_entry(int(entry)))
             else:
                 self.say("only hand-queued runs can be removed, from the Queue tab")
-        elif typed := view.typed_run(text):
+        elif typed := rules.typed_run(text):
             source, name = typed
             self.write(lambda: self.add_run(name, source))
         elif text.startswith("/"):

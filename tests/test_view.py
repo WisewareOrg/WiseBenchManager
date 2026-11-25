@@ -21,7 +21,7 @@ from status_helpers import (
     started_log,
 )
 
-from wisebench import bench_state, palette, view
+from wisebench import bench_state, palette, rules, view
 
 LIVE = bench_state.Bench(live=True, disabled=False, timer="on")
 IDLE = bench_state.Bench(live=False, disabled=False, timer="on")
@@ -30,6 +30,11 @@ STOPPED = "2026-11-10T03:15:00+00:00\nthe board is gone\n"
 PASSED = parsed(run_log())
 BUILDING = parsed(run_log("build"))
 BY_HAND = parsed(run_log(kind="test", ref="feature-a", pr=None))
+
+
+def seen(runs, bench=IDLE, now=None):
+    """One read of the disk, over `runs`."""
+    return rules.Seen(runs, bench, "", now, "records")
 
 
 def failed_at(name, state="failed", record=OLDER, **bodies):
@@ -140,7 +145,7 @@ def test_a_state_has_a_glyph_and_a_meaning(state, running, shown):
     ],
 )
 def test_the_stage_shown_follows_from_the_run_and_the_bench(run, newest, bench, shown):
-    found = view.auto_stage(run, newest, bench)
+    found = rules.auto_stage(run, newest, bench)
 
     assert (found and found.name) == shown, "the stage the bench's state calls for"
 
@@ -160,7 +165,7 @@ def test_the_stage_shown_follows_from_the_run_and_the_bench(run, newest, bench, 
     ],
 )
 def test_run_is_typed_with_a_ref_and_perhaps_a_directory(typed, run):
-    assert view.typed_run(typed) == run, "the directory and the ref, or nothing to run"
+    assert rules.typed_run(typed) == run, "the directory and the ref, or nothing to run"
 
 
 # -- Run -------------------------------------------------------------------------------------------
@@ -249,8 +254,8 @@ def test_history_is_a_row_per_run_the_newest_running_while_the_bench_is_live():
     runs.append(parsed(run_log(kind="test", ref="feature-a", pr=None), record="by hand"))
     runs.append(failed_at("build", "error", "in error"))
 
-    live = words(view.history_rows(runs, LIVE, NOW))
-    idle = words(view.history_rows(runs, IDLE, None))
+    live = words(view.history_rows(seen(runs, LIVE, NOW)))
+    idle = words(view.history_rows(seen(runs, IDLE)))
 
     assert live == [
         (STAMP, [STAMP, "PR #31", SHA[:7], "running", "427m", ""]),
@@ -268,8 +273,8 @@ def test_history_is_a_row_per_run_the_newest_running_while_the_bench_is_live():
 def test_the_queue_is_the_running_run_then_by_hand_then_the_merge_queue(local_zone):
     entries = [hand(3), hand(4, "feature-b"), merge(14), merge(15, "Fix", None)]
 
-    rows = words(view.queue_rows([BUILDING], LIVE, entries))
-    idle = words(view.queue_rows([PASSED], IDLE, entries))
+    rows = words(view.queue_rows(rules.queue(seen([BUILDING], LIVE), entries)))
+    idle = words(view.queue_rows(rules.queue(seen([PASSED], IDLE), entries)))
 
     assert rows == [
         ("running", ["▶", "merge queue", "PR #31", SHA[:7], "", "running, build"]),
@@ -297,14 +302,14 @@ def test_the_queue_is_the_running_run_then_by_hand_then_the_merge_queue(local_zo
 def test_the_running_run_takes_its_prs_title_and_leaves_out_its_commits_entry(
     run, entry, label, waiting
 ):
-    (_, running), *rest = words(view.queue_rows([run], LIVE, [entry]))
+    (_, running), *rest = words(view.queue_rows(rules.queue(seen([run], LIVE), [entry])))
 
     assert running[2] == label, "the title of the entry with the run's PR"
     assert [key for key, _ in rest] == waiting, "only the entry of the running commit is left out"
 
 
 def test_a_running_run_by_hand_says_so():
-    (_, running), *_ = words(view.queue_rows([BY_HAND], LIVE, []))
+    (_, running), *_ = words(view.queue_rows(rules.queue(seen([BY_HAND], LIVE), [])))
 
     assert running[1:3] == ["by hand", "feature-a"], "its source and its ref"
 
@@ -322,7 +327,7 @@ def test_a_running_run_by_hand_says_so():
 def test_the_preview_is_the_commit_and_the_place_after_the_running_and_hand_runs(
     bench, entries, place
 ):
-    rows = view.queue_rows([BUILDING], bench, entries)
+    rows = rules.queue(seen([BUILDING], bench), entries)
     commit = {"sha": "1234567" + "0" * 33, "subject": "Fix it", "clean": True}
 
     box = view.preview("main", commit, rows).plain.splitlines()
