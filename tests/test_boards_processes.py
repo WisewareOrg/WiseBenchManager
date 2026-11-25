@@ -38,7 +38,8 @@ def step(name):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("BENCH_", "LG_"))}
         said = subprocess.run(command, env=env, capture_output=True, text=True).stdout
     seen = {"board": board, "step": name, "before": before, "after": head(), "said": said,
-            "sha": os.environ["BENCH_SHA"], "lg_env": os.environ["LG_ENV"]}
+            "sha": os.environ["BENCH_SHA"],
+            "labgrid": {k: v for k, v in os.environ.items() if k.startswith("LG_")}}
     with open(os.environ["TOY"] + "/steps", "a") as out:
         out.write(json.dumps(seen) + "\\n")
 
@@ -84,10 +85,12 @@ class Toy:
         (bin_dir / "systemctl").chmod(0o755)
         settings = home / ".config" / "wisebench"
         settings.mkdir(parents=True)
-        (settings / "bench.env").write_text(f"LG_ENV={home / 'first.yaml'}\n")
+        (settings / "bench.env").write_text(
+            f"LG_ENV={home / 'first.yaml'}\nLG_BENCH_ADDRESS=first.invalid\n"
+        )
         toml = '[run]\nunit = "no-such-unit"\n'
         for name in ("a", "b"):
-            toml += board_settings(name, self.lg_env(name), f"no-such-unit@{name}")
+            toml += board_settings(name, self.lg_env(name))
             Path(self.lg_env(name)).write_text("targets: {}\n")
             checkout = self.root / "boards" / name / "checkout"
             subprocess.run(["git", "clone", "-q", self.layer, checkout], check=True)
@@ -169,7 +172,7 @@ def test_two_boards_run_at_once_each_on_its_own_commit_file_and_record(toy):
         steps = toy.steps(board)
         assert [seen["step"] for seen in steps] == names
         assert {seen[key] for seen in steps for key in ("before", "after", "sha")} == {sha}
-        assert {seen["lg_env"] for seen in steps} == {toy.lg_env(board)}
+        assert all(seen["labgrid"] == {"LG_ENV": toy.lg_env(board)} for seen in steps)
         (record,) = toy.records(board)
         log = (record / "bench.log").read_text()
         assert f"run started kind=test ref={'origin/HEAD' if board == 'a' else 'HEAD'} " in log

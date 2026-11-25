@@ -14,15 +14,15 @@ def root():
     return Path(wisebench.__file__).resolve().parents[2]
 
 
-def locate(board=None):
+def locate(board_name=None):
     """Name one board's layer checkout and records directory in the clone `root` finds.
 
     Args:
-        board (str | None): An added board's name; None is the first board.
+        board_name (str | None): An added board's name; None is the first board.
 
     Returns:
         tuple[pathlib.Path, pathlib.Path]: The layer checkout and the records directory:
-        `<clone>/checkout` and `<clone>/records`, or the two under `<clone>/boards/<board>`.
+        `<clone>/checkout` and `<clone>/records`, or the two under `<clone>/boards/<board_name>`.
     """
-    home = root() if board is None else root() / "boards" / board
+    home = root() if board_name is None else root() / "boards" / board_name
     return home / "checkout", home / "records"

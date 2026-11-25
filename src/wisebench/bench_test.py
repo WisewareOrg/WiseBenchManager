@@ -46,7 +46,7 @@ class BenchTest:
         kind="test",
         pr=None,
         sha=None,
-        board=None,
+        board_name=None,
     ):
         """Bind one run to a checkout, a git ref, a replay set name and whether to skip the build.
 
@@ -63,8 +63,8 @@ class BenchTest:
                 `pr=<n>` when given; set by `BenchRun`.
             sha (str | None): The commit to build, when queued by hand; `ref` is then only the
                 name the record shows. None resolves `ref` at run time.
-            board (str | None): The added board the run is on, appended to the run-started line as
-                `board=<name>`; None is the first board. Set by `BenchRun`.
+            board_name (str | None): The added board the run is on, appended to the run-started
+                line as `board=<name>`; None is the first board. Set by `BenchRun`.
         """
         self.checkout = checkout
         self.result_dir = Path(result_dir)
@@ -74,7 +74,7 @@ class BenchTest:
         self.kind = kind
         self.pr = pr
         self.sha = sha
-        self.board = board
+        self.board_name = board_name
 
     def run(self, lg_env, pytest_args, post=None):
         """Check out the ref, run the hooks, then run both suites, logging every stage.
@@ -109,7 +109,7 @@ class BenchTest:
         try:
             try:
                 pr = f" pr={self.pr}" if self.pr is not None else ""
-                board = f" board={self.board}" if self.board is not None else ""
+                board = f" board={self.board_name}" if self.board_name is not None else ""
                 self._mark(log, f"run started kind={self.kind} ref={self.ref}{pr}{board}")
                 with self._stage(log, "checkout") as info:
                     commit = self._checkout_commit(log)
@@ -123,8 +123,8 @@ class BenchTest:
                 }
                 if self.skip_build:
                     env[BENCH_SKIP_BUILD] = "true"
-                if self.board is not None:
-                    env[BENCH_BOARD] = self.board
+                if self.board_name is not None:
+                    env[BENCH_BOARD] = self.board_name
 
                 with self._stage(log, "precondition"):
                     self._run_hook(

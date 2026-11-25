@@ -255,7 +255,8 @@ class Shell:
         self._directory = directory
         self._shown_directory = os.path.relpath(directory)
         self._board = board
-        self._run_unit = read_run_unit() if board is None else board.unit
+        run_unit = read_run_unit()
+        self._run_unit = run_unit if board is None else board.unit(run_unit)
         self._queue = Queue(Path(checkout), directory, merge=board is None)
         self._run = run
         self._results, self._reads = SimpleQueue(), _Reads()

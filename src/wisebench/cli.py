@@ -95,13 +95,13 @@ def main(argv=None):
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--watch", action="store_true", required=True)
     for board_parser in (test_parser, unqueue_parser, run_parser, status_parser):
-        board_parser.add_argument("--board", default=None)
+        board_parser.add_argument("--board", dest="board_name", default=None)
     for word in ("on", "off"):
-        subparsers.add_parser(word).add_argument("board")
+        subparsers.add_parser(word).add_argument("board_name", metavar="name")
     args = parser.parse_args(own_args)
 
     try:
-        board = None if args.board is None else find_board(args.board)
+        board = None if args.board_name is None else find_board(args.board_name)
         if args.command in ("on", "off"):
             board.switch(args.command == "on")
             print(f"{board.name} is {args.command}")
@@ -110,13 +110,14 @@ def main(argv=None):
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2
 
-    checkout, directory = locate(args.board)
+    checkout, directory = locate(args.board_name)
     if args.command == "status":
         return status.watch(checkout, directory, board)
+    queue = Queue(checkout, directory, merge=board is None)
 
     if args.command == "test":
         try:
-            entry_id, sha, place = Queue(checkout, directory).add(
+            entry_id, sha, place = queue.add(
                 args.ref, args.set_name, args.skip_build, pytest_args, args.source
             )
         except subprocess.CalledProcessError:
@@ -130,7 +131,7 @@ def main(argv=None):
 
     if args.command == "unqueue":
         try:
-            removed = Queue(checkout, directory).remove(args.entry_id)
+            removed = queue.remove(args.entry_id)
         except Exception as exc:
             print(f"BENCH ERROR: {exc}", file=sys.stderr)
             return 2
@@ -150,6 +151,8 @@ def main(argv=None):
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2
     if board is not None:
+        for key in [key for key in os.environ if key.startswith("LG_")]:
+            del os.environ[key]
         os.environ["LG_ENV"] = board.lg_env
     lg_env = os.environ.get("LG_ENV")
     if not lg_env:

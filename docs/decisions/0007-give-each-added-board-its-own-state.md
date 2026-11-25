@@ -1,7 +1,7 @@
-# 0007 — Give each board its own state; an added board is off until it is turned on
+# 0007 — Give each added board its own state, its switch included
 
 **Status:** proposed
-**Decided:** not decided; proposed 2026-11-25 (S14 multi-board spike), two points open below
+**Decided:** not decided; proposed 2026-11-25 (S14 multi-board spike), three points open below
 **Rev:** 1
 
 ## Revisions
@@ -28,17 +28,19 @@ directory in the clone.**
 1. **The first board has no name and no table.** It is `checkout/`, `records/`, `LG_ENV` from
    `bench.env`, `[run] unit` and `[github]`. Every command without `--board` is the first board.
 2. **An added board is `boards/<name>/checkout` and `boards/<name>/records`.** Its table gives
-   `lg_env`, the labgrid file that names the board, and `unit`, the systemd unit its own fault
-   stops. `queue.db`, `lock`, `DISABLED` and the records hang off that one directory, so nothing in
-   them is shared. A name is letters, digits, `-` and `_`; any other, or one with no table, ends
-   the command with exit 2. `bench run` refuses, with exit 2, when two boards' labgrid files, the
-   first board's `LG_ENV` included, are one file.
+   `lg_env`, the labgrid file that names the board. `queue.db`, `lock`, `DISABLED` and the records
+   hang off that one directory, so nothing in them is shared, and its own fault stops the timer of
+   the first board's unit with `@<name>`. A name is letters, digits, `-` and `_`; any other, or one
+   with no table, ends the command with exit 2. `bench run` refuses, with exit 2, when two boards'
+   labgrid files, the first board's `LG_ENV` included, are one file. An added board's run sees one
+   `LG_` variable, `LG_ENV`, so its labgrid file cannot take the first board's address.
 3. **A board has its own checkout** (open point 1). A run checks out its commit and its suite runs
    from that tree to the end, a `--skip-build` run included, so with one tree a second board's run
    changes the tests under the first.
-4. **The runner holds no lock across boards.** What may not overlap on the host is the layer's: its
-   hooks and suites start the builds, so the layer's one build entry point takes the host's build
-   lock and waits for it. A wait is inside the run's own stage, so it counts in `TimeoutStartSec`.
+4. **The runner holds no lock across boards** (open point 3). What may not overlap on the host is
+   the layer's: its hooks and suites start the builds, so the layer's one build entry point takes the
+   host's build lock and waits for it. A wait is inside the run's own stage, so it counts in
+   `TimeoutStartSec`.
 5. **Only the first board reads the merge queue.** An added board's queue lists runs queued by
    hand, builds no `Check` and posts nothing.
 6. **The switch of an added board is the file `ON` in its records directory, absent at first.**
@@ -55,6 +57,8 @@ Built one way, each a small change to the other:
 1. **A second layer checkout with its own build directory** per added board. The other way: one
    checkout, one run at a time across boards.
 2. **The switch stays as set across a reboot.** The other way: off at every boot.
+3. **The build lock is the layer's,** in its one build entry point. The other way: in the runner,
+   held for a built run.
 
 ## Alternatives considered
 
@@ -67,6 +71,8 @@ Built one way, each a small change to the other:
   collide on ref locks, the race ADR 0005 rev 1 names.
 - **One queue table with a board column.** Rejected: it needs a migration, and one wrong query
   drives the other board.
+- **A `unit` key in the table.** Rejected: one that names another board's unit stops that board's
+  timer, and the unit is derivable.
 - **The timer as the switch.** Rejected: a `bench run` by hand ignores it, and a reboot re-arms it.
 - **A second clone of this repository.** Rejected: one host has one bench.
 - **One labgrid file with several targets.** Rejected: labgrid's `target` fixture requires a target

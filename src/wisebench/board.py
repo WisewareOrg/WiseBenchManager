@@ -15,17 +15,27 @@ class Board:
     Args:
         name (str): The table's name; it names the board's directory in the clone.
         lg_env (str): Path to the labgrid env file that names this board.
-        unit (str): The systemd unit base name whose timer this board's own fault stops.
     """
 
     name: str
     lg_env: str
-    unit: str
+
+    def unit(self, run_unit):
+        """The systemd unit base name whose timer this board's own fault stops.
+
+        Args:
+            run_unit (str | None): The first board's, `[run] unit`.
+
+        Returns:
+            str | None: `<run_unit>@<name>`; None without a `run_unit`.
+        """
+        return run_unit and f"{run_unit}@{self.name}"
 
     @property
-    def _switch(self):
+    def _switch_file(self):
         """The file whose presence turns the board on."""
-        return locate(self.name)[1] / "ON"
+        _, records = locate(self.name)
+        return records / "ON"
 
     def is_on(self):
         """Whether the board is turned on; anything but a file there is off.
@@ -33,7 +43,7 @@ class Board:
         Returns:
             bool: True if it is on.
         """
-        return os.path.isfile(self._switch)
+        return os.path.isfile(self._switch_file)
 
     def switch(self, on):
         """Turn the board on or off; nothing else of it changes.
@@ -45,10 +55,10 @@ class Board:
             OSError: The switch file could not be made or removed.
         """
         if on:
-            self._switch.parent.mkdir(parents=True, exist_ok=True)
-            self._switch.touch()
+            self._switch_file.parent.mkdir(parents=True, exist_ok=True)
+            self._switch_file.touch()
         else:
-            self._switch.unlink(missing_ok=True)
+            self._switch_file.unlink(missing_ok=True)
 
 
 def read_boards():
@@ -58,8 +68,7 @@ def read_boards():
         dict[str, Board]: The boards by name; empty without a `[boards]` table.
 
     Raises:
-        ValueError: A name is not letters, digits, `-` and `_` only.
-        KeyError: A table lacks `lg_env` or `unit`.
+        ValueError: A name is not letters, digits, `-` and `_` only, or a table has no `lg_env`.
         OSError: The settings file could not be read.
         tomllib.TOMLDecodeError: The settings file is not valid TOML.
     """
@@ -67,7 +76,9 @@ def read_boards():
     for name, table in read_settings(settings_path()).get("boards", {}).items():
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
             raise ValueError(f"board name {name!r}: letters, digits, - and _ only")
-        boards[name] = Board(name, table["lg_env"], table["unit"])
+        if "lg_env" not in table:
+            raise ValueError(f"[boards.{name}] has no lg_env")
+        boards[name] = Board(name, table["lg_env"])
     return boards
 
 
@@ -81,8 +92,8 @@ def find_board(name):
         Board: The board.
 
     Raises:
-        ValueError: No table has that name, or a name is refused.
-        KeyError, OSError, tomllib.TOMLDecodeError: As `read_boards` raises them.
+        ValueError: No table has that name, or `read_boards` refuses one.
+        OSError, tomllib.TOMLDecodeError: As `read_boards` raises them.
     """
     boards = read_boards()
     if name not in boards:
@@ -97,14 +108,16 @@ def refuse_shared_file(first):
         first (str | None): The first board's `LG_ENV`, if it has one.
 
     Raises:
-        ValueError: Two boards resolve to one file; the message names both.
-        KeyError, OSError, tomllib.TOMLDecodeError: As `read_boards` raises them.
+        ValueError: Two boards resolve to one file, the message naming both, or `read_boards`
+            refuses a table.
+        OSError, tomllib.TOMLDecodeError: As `read_boards` raises them.
     """
     files = {None: first} if first else {}
     files.update((board.name, board.lg_env) for board in read_boards().values())
     owners = {}
     for name, lg_env in files.items():
-        path = (locate(name)[0] / lg_env).resolve()
+        checkout, _ = locate(name)
+        path = (checkout / lg_env).resolve()
         owner = name or "the first board"
         if path in owners:
             raise ValueError(f"{owners[path]} and {owner} have one labgrid file, {path}")

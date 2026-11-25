@@ -22,14 +22,14 @@ class Bench:
         live (bool): The newest run is executing.
         disabled (bool): `DISABLED` exists in the records directory.
         timer (str): "on", "off" or "—".
-        board (str | None): The added board's name; None for the first board.
+        board_name (str | None): The added board's name; None for the first board.
         on (bool): The added board is turned on.
     """
 
     live: bool
     disabled: bool
     timer: str
-    board: str | None = None
+    board_name: str | None = None
     on: bool = False
 
 
@@ -174,6 +174,6 @@ def read_bench(directory, newest, run_unit, proc_root, board=None):
         live=newest is not None and is_live(directory, newest, proc_root),
         disabled=(Path(directory) / DISABLED).exists(),
         timer=DASH if run_unit is None else timer_state(run_unit),
-        board=board and board.name,
+        board_name=board and board.name,
         on=board is not None and board.is_on(),
     )

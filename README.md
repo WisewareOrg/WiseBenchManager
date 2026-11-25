@@ -25,8 +25,8 @@ bench on <name>                # let `bench run --board <name>` start runs on th
 bench off <name>               # stop it from starting another
 ```
 
-Every command but `on` and `off` acts on the first board, or on the one `--board <name>` names (see
-"More than one board").
+`on` and `off` take the board's name; every other command acts on the first board, or on the one
+`--board <name>` names (see "More than one board").
 
 `bench` acts on the clone of this repository it is installed from, from whatever directory it is
 started in: one queue, one history, one lock. `bench test` runs nothing. It resolves the ref to a
@@ -322,8 +322,9 @@ and a clone of the layer (ADR 0007 rev 1):
 ```toml
 [boards.<name>]
 lg_env = "/path/to/that/board's/env.yaml"
-unit   = "bench-run@<name>"   # bench run stops bench-run@<name>.timer on that board's own fault
 ```
+
+Edit `contrib/bench-run@.service`'s `ExecStart` to this clone's own `.venv/bin/bench`, as above, then:
 
 ```sh
 git clone <the layer repository> WiseBenchManager/boards/<name>/checkout
@@ -331,16 +332,19 @@ systemctl --user link <this clone>/contrib/bench-run@.service <this clone>/contr
 systemctl --user start bench-run@<name>.timer
 ```
 
-- **A name** is letters, digits, `-` and `_`.
+- **A name** is letters, digits, `-` and `_`. A table with another name or without `lg_env` stops
+  every board's `bench run`, the first's too, with exit 2 and the table's name.
 - **Everything of a board is its own:** `boards/<name>/` holds its `checkout/` and its `records/`,
-  with its `queue.db`, `lock` and `DISABLED`. A fault on one board stops that board alone.
+  with its `queue.db`, `lock` and `DISABLED`. A fault on one board stops that board alone: its unit
+  is the `[run] unit` with `@<name>`, so both templates are renamed with the first board's units.
 - **An added board takes only runs queued with `bench test --board <name>`.** The merge queue is the
   first board's.
-- **`lg_env` replaces `LG_ENV`** in the environment of that board's hooks and suites. The file states
-  its own address; a template of `LG_BENCH_ADDRESS` is the first board's. `bench run` refuses two
-  boards on one file, and cannot see two files that name one address. The rest of `bench.env`,
-  `PYTEST_ADDOPTS` included, reaches every board.
-- **A board is off until `bench on <name>`,** and stays as set. While it is off `bench run` starts
+- **`lg_env` is the only `LG_` variable of an added board's run,** as `LG_ENV`; every other one is
+  removed from its environment, so a file that takes one of the first board's fails and the file
+  states its own address. `bench run` refuses two boards on one file, and cannot see two files that
+  name one address. The rest of `bench.env`, `PYTEST_ADDOPTS` included, reaches every board.
+- **A board is off until `bench on <name>`,** and stays as set. Its timer does not: after a reboot
+  the board may be on and nothing starts until the timer is started by hand. While it is off `bench run` starts
   nothing on it and runs queued for it wait; a run in progress when it is turned off finishes.
   `bench on` and `bench off` touch neither the timer nor `DISABLED`, which are `:disable`'s and
   `:enable`'s, and nothing of the merge queue.

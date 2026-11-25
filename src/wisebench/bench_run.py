@@ -35,13 +35,12 @@ class BenchRun:
                 board.
 
         Raises:
-            ValueError: The first board's `config.run_unit` is None (the settings file has no
-                `[run] unit`).
+            ValueError: `config.run_unit` is None (the settings file has no `[run] unit`).
         """
-        self._board = board
-        self._unit = config.run_unit if board is None else board.unit
-        if self._unit is None:
+        if config.run_unit is None:
             raise ValueError(f"{settings_path()} is missing [run] unit, required for bench run")
+        self._board = board
+        self._unit = config.run_unit if board is None else board.unit(config.run_unit)
         self.checkout = checkout
         self.config = config
         self._result_dir = result_dir
@@ -128,7 +127,7 @@ class BenchRun:
             skip_build=entry["skip_build"],
             kind=entry["kind"],
             sha=entry["sha"],
-            board=self._board and self._board.name,
+            board_name=self._board and self._board.name,
         )
         try:
             hand.run(lg_env, entry["args"])

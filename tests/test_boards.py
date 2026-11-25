@@ -21,6 +21,8 @@ from helpers import (
     stub_merge_queue,
     write_bench_toml,
 )
+from labgrid.config import Config as LabgridConfig
+from labgrid.exceptions import InvalidConfigError
 
 from wisebench import bench_run, bench_test, cli, queue, runlog, status
 from wisebench.clone import locate
@@ -46,7 +48,7 @@ def boards(monkeypatch, bench_clone, bench_test_class):
     stub_fetch(monkeypatch)
     add_settings(run_unit_settings("first-unit"))
     for name in ("a", "b"):
-        add_settings(board_settings(name, lg_env[name], f"unit-{name}"))
+        add_settings(board_settings(name, lg_env[name]))
         checkout = locate(name)[0]
         checkout.mkdir(parents=True)
         repo_with_one_commit(checkout)
@@ -122,13 +124,23 @@ def test_a_name_with_no_table_exits_2_before_anything_is_read_or_written(
 
 @pytest.mark.parametrize("name", ["../a", ".", "a/b", "a b"])
 def test_a_table_whose_name_is_not_one_plain_word_is_refused(boards, capsys, name):
-    add_settings(board_settings(name, "x.yaml", "unit-x"))
+    add_settings(board_settings(name, "x.yaml"))
     before = tree()
 
     assert cli.main(["on", name]) == 2
 
     assert "letters, digits, - and _" in capsys.readouterr().err
     assert tree() == before
+
+
+def test_a_table_with_no_lg_env_is_named_and_stops_every_boards_run(boards, capsys):
+    line = f'lg_env = "{boards.lg_env["a"]}"\n'
+    settings_file().write_text(settings_file().read_text().replace(line, ""))
+
+    assert run() == 2
+
+    assert "[boards.a] has no lg_env" in capsys.readouterr().err
+    assert not (boards.clone.records / "DISABLED").exists()
 
 
 @pytest.mark.parametrize("command", ["on", "off"])
@@ -175,6 +187,9 @@ def test_queues_do_not_see_each_other(boards, capsys):
 
 
 def test_a_run_drives_its_own_boards_checkout_records_and_labgrid_file(boards):
+    boards.clone.bench_env.write_text(
+        f"LG_ENV={boards.lg_env[None]}\nLG_BENCH_ADDRESS=first.invalid\n"
+    )
     for name in ("a", "b"):
         cli.main(["on", name])
         enqueue(name)
@@ -182,9 +197,22 @@ def test_a_run_drives_its_own_boards_checkout_records_and_labgrid_file(boards):
         call = boards.bench_test.call_args
         assert call.args[0] == locate(name)[0]
         assert call.kwargs["result_dir"] == locate(name)[1]
-        assert call.kwargs["board"] == name
+        assert call.kwargs["board_name"] == name
         assert boards.bench_test.return_value.run.call_args.args[0] == boards.lg_env[name]
-        assert os.environ["LG_ENV"] == boards.lg_env[name]
+        labgrid = {key: value for key, value in os.environ.items() if key.startswith("LG_")}
+        assert labgrid == {"LG_ENV": boards.lg_env[name]}
+
+
+def test_a_labgrid_file_that_takes_another_variable_of_the_first_board_fails(boards):
+    boards.clone.bench_env.write_text(
+        f"LG_ENV={boards.lg_env[None]}\nLG_BENCH_ADDRESS=first.invalid\n"
+    )
+    Path(boards.lg_env["a"]).write_text("address: !template $LG_BENCH_ADDRESS\n")
+    cli.main(["on", "a"])
+    run("a")
+
+    with pytest.raises(InvalidConfigError, match="LG_BENCH_ADDRESS"):
+        LabgridConfig(boards.lg_env["a"])
 
 
 def test_an_added_board_never_reads_the_merge_queue_nor_takes_the_first_boards_runs(
@@ -211,7 +239,7 @@ def test_an_added_board_never_reads_the_merge_queue_nor_takes_the_first_boards_r
 
 
 @pytest.mark.parametrize(
-    ("faulted", "other", "unit"), [("a", None, "unit-a"), (None, "a", "first-unit")]
+    ("faulted", "other", "unit"), [("a", None, "first-unit@a"), (None, "a", "first-unit")]
 )
 def test_a_fault_disables_its_own_board_alone(boards, systemctl, faulted, other, unit):
     cli.main(["on", "a"])
@@ -387,7 +415,7 @@ def test_the_watch_shows_its_boards_name_switch_and_timer(boards, monkeypatch, s
 
     text = shown(shell.frame)
     assert ("bench a " in text) is (" ON " in text) is (name == "a")
-    assert systemctl.calls[-1][-1] == ("unit-a.timer" if name else "first-unit.timer")
+    assert systemctl.calls[-1][-1] == ("first-unit@a.timer" if name else "first-unit.timer")
     if name:
         cli.main(["off", "a"])
         shell.tick(status.datetime.now(status.UTC))
