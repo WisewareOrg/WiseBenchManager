@@ -1,12 +1,12 @@
 # 0007 — Give each added board its own state, its switch included
 
 **Status:** proposed
-**Decided:** not decided; proposed 2026-11-25 (S14 multi-board spike), two points open below
+**Decided:** not decided; proposed 2026-11-25 (#92 more than one bench board), two points open below
 **Rev:** 1
 
 ## Revisions
 
-- **rev 1** — 2026-11-25 — first written (S14 multi-board spike).
+- **rev 1** — 2026-11-25 — first written (#92 more than one bench board).
 
 ## Context
 
