@@ -11,25 +11,18 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rich.cells import cell_len
-from rich.style import Style
-from rich.text import Text
 from textual import events, work
 from textual.app import App
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.coordinate import Coordinate
 from textual.reactive import var
 from textual.widgets import (
     ContentSwitcher,
-    DataTable,
     HelpPanel,
     Input,
-    Log,
     Static,
     Tab,
     Tabs,
-    Tree,
 )
 
 from wisebench import palette, rules, view
@@ -42,6 +35,8 @@ from wisebench.bench_state import (
 )
 from wisebench.queue import Queue
 from wisebench.records import Records
+from wisebench.rows import Rows
+from wisebench.run_view import RunView, StagePane
 
 ENABLE = (
     "Enable the bench? [y/N] Clears DISABLED and starts the timer;"
@@ -87,352 +82,6 @@ async def in_daemon_thread(call, *args):
 
     threading.Thread(target=run, daemon=True).start()
     return await asyncio.wrap_future(future)
-
-
-class Rows(DataTable):
-    """A table whose rows are data; the cursor stays on its row, and filling it is not a move.
-
-    See ADR 0006 rev 1.
-
-    Args:
-        *columns (str): The column headings.
-        **kwargs: For `DataTable`.
-    """
-
-    BINDINGS = [Binding("home", "scroll_top", "top"), Binding("end", "scroll_bottom", "bottom")]
-    rows_shown = var(list, init=False)
-
-    def __init__(self, *columns, **kwargs):
-        """An empty table.
-
-        Args:
-            *columns (str): The column headings.
-            **kwargs: For `DataTable`.
-        """
-        super().__init__(
-            cursor_type="row",
-            cell_padding=0,
-            cursor_foreground_priority="renderable",
-            cursor_background_priority="css",
-            **kwargs,
-        )
-        self.add_columns(*columns)
-
-    @property
-    def key(self):
-        """Str | None: The selected row's key."""
-        return self.rows_shown[self.cursor_row][0] if self.rows_shown else None
-
-    def watch_rows_shown(self, old, new):
-        """Update the cells that changed, or fill the table when its rows did.
-
-        Args:
-            old (list[tuple]): The rows before, as (key, cells).
-            new (list[tuple]): The rows.
-        """
-        if [key for key, _ in old] == [key for key, _ in new]:
-            for i, ((_, before), (_, cells)) in enumerate(zip(old, new, strict=True)):
-                for j, cell in enumerate(cells):
-                    if (before[j].plain, before[j].style) != (cell.plain, cell.style):
-                        self.update_cell_at(Coordinate(i, j), cell, update_width=True)
-            return
-        key = old[self.cursor_row][0] if old else None
-        with self.prevent(DataTable.RowHighlighted):
-            self.clear()
-            for row_key, cells in new:
-                self.add_row(*cells, key=row_key)
-            at = next((i for i, (row_key, _) in enumerate(new) if row_key == key), 0)
-            self.move_cursor(row=at, animate=False)
-
-
-class Tests(Tree):
-    """A suite's tests, each folding over its output, the cursor's row keeping its colours.
-
-    See ADR 0006 rev 1.
-    """
-
-    ICON_NODE, ICON_NODE_EXPANDED = "▸ ", "▾ "
-
-    def on_mount(self):
-        """Draw no root and no guide lines."""
-        self.show_root, self.show_guides, self.guide_depth = False, False, 2
-
-    def render_label(self, node, base_style, style):
-        """Draw a line; a line of a test's output is styled here, as it is drawn.
-
-        Args:
-            node (textual.widgets.tree.TreeNode): The line.
-            base_style (Style): The tree's style.
-            style (Style): The line's style; only its ground is used.
-
-        Returns:
-            Text: The line.
-        """
-        ground = Style(bgcolor=style.bgcolor)
-        if isinstance(node.data, str):
-            label = palette.styled(node.data, "log")
-            label.stylize(ground)
-            return label
-        return super().render_label(node, base_style, ground)
-
-    def get_label_width(self, node):
-        """The width of a line, without styling a test's output lines that are not drawn.
-
-        Args:
-            node (textual.widgets.tree.TreeNode): The line.
-
-        Returns:
-            int: The width in cells.
-        """
-        if isinstance(node.data, str):
-            return cell_len(palette.clean(node.data))
-        return super().get_label_width(node)
-
-
-class RunView(Vertical):
-    """The Run tab: the stage list, and the stage shown beside it."""
-
-    seen = var(rules.NOTHING, init=False)
-    record = var(None, init=False)
-    picked = var(None, init=False)
-
-    def __init__(self, **kwargs):
-        """An empty view.
-
-        Args:
-            **kwargs: For `Vertical`.
-        """
-        super().__init__(**kwargs)
-        self.showing = None
-        self.pattern = ""
-        self.match = -1
-
-    def compose(self):
-        """Lay out the title, the stage list and the stage's pane.
-
-        Yields:
-            textual.widget.Widget: The widgets.
-        """
-        yield Static(id="title")
-        with Horizontal():
-            yield Rows("stage", "start", "took", id="stages")
-            with Vertical(id="pane"):
-                yield Static(id="failure")
-                yield Static(id="head")
-                yield Log(id="log")
-                yield Tests("", id="tests")
-                yield Static("Enter into the log   Space fold   Esc back to stages", id="hint")
-
-    @property
-    def run(self):
-        """Run | None: The run chosen, else the newest."""
-        seen = self.seen
-        return next((r for r in seen.runs if r.record == self.record), seen.newest)
-
-    @property
-    def stage(self):
-        """Stage | None: The stage picked, else the one the bench's state calls for."""
-        picked = next((s for s in self.run.stages if s.name == self.picked), None)
-        return picked or rules.auto_stage(self.run, self.run is self.seen.newest, self.seen.bench)
-
-    def watch_record(self):
-        """Show another run, with no stage picked."""
-        self.picked = None
-        self.watch_seen()
-
-    def watch_seen(self):
-        """Show the run and its stage."""
-        run = self.run
-        if run is None:
-            return
-        seen, stage = self.seen, self.stage
-        newest, live = run is seen.newest, run is seen.running
-        self.query_one("#title").update(view.run_title(run, newest, seen.bench))
-        self.show_stages(run, stage, live, seen.now)
-        self.show_head(run, stage, live, seen.now)
-        failure = self.query_one("#failure")
-        failure.display = seen.bench.disabled and newest
-        if failure.display:
-            failure.update(view.failure(seen.stopped, run))
-        self.show_log(run, stage, live, seen.now)
-
-    watch_picked = watch_seen
-
-    def show_stages(self, run, stage, live, now):
-        """Show the stage list, its cursor on the stage shown, tinted by that stage's state.
-
-        Args:
-            run (Run): The run shown.
-            stage (Stage | None): The stage shown.
-            live (bool): The bench is running this run.
-            now (datetime | None): The current time.
-        """
-        stages = self.query_one("#stages")
-        rows = [(s.name, view.stage_cells(s, live, now)) for s in run.stages]
-        stages.rows_shown = palette.table(rows)
-        with self.prevent(DataTable.RowHighlighted):
-            stages.move_cursor(row=run.stages.index(stage) if stage else 0, animate=False)
-        tint = view.tone(stage.state, live)[1] if stage else "none"
-        stages.set_classes(tint)
-
-    def show_head(self, run, stage, live, now):
-        """Show the lines over the stage's log.
-
-        Args:
-            run (Run): The run shown.
-            stage (Stage | None): The stage shown.
-            live (bool): The bench is running this run.
-            now (datetime | None): The current time.
-        """
-        head = self.query_one("#head")
-        head.set_class(bool(stage and stage.sections), "suite")
-        head.set_class(stage is None, "none")
-        head.update(view.head(run, stage, live, now))
-
-    def show_log(self, run, stage, live, now):
-        """Show the stage's output: a suite's tests in the tree, any other stage's lines in the log.
-
-        Args:
-            run (Run): The run shown.
-            stage (Stage | None): The stage shown.
-            live (bool): The bench is running this run.
-            now (datetime | None): The current time.
-        """
-        log, tests = self.query_one(Log), self.query_one(Tests)
-        suite = bool(stage and stage.sections)
-        log.display, tests.display = stage is not None and not suite, suite
-        self.query_one("#hint").display = suite
-        showing = run.record, stage and stage.name
-        if self.showing != showing:
-            self.match = -1
-            log.clear()
-            tests.clear()
-        self.showing = showing
-        if suite:
-            self.show_tests(tests, stage, live, now)
-        elif stage:
-            shown = [view.shown_line(text) for text in stage.lines[log.line_count :]]
-            log.write_lines([palette.clean(text) or " " for text in shown])
-
-    def show_tests(self, tests, stage, live, now):
-        """Show a suite's tests, the running and failed ones open, and land the cursor.
-
-        The cursor lands again on every read until the tree has the focus.
-
-        Args:
-            tests (Tree): The tree.
-            stage (Stage): The suite.
-            live (bool): The bench is running this run.
-            now (datetime | None): The current time.
-        """
-        outline = rules.outline(stage)
-        for i, (section, end) in enumerate(outline):
-            label = view.section_label(section, end, live, now)
-            opened = section.outcome in ("open", "failed")
-            node = tests.root.children[i] if i < len(tests.root.children) else None
-            if node is None or node.data.id != section.id:
-                node = tests.root.add(label, section, before=node, expand=opened)
-            elif node.label != label:
-                node.set_label(label)
-            if node.data.outcome != section.outcome:
-                if opened:
-                    node.expand()
-                else:
-                    node.collapse()
-            node.data, node.allow_expand = section, bool(section.lines or section.failure)
-            if node.is_expanded:
-                self.fill(node)
-        if not tests.has_focus:
-            node = tests.root.children[rules.landing([section for section, _ in outline])]
-            self.call_after_refresh(tests.move_cursor, node)
-
-    @staticmethod
-    def fill(node):
-        """Put a test's output, then its failure lines, under it.
-
-        The lines already under it stay when they are the first of the new ones; else all are
-        made again.
-
-        Args:
-            node (textual.widgets.tree.TreeNode): The test.
-        """
-        rows = [*node.data.lines, *node.data.failure]
-        have = [leaf.data for leaf in node.children]
-        if rows[: len(have)] != have:
-            node.remove_children()
-            have = []
-        for text in rows[len(have) :]:
-            node.add_leaf(Text(), text)
-
-    def on_tree_node_expanded(self, event):
-        """Fill a test as it opens.
-
-        Args:
-            event (Tree.NodeExpanded): The test.
-        """
-        if event.node.data:
-            self.fill(event.node)
-
-    def on_data_table_row_highlighted(self, event):
-        """Show the stage the operator moved to.
-
-        Args:
-            event (DataTable.RowHighlighted): The stage.
-        """
-        self.picked = event.row_key.value
-
-    def on_data_table_row_selected(self, event):
-        """Enter on a stage: go into its log.
-
-        Args:
-            event (DataTable.RowSelected): The stage.
-        """
-        event.stop()
-        if self.stage is None:
-            self.picked = event.row_key.value
-        tests = self.query_one(Tree)
-        self.screen.set_focus(tests if tests.display else self.query_one(Log))
-
-    def find(self):
-        """Go to the next line holding the search, opening the test it is in.
-
-        Returns:
-            bool: Whether a line holds it.
-        """
-        stage = self.run and self.stage
-        if stage and stage.sections:
-            rows = [
-                (i, j, text)
-                for i, (section, _) in enumerate(rules.outline(stage))
-                for j, text in enumerate((section.name, *section.lines, *section.failure))
-            ]
-        else:
-            rows = [(None, j, text) for j, text in enumerate(self.query_one(Log).lines)]
-        for at in (k % len(rows) for k in range(self.match + 1, self.match + 1 + len(rows))):
-            section, row, text = rows[at]
-            if self.pattern in text:
-                self.match = at
-                self.go_to(section, row)
-                return True
-        return False
-
-    def go_to(self, section, row):
-        """Move to a line of the stage's log.
-
-        Args:
-            section (int | None): The test's place; None for a stage without tests.
-            row (int): The line; 0 in a test is the test itself.
-        """
-        if section is None:
-            self.query_one(Log).scroll_to(y=row, animate=False)
-            return
-        tests = self.query_one(Tree)
-        node = tests.root.children[section]
-        if row:
-            node.expand()
-            self.fill(node)
-        self.screen.set_focus(tests)
-        self.call_after_refresh(tests.move_cursor, node.children[row - 1] if row else node)
 
 
 class Watch(App):
@@ -602,8 +251,6 @@ class Watch(App):
         seen = self.seen
         if self.record and all(run.record != self.record for run in seen.runs):
             self.record = None
-        if not seen.runs:
-            self.query_one("#title").update(view.count(seen))
         history_rows = self.query_one("#history-rows").rows_shown
         if self.shown == "history" or len(seen.runs) != len(history_rows):
             self.show_history()
@@ -798,9 +445,7 @@ class Watch(App):
             source, name = typed
             self.write(lambda: self.add_run(name, source))
         elif text.startswith("/"):
-            pane = self.query_one(RunView)
-            pane.pattern, pane.match = text[1:], -1
-            self.action_find()
+            self.action_find(text[1:])
 
     @work
     async def write(self, call):
@@ -845,11 +490,14 @@ class Watch(App):
         gone = self.queue.remove(entry)
         return f"removed queued run {entry}" if gone else f"no queued run {entry}"
 
-    def action_find(self):
-        """Go to the next line holding the search."""
-        run = self.query_one(RunView)
-        if run.pattern and not run.find():
-            self.say(f"no match for {run.pattern}")
+    def action_find(self, pattern=None):
+        """Go to the next line holding the search.
+
+        Args:
+            pattern (str | None): A new search; None goes on with the last.
+        """
+        if missing := self.query_one(StagePane).find(pattern):
+            self.say(f"no match for {missing}")
 
 
 def watch(checkout, directory):
