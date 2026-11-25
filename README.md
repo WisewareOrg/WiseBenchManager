@@ -226,6 +226,8 @@ is `KEY=value` lines, blank lines and `#` comments.
 
 `uv sync --frozen` installs exactly the versions in `uv.lock`. The package's version is derived from
 the checked-out tag by hatch-vcs when uv builds it; `run.json` carries that version.
+Checking out another tag takes both syncs again, after the checkout: without the `tools/mitmproxy` one
+a suite that uses `proxy` is a bench fault, or replays with the `mitmdump` of the tag before it.
 
 mitmproxy has its own locked environment, the uv project `tools/mitmproxy/`, so that its pins never
 set the runner's; the second link puts its `mitmdump` on `PATH`. The `proxy` fixture runs that
