@@ -574,7 +574,10 @@ class Watch(App):
     async def read_disk(self):
         """Read the records and the bench every `READ_EVERY` seconds, off the screen's thread."""
         while True:
-            self.seen = await in_daemon_thread(self.look)
+            seen = await in_daemon_thread(self.look)
+            if not self.is_running:
+                return
+            self.seen = seen
             await asyncio.sleep(self.READ_EVERY)
 
     def look(self):
@@ -594,12 +597,17 @@ class Watch(App):
     @work(exclusive=True, group="queue")
     async def read_queue(self):
         """Read the queue every `QUEUE_EVERY` seconds while its tab shows."""
-        while self.shown == "queue":
+        while self.is_running and self.shown == "queue":
             try:
-                self.entries = await in_daemon_thread(self.queue.entries)
+                entries, error = await in_daemon_thread(self.queue.entries), None
             except Exception as exc:
-                if not self.query_one("#command-row").display:
-                    self.say(exc)
+                entries, error = None, exc
+            if not self.is_running:
+                return
+            if error is None:
+                self.entries = entries
+            elif not self.query_one("#command-row").display:
+                self.say(error)
             await asyncio.sleep(self.QUEUE_EVERY)
 
     @property
@@ -763,6 +771,8 @@ class Watch(App):
             outcome = await in_daemon_thread(self.queue.preview, name, source)
         except Exception as exc:
             outcome = exc
+        if not self.is_running:
+            return
         self.previewing = name, outcome
         box = self.query_one("#preview")
         box.update(view.preview(name, outcome, self.query_one("#queue-rows").rows_shown))
@@ -819,10 +829,12 @@ class Watch(App):
             call (Callable[[], str]): Makes the change and returns what to say.
         """
         try:
-            self.say(await asyncio.to_thread(call))
+            said = await asyncio.to_thread(call)
         except Exception as exc:
-            self.say(exc)
-        self.read_queue()
+            said = exc
+        if self.is_running:
+            self.say(said)
+            self.read_queue()
 
     def add_run(self, ref, source):
         """Queue a run by hand.
