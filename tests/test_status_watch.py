@@ -42,10 +42,12 @@ from status_helpers import (
 )
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_delay, wait_fixed
 from textual import events
-from textual.widgets import ContentSwitcher, HelpPanel, Input, Log, Tab, Tree
+from textual.widget import Widget
+from textual.widgets import ContentSwitcher, DataTable, HelpPanel, Input, Log, Tab, Tree
 
-from wisebench import status
+from wisebench import status, view
 from wisebench.queue import Queue
+from wisebench.records import Records
 
 SIZE = (120, 34)
 NEVER = 3600
@@ -121,7 +123,7 @@ class WatchCase(unittest.IsolatedAsyncioTestCase):
         self.app = status.Watch(self.clone.checkout, self.records)
         async with self.app.run_test(size=SIZE) as self.pilot:
             count = len(list(self.records.glob("*/bench.log")))
-            await self.eventually(lambda: len(self.app.seen.runs) == count, "the records are read")
+            await self.eventually(lambda: self.records_read == count, "the records are read")
             await self.pilot.pause()
             yield
             self.app.workers.cancel_all()
@@ -138,6 +140,11 @@ class WatchCase(unittest.IsolatedAsyncioTestCase):
                 await self.pilot.pause()
                 assert holds(), meaning
 
+    @property
+    def records_read(self):
+        """How many runs the view has read."""
+        return len(self.app.seen.runs)
+
     async def read(self):
         """Read the disk, as the view does on its period."""
         self.app.seen = self.app.look()
@@ -152,10 +159,15 @@ class WatchCase(unittest.IsolatedAsyncioTestCase):
         """Type a command or a search, and Enter."""
         await self.press(*text, "enter")
 
+    @staticmethod
+    def displayed(widget):
+        """Whether a widget and all it is in are displayed."""
+        return all(each.display for each in widget.ancestors_with_self if isinstance(each, Widget))
+
     def shown(self, selector):
         """The text of a displayed `Static`; blank while it is not displayed."""
         widget = self.app.query_one(selector)
-        return str(widget.content) if widget.display else ""
+        return str(widget.content) if self.displayed(widget) else ""
 
     @property
     def message(self):
@@ -170,7 +182,7 @@ class WatchCase(unittest.IsolatedAsyncioTestCase):
     @property
     def stage(self):
         """The stage the list is on."""
-        return self.app.query_one("#stages").key
+        return self.row_of("#stages")
 
     @property
     def log(self):
@@ -195,9 +207,32 @@ class WatchCase(unittest.IsolatedAsyncioTestCase):
         data = self.app.query_one(Tree).cursor_node.data
         return data if isinstance(data, str) else data.name
 
+    def table(self, selector):
+        """A table's rows: each one's key and the text of its cells."""
+        table = self.app.query_one(selector, DataTable)
+        return [
+            (row.key.value, [str(cell).strip() for cell in table.get_row(row.key)])
+            for row in table.ordered_rows
+        ]
+
     def keys_of(self, selector):
         """The keys of a table's rows."""
-        return [key for key, _ in self.app.query_one(selector).rows_shown]
+        return [key for key, _ in self.table(selector)]
+
+    def row_of(self, selector):
+        """The key of the row a table's cursor is on."""
+        return self.keys_of(selector)[self.app.query_one(selector, DataTable).cursor_row]
+
+    @property
+    def typed(self):
+        """The text of the command line; None while it is closed."""
+        line = self.app.query_one(Input)
+        return line.value if self.displayed(line) else None
+
+    @property
+    def question(self):
+        """What the command line asks; blank while it is closed or holds text."""
+        return self.app.query_one(Input).placeholder if self.typed == "" else ""
 
     def says(self, text):
         """Whether the message holds `text`."""
@@ -481,7 +516,7 @@ class TestHistory(WatchCase):
     @property
     def result_shown(self):
         """The result History shows for the newest run."""
-        return self.app.query_one("#history-rows").rows_shown[0][1][3].plain.strip()
+        return self.table("#history-rows")[0][1][3]
 
     async def test_enter_shows_the_run_under_the_cursor_and_the_newest_is_unnamed(self):
         self.three_runs()
@@ -507,10 +542,10 @@ class TestQueue(WatchCase):
             await self.press("2")
             await self.eventually(lambda: self.keys_of("#queue-rows"), "the queue is read")
 
-            rows = self.app.query_one("#queue-rows").rows_shown
-            assert [key for key, _ in rows] == [f"hand {entry}", "merge 14"], "in run order"
-            assert "HEAD" in [cell.plain.strip() for cell in rows[0][1]], "the ref queued"
-            assert "PR #14 Add slot check" in [c.plain.strip() for c in rows[1][1]], "the PR"
+            (first, first_cells), (second, second_cells) = self.table("#queue-rows")
+            assert (first, second) == (f"hand {entry}", "merge 14"), "in run order"
+            assert "HEAD" in first_cells, "the ref queued"
+            assert "PR #14 Add slot check" in second_cells, "the PR and its title"
 
     async def test_the_queue_is_read_on_entering_and_each_period_while_it_shows(self):
         queue = self.stub_queue()
@@ -556,12 +591,12 @@ class TestQueue(WatchCase):
             await self.press("2")
             await self.eventually(lambda: len(self.keys_of("#queue-rows")) == 3, "a read")
             await self.press("j")
-            at = [self.app.query_one("#queue-rows").key]
+            at = [self.row_of("#queue-rows")]
             for entries in ([hand(4), merge(14)], [hand(2), hand(3), hand(4)], [hand(2), hand(3)]):
                 queue.entries.return_value = entries
                 await self.eventually(partial(self.shows, len(entries)), "a read")
                 await self.pilot.pause()
-                at.append(self.app.query_one("#queue-rows").key)
+                at.append(self.row_of("#queue-rows"))
 
             assert at == ["hand 4", "hand 4", "hand 4", "hand 2"], "its entry, else the first row"
 
@@ -658,9 +693,7 @@ class TestRemoveCommand(WatchCase):
 
     async def selected(self, key):
         """Wait for the cursor to be on a row of the Queue."""
-        await self.eventually(
-            lambda: self.app.query_one("#queue-rows").key == key, f"the cursor is on {key}"
-        )
+        await self.eventually(lambda: self.row_of("#queue-rows") == key, f"the cursor is on {key}")
 
     async def test_remove_removes_the_selected_run(self):
         async with self.watch():
@@ -718,13 +751,6 @@ class TestBenchCommands(WatchCase):
         """A disabled bench."""
         self.disabled = self.records / "DISABLED"
         self.disabled.write_text(STOPPED)
-
-    @property
-    def question(self):
-        """The question in the command line; blank while it is closed or holds text."""
-        line = self.app.query_one(Input)
-        shown = self.app.query_one("#command-row").display and not line.value
-        return line.placeholder if shown else ""
 
     async def test_disable_stops_the_timer_once_and_says_so(self):
         async with self.watch():
@@ -820,10 +846,10 @@ class TestReads(WatchCase):
     async def test_a_key_takes_effect_before_a_blocked_call_returns(self):
         self.record(run_log())
         for name, keys, outcome in (
-            ("runs", [], []),
             ("entries", ["2"], []),
             ("preview", [*":run x", "escape"], RuntimeError("no")),
             ("add", [*":run x", "enter"], (5, "5" * 40, 1)),
+            ("runs", [], []),
         ):
             with self.subTest(name):
                 await self.key_while_blocked(name, keys, Held(outcome))
@@ -831,14 +857,14 @@ class TestReads(WatchCase):
     async def key_while_blocked(self, name, keys, held):
         """Press a key while a call is held, and assert it took effect before the call returned."""
         queue = self.stub_queue()
+        self.periods(read=OFTEN)
         async with self.watch():
             if name == "runs":
-                self.monkeypatch.setattr(self.app.records, "runs", held)
-                self.app.read_disk()
+                self.monkeypatch.setattr(Records, "runs", held)
             else:
                 getattr(queue, name).side_effect = held
             await self.press(*keys)
-            began = held.started.is_set() or held.started.wait(1)
+            began = held.started.wait(1)
             await self.press("3")
             tab, returned = self.tab, held.returned
             held.released.set()
@@ -869,10 +895,10 @@ class TestReads(WatchCase):
             typed = []
             for command in (":run main", ":remove", ":disable", ":enable"):
                 await self.press(*command)
-                typed.append(self.app.query_one(Input).value)
+                typed.append(self.typed)
                 await self.press("escape")
             await self.command(":enable")
-            asked = self.app.query_one(Input).placeholder
+            asked = self.question
             await self.press("n", "enter")
             await self.read()
             await self.pilot.pause(0.1)
@@ -933,7 +959,7 @@ class TestKeys(WatchCase):
 
     async def from_row_30(self, key):
         """The row a key moves History's cursor to from row 30."""
-        table = self.app.query_one("#history-rows")
+        table = self.app.query_one("#history-rows", DataTable)
         table.move_cursor(row=30)
         await self.press(key)
         return table.cursor_row
@@ -944,8 +970,7 @@ class TestKeys(WatchCase):
                 with self.subTest(key):
                     await self.press(key)
 
-                    assert self.app.query_one("#command-row").display, "the line is open"
-                    assert self.app.query_one(Input).value == ":", "on a colon"
+                    assert self.typed == ":", "the line is open on a colon"
                     await self.press("escape")
             await self.press("?")
             panels = [len(self.app.screen.query(HelpPanel))]
@@ -957,12 +982,21 @@ class TestKeys(WatchCase):
     async def test_in_the_command_line_a_key_is_text_and_esc_gives_the_list_focus(self):
         async with self.watch():
             await self.press(*":q1j?")
-            typed, tab = self.app.query_one(Input).value, self.tab
+            typed, tab = self.typed, self.tab
             await self.press("escape")
 
             assert (typed, tab) == (":q1j?", "run"), "no key acts"
-            assert not self.app.query_one("#command-row").display, "Esc closes the line"
+            assert self.typed is None, "Esc closes the line"
             assert self.app.focused.id == "stages", "the view's list has focus"
+
+    async def test_colon_q_ends_the_view(self):
+        async with self.watch():
+            running = self.app.is_running
+            await self.pilot.press(*":q", "enter")
+            await self.eventually(lambda: not self.app.is_running, "it ends")
+
+            assert running, "it was running"
+            assert not self.app.return_code, "and that is no failure"
 
 
 # -- cost ------------------------------------------------------------------------------------------
@@ -1013,7 +1047,7 @@ class TestCost(WatchCase):
                 "History j": await self.key("j", "3", "g"),
                 "History G": await self.key("G", "3", "g"),
             }
-            rows = len(self.app.query_one("#history-rows").rows_shown)
+            rows = len(self.keys_of("#history-rows"))
             await self.press("1", "enter")
             for key, before in (("j", "g"), ("k", "G"), ("G", "g"), ("g", "G")):
                 costs[f"tests {key}"] = await self.key(key, before)
@@ -1025,7 +1059,7 @@ class TestCost(WatchCase):
             assert opened == (True, lines), "the first test opened"
             self.assert_within(costs)
 
-    async def test_a_live_reads_cpu_is_bounded_over_many_records_and_a_long_log(self):
+    async def test_a_live_reads_work_is_not_that_of_every_record_and_line(self):
         lines = [f"NOTE: line {i}" for i in range(12_000)]
         for i in range(2_000):
             self.record(run_log(), f"2025{i:06d}")
@@ -1033,20 +1067,17 @@ class TestCost(WatchCase):
         self.live()
 
         async with self.watch():
-            same = await self.cpu(self.read)
-            seen = []
-            for i in range(5):
-                self.record(run_log("build", build=output(*lines, *map(str, range(i + 1)))))
-                seen.append(self.app.look())
-            more = await self.cpu(partial(self.show_next, iter(seen)))
+            before = self.log.line_count
+            self.record(run_log("build", build=output(*lines, "new")))
+            with (
+                mock.patch.object(view, "styled", side_effect=view.styled) as cells,
+                mock.patch.object(view, "shown_line", side_effect=view.shown_line) as shown,
+            ):
+                await self.read()
 
-            assert self.log.line_count == 12_005, "every new line is shown"
-            self.assert_within({"a read with nothing new": same, "a read with a new line": more})
-
-    async def show_next(self, seen):
-        """Show the next of some reads."""
-        self.app.seen = next(seen)
-        await self.pilot.pause()
+            assert (before, self.log.line_count) == (12_000, 12_001), "the new line shows"
+            assert shown.call_count == 1, "only the new line is handled"
+            assert 0 < cells.call_count < 500, "not a cell per record, with History hidden"
 
     async def test_a_long_tests_work_is_the_rows_drawn_and_the_lines_added(self):
         lines = [f"line {i}" for i in range(12_000)]
@@ -1059,7 +1090,7 @@ class TestCost(WatchCase):
             await self.press("enter", "space")
             folded, cursor = self.tests[0][1], self.test_row
             with mock.patch.object(
-                status.Tests, "render_label", autospec=True, side_effect=status.Tests.render_label
+                type(tree), "render_label", autospec=True, side_effect=type(tree).render_label
             ) as drawn:
                 await self.press("space")
             opened, rows = self.tests[0][1], [leaf.id for leaf in tree.root.children[0].children]

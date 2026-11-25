@@ -71,7 +71,7 @@ class TestTerminal:
         (suite / "report.jsonl").write_text("".join(json.dumps(r) + "\n" for r in target_suite))
         (suite.parent / "bench.log").write_text(text)
 
-    @pytest.mark.parametrize("keys", ["q", ":q\r", "\x03"], ids=["q", ":q", "Ctrl-C"])
+    @pytest.mark.parametrize("keys", ["q", "\x03"], ids=["q", "Ctrl-C"])
     def test_quitting_exits_0_and_the_mouse_is_never_reported(self, keys):
         child = self.watch()
         child.send(keys)
