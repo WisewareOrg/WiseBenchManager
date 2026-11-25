@@ -14,7 +14,6 @@ from wisebench.bench_state import DASH
 from wisebench.runlog import KAS_STAMP
 
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
-_RUN_PROMPT = re.compile(r":run\s+(.*)")
 _RESULTS = {
     "passed": ("passed", "passed"),
     "failed": ("failed", "failed"),

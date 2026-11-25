@@ -1,4 +1,4 @@
-"""Style: the palette, and text in it that is safe to draw."""
+"""The palette, and text in it that is safe to draw."""
 
 from rich.style import Style
 from rich.text import Text
