@@ -221,6 +221,17 @@ def test_an_added_boards_fault_turns_it_off_and_touches_no_other(boards, capsys,
     assert (waiting("a"), waiting()) == ([], [])
 
 
+def test_a_fault_that_cannot_be_written_down_still_turns_the_board_off(boards):
+    cli.main(["on", "a"])
+    enqueue("a")
+    (locate("a")[1] / "DISABLED").mkdir()
+    boards.bench_test.return_value.run.side_effect = bench_test.BenchFailure("precondition")
+
+    assert run("a") == 2
+
+    assert not (locate("a")[1] / "ON").exists()
+
+
 def test_the_first_boards_fault_leaves_an_added_board_on(boards, systemctl):
     cli.main(["on", "a"])
     for name in ("a", None):

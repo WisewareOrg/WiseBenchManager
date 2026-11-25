@@ -44,7 +44,7 @@ and state.**
    first.** `bench on <name>` makes it, `bench off <name>` removes it, and neither touches the queue
    or a timer. Without it `bench run --board <name>` exits 0 before the queue, git or any hook.
    Queueing still works, and a run in progress finishes.
-8. **A failure of the bench on an added board writes its `DISABLED`, then removes its `ON` and stops
+8. **A failure of the bench on an added board removes its `ON`, then writes its `DISABLED`, and stops
    no timer.** `DISABLED` there is the reason and nothing more. `bench on` removes it and says what it
    said, so no command leaves a board on and disabled; `bench off` leaves it.
 

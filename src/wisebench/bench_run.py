@@ -57,8 +57,9 @@ class BenchRun:
 
         Raises:
             Exception: A failure that is this runner's own, not the candidate's -- the
-                `DISABLED` marker is written and `config.run_unit`'s timer stopped first (or an
-                added board's `ON` removed), then this is re-raised as-is so the CLI exits 2.
+                `DISABLED` marker is written and `config.run_unit`'s timer stopped first (an added
+                board's `ON` is removed before that, and no timer stopped), then this is re-raised
+                as-is so the CLI exits 2.
         """
         on_path = self._result_dir / ON
         if not self._merge and not on_path.exists():
@@ -110,13 +111,12 @@ class BenchRun:
             except CandidateFailure:
                 return
         except Exception as exc:
+            if not self._merge:
+                on_path.unlink(missing_ok=True)
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""
             disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{reason}\n")
-            if not self._merge:
-                on_path.unlink(missing_ok=True)
-                raise
-            failure = stop_timer(self.config.run_unit)
+            failure = stop_timer(self.config.run_unit) if self._merge else None
             if failure:
                 print(f"bench run: {failure}", file=sys.stderr)
             raise
