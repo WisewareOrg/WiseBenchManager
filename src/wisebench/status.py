@@ -666,6 +666,8 @@ class Watch(App):
         self.query_one(ContentSwitcher).current = event.tab.id.removeprefix("tab-")
         if self.shown == "queue":
             self.read_queue()
+        elif self.shown == "history":
+            self.show_history()
 
     def action_tab(self, name):
         """Show a view and focus its list.
