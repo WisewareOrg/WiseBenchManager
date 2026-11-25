@@ -21,6 +21,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.reactive import var
+from textual.theme import Theme
 from textual.widgets import (
     ContentSwitcher,
     DataTable,
@@ -51,7 +52,21 @@ ENABLE = (
     " the next run checks the board first."
 )
 
-KEYS = Text.assemble((" ? ", Style(color="#0c0c0c", bgcolor="#cccccc")), " keys")
+KEYS = Text.assemble(
+    (" ? ", Style(color=view.COLOURS["ground"], bgcolor=view.COLOURS["ink"])), " keys"
+)
+THEME = Theme(
+    name="bench",
+    primary=view.COLOURS["hand"],
+    success=view.COLOURS["passed"],
+    warning=view.COLOURS["running"],
+    error=view.COLOURS["failed"],
+    foreground=view.COLOURS["ink"],
+    background=view.COLOURS["ground"],
+    surface=view.COLOURS["ground"],
+    panel=view.COLOURS["ground"],
+    variables=view.COLOURS,
+)
 
 VIM = {
     "j": "down",
@@ -503,6 +518,8 @@ class Watch(App):
             directory (pathlib.Path): The records directory.
         """
         super().__init__()
+        self.register_theme(THEME)
+        self.theme = THEME.name
         self.directory, self.records = directory, Records(directory)
         self.queue, self.unit = Queue(checkout, directory), read_run_unit()
         self.target, self.previewing = None, None

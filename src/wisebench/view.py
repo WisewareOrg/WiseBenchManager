@@ -21,6 +21,11 @@ COLOURS = {
     "log": "#a8a8a8",
     "bright": "#ffffff",
     "rule": "#3a3a3a",
+    "ground": "#0c0c0c",
+    "ink": "#cccccc",
+    "selection": "#1f2a36",
+    "running-ground": "#2a2614",
+    "failed-ground": "#3a1d20",
 }
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
@@ -531,7 +536,7 @@ def state_line(bench, stopped, run):
     word, meaning = ("RUNNING", "running") if bench.live else ("IDLE", "rule")
     if bench.disabled and not bench.live:
         word, meaning = "DISABLED", "failed"
-    badge = Text(f" {word} ", Style(color="#0c0c0c", bgcolor=COLOURS[meaning], bold=True))
+    badge = Text(f" {word} ", Style(color=COLOURS["ground"], bgcolor=COLOURS[meaning], bold=True))
     timer = {"on": "passed", "off": "failed"}.get(bench.timer, "dim")
     text = Text.assemble(badge, line(("  timer ", "dim"), (bench.timer, timer)))
     if bench.disabled and run:
@@ -614,7 +619,7 @@ def queue_rows(runs, bench, entries):
         cells.append((f"running, {opened}", "running"))
         rows.append(("running", tuple(styled(*cell) for cell in cells)))
         for cell in rows[0][1]:
-            cell.style += Style(bgcolor="#2a2614")
+            cell.style += Style(bgcolor=COLOURS["running-ground"])
     for entry in entries:
         place, sha = (str(len(rows) + 1),), ((entry["sha"] or "")[:7],)
         if entry["kind"] == "test":
