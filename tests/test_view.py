@@ -246,6 +246,12 @@ def test_the_failure_box_says_whose_failure_it_is_why_and_where(local_zone, stop
     assert box == ["bench failure, not the candidate's", *shown], "whose, why, and where"
 
 
+def test_the_count_shows_a_directorys_name_as_it_is_and_cleaned():
+    shown = view.count(rules.Seen([], IDLE, "", None, "a[/b]\x1b")).plain
+
+    assert shown == "0 records in a[/b]^[/", "brackets are text, a control is shown as text"
+
+
 # -- History ---------------------------------------------------------------------------------------
 
 

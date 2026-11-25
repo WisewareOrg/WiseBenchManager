@@ -399,9 +399,9 @@ def count(seen):
         seen (Seen): The read.
 
     Returns:
-        str: The count and the directory's name.
+        Text: The count and the directory's name.
     """
-    return f"{len(seen.runs)} records in {seen.directory}/"
+    return palette.styled(f"{len(seen.runs)} records in {seen.directory}/")
 
 
 def queue_rows(waiting):
