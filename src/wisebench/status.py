@@ -606,7 +606,7 @@ class Watch(App):
                 return
             if error is None:
                 self.entries = entries
-            elif not self.query_one("#command-row").display:
+            else:
                 self.say(error)
             await asyncio.sleep(self.QUEUE_EVERY)
 
