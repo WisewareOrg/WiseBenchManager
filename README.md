@@ -290,20 +290,21 @@ and shows a run from History or with `[` and `]` in the same layout.
 | `?` | open or close Textual's keys panel, which lists the focused widget's keys and the view's |
 | `q` `^c` | quit |
 
-Anything that changes the bench is a typed command. `:run [-C <dir>] <ref>` shows Queue, previews the
-ref as you type, and `Enter` queues it. `:remove` in Queue removes the run queued by hand that was
-selected when the command line opened. `:disable` stops the run timer; a run in progress finishes.
-`:enable` asks first, and `y` then `Enter` removes `DISABLED` and starts the timer; any other answer
-leaves the bench as it is. `:q` quits. Without a terminal the view prints a `BENCH ERROR` line and
-exits 2.
+Anything that changes the bench is a typed command. `:run [-C <dir>] <ref>` shows Queue, previews
+the ref as you type, and `Enter` queues it. `:remove` in Queue removes the run queued by hand that
+was selected when the command line opened. `:disable` stops the run timer; a run in progress
+finishes. `:enable` asks first, and `y` then `Enter` removes `DISABLED` and starts the timer; any
+other answer leaves the bench as it is. `:q` quits. Without a terminal the view prints a
+`BENCH ERROR` line and exits 2.
 
 Each second, off the screen's thread, it reads `records/*/bench.log`, each suite's `report.jsonl`,
 `records/DISABLED`, the holder of the `lock` file from `/proc/locks`, and the run timer's state from
 `systemctl --user`; the settings file's `[run] unit` is read when it starts. While Queue shows, it
-reads the queue every 30 s, and again after a change. It takes no lock and runs no git itself. It reads and
-changes the queue only through `Queue`, the same entry point as `bench test` and `bench unqueue`; beside
-that, only `:enable` writes a file (it removes `DISABLED`), and only `:disable` and `:enable` change the
-timer. Control characters in anything read are shown as text, and mouse reporting stays off.
+reads the queue every 30 s, and again after a change. It takes no lock and runs no git itself. It
+reads and changes the queue only through `Queue`, the same entry point as `bench test` and
+`bench unqueue`; beside that, only `:enable` writes a file (it removes `DISABLED`), and only
+`:disable` and `:enable` change the timer. Control characters in anything read are shown as text,
+and mouse reporting stays off.
 
 No maintained viewer reads the runner's markers or joins them to pytest-reportlog's outcomes, so the
 view's rules and words are the runner's own, on Textual's widgets and keys. Bitbake shows its task
