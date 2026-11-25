@@ -3,7 +3,7 @@
 * { background-tint: transparent 0%; scrollbar-size: 0 0; }
 Screen { padding: 0 1; }
 #top { height: 2; border-bottom: solid $rule; }
-#brand { width: 7; text-style: bold; }
+#brand { width: auto; padding-right: 2; text-style: bold; }
 #clock { width: 8; color: $dim; }
 Tabs { width: 1fr; height: 1; }
 Tabs Underline { display: none; }
@@ -30,7 +30,7 @@ Rows:focus, #pane:focus-within { border-left: heavy $hand; }
 #failure { height: auto; padding: 0 1; border: solid $failed; margin-bottom: 1; display: none; }
 #hint, #count, #runhint { color: $dim; }
 #log, #tests, #hint { display: none; }
-#queue-rows, #history-rows { height: 1fr; }
+#queue-rows, #history-rows, #boards-rows { height: 1fr; }
 #preview { height: auto; padding: 0 1; border: solid $hand; display: none; }
 
 #bottom { height: 2; border-top: solid $rule; }
@@ -38,5 +38,5 @@ Rows:focus, #pane:focus-within { border-left: heavy $hand; }
 #keys { width: 8; }
 #message, #command-row { height: 1; display: none; }
 #command { width: 1fr; color: $bright; }
-#runhint { width: 26; }
+#runhint { width: auto; }
 HelpPanel { border-left: solid $rule; }

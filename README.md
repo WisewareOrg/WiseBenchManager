@@ -276,17 +276,17 @@ fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before 
 runs.
 
 `bench status --watch` is the view of all of it, run from any directory. It is a Textual app
-(ADR 0006 rev 1) with three tabs: Run shows a run's stages and the selected stage's log, headed by
+(ADR 0006 rev 1) with four tabs: Run shows a run's stages and the selected stage's log, headed by
 bitbake's task progress while a build runs; Queue lists what waits (the running run, the runs queued
-by hand, then every merge-queue entry); History lists every run on disk. It follows the newest run,
+by hand, then every merge-queue entry); History lists every run on disk; Boards lists every board. It follows the newest run,
 and shows a run from History or with `[` and `]` in the same layout.
 
 | Key | Does |
 |---|---|
-| `1` `2` `3` | Run on the newest run, Queue, History |
+| `1` `2` `3` `4` | Run on the newest run, Queue, History, Boards |
 | `j` `k` `h` `l` `g` `G` `^d` `^u` | press Down, Up, Left, Right, Home, End, PgDn, PgUp; `G` in a log also follows it as it grows |
 | `Tab` `Shift-Tab` | move focus between the tab line, the list and the log; on the tab line Left and Right change tab |
-| `Enter` | on a stage, go into its log; on a test or a suite's own output, open or close it; in History, show that run |
+| `Enter` | on a stage, go into its log; on a test or a suite's own output, open or close it; in History, show that run; in Boards, show that board |
 | `Space` | open or close a test or a suite's own output |
 | `Esc` | back to the list; with the command line open, close it |
 | `[` `]` | in Run, the next older or newer run |
@@ -359,6 +359,8 @@ bench on <name>
 An added board is off until `bench on <name>`. While it is off its queued runs wait, and a run in
 progress when it is turned off finishes. It takes only runs queued with `bench test --board <name>`;
 the merge queue is the first board's. Its records, queue and lock are in `boards/<name>/records/`.
+In `bench status --watch`, Enter on a board in Boards shows it: Run, Queue and History are then that
+board's, `:run` and `:remove` act on its queue, and `:enable` and `:disable` turn it on and off.
 
 A failure of the bench on an added board turns it off, writes `DISABLED` beside that board's records
 and touches no other board or timer. `bench on <name>` clears it and says what it said; the same reason

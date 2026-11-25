@@ -23,6 +23,7 @@ class Seen(NamedTuple):
         stopped (str): The `DISABLED` file's text; blank while the bench is not disabled.
         now (datetime | None): When it was read, while a run is live; nothing else shows the time.
         directory (str): The records directory's name.
+        board (str | None): The added board read; None for the first board.
     """
 
     runs: list
@@ -30,6 +31,7 @@ class Seen(NamedTuple):
     stopped: str
     now: datetime | None
     directory: str
+    board: str | None = None
 
     @property
     def newest(self):

@@ -24,8 +24,9 @@ from textual.widgets import (
     Tabs,
 )
 
-from wisebench import palette, rules, view
+from wisebench import clone, palette, rules, view
 from wisebench.bench_io import BenchIO
+from wisebench.boards_view import BoardsView
 from wisebench.command_line import CommandLine
 from wisebench.history_view import HistoryView
 from wisebench.queue_view import QueueView
@@ -78,11 +79,11 @@ async def in_daemon_thread(call, *args):
 
 
 class Watch(App):
-    """The watch view: Run, Queue and History.
+    """The watch view: Run, Queue and History of the board shown, and Boards.
 
     Args:
-        checkout (pathlib.Path): The bench's layer checkout.
-        directory (pathlib.Path): The records directory.
+        checkout (pathlib.Path): The first board's layer checkout.
+        directory (pathlib.Path): The first board's records directory.
 
     Attributes:
         READ_EVERY (int): Seconds between reads of the records.
@@ -97,6 +98,7 @@ class Watch(App):
         Binding("1", "live", "Run, the newest run"),
         Binding("2", "tab('queue')", "Queue"),
         Binding("3", "tab('history')", "History"),
+        Binding("4", "tab('boards')", "Boards"),
         Binding("colon,semicolon", "command(':')", ":run :remove :disable :enable :q"),
         Binding("slash", "command('/')", "search the log"),
         Binding("n", "find", "next match"),
@@ -114,6 +116,7 @@ class Watch(App):
     entries = var(list, init=False)
     typed = var(None, init=False)
     previewed = var(None, init=False)
+    boards = var(list, init=False)
 
     def __init__(self, checkout, directory):
         """A view of the records in `directory` and the queue of `checkout`.
@@ -125,7 +128,8 @@ class Watch(App):
         super().__init__()
         self.register_theme(palette.THEME)
         self.theme = palette.THEME.name
-        self.bench = BenchIO(checkout, directory)
+        self.benches = {None: BenchIO(checkout, directory)}
+        self.bench = self.benches[None]
         self.animation_level = "none"
 
     async def on_event(self, event):
@@ -162,12 +166,14 @@ class Watch(App):
                 Tab("1 Run", id="tab-run"),
                 Tab("2 Queue", id="tab-queue"),
                 Tab("3 History", id="tab-history"),
+                Tab("4 Boards", id="tab-boards"),
             )
             yield Static(id="clock")
         with ContentSwitcher(initial="run", id="views").data_bind(current=Watch.tab):
             yield RunView(id="run").data_bind(Watch.seen, Watch.record)
             yield QueueView(id="queue").data_bind(Watch.seen, Watch.entries, Watch.previewed)
             yield HistoryView(id="history").data_bind(Watch.seen, Watch.tab)
+            yield BoardsView(id="boards").data_bind(Watch.boards)
         with Horizontal(id="bottom"):
             yield Static(id="state")
             yield Static(palette.KEYS, id="keys")
@@ -189,21 +195,54 @@ class Watch(App):
     async def read_disk(self):
         """Read the records and the bench every `READ_EVERY` seconds, off the screen's thread."""
         while True:
-            seen = await in_daemon_thread(self.bench.look)
+            await self.look()
+            await asyncio.sleep(self.READ_EVERY)
+
+    async def look(self):
+        """Read the board shown; a read that ends after another board is chosen is dropped."""
+        bench = self.bench
+        seen = await in_daemon_thread(bench.look)
+        if self.is_running and bench is self.bench:
+            self.seen = seen
+
+    @work(exclusive=True, group="boards")
+    async def read_boards(self):
+        """Read every board every `READ_EVERY` seconds while Boards shows."""
+        while self.is_running and self.tab == "boards":
+            boards = await in_daemon_thread(self.look_boards)
             if not self.is_running:
                 return
-            self.seen = seen
+            self.boards = boards
             await asyncio.sleep(self.READ_EVERY)
+
+    def look_boards(self):
+        """Read every board: the first, then each one `clone.boards` names.
+
+        Returns:
+            list[tuple]: Per board, its name (None for the first) and its read, or what reading it
+            raised.
+        """
+        names = [None, *clone.boards()]
+        read = []
+        for name in names:
+            try:
+                if name not in self.benches:
+                    self.benches[name] = BenchIO(*clone.locate(name), board=name)
+                read.append((name, self.benches[name].look()))
+            except Exception as exc:
+                read.append((name, exc))
+        return read
 
     @work(exclusive=True, group="queue")
     async def read_queue(self):
         """Read the queue every `QUEUE_EVERY` seconds while its tab shows."""
         while self.is_running and self.tab == "queue":
+            bench = self.bench
             try:
-                entries, error = await in_daemon_thread(self.bench.queue.entries), None
+                entries, error = await in_daemon_thread(bench.queue.entries), None
             except Exception as exc:
                 entries, error = None, exc
-            if not self.is_running:
+            if not self.is_running or bench is not self.bench:
                 return
             if error is None:
                 self.entries = entries
@@ -217,11 +256,12 @@ class Watch(App):
         if self.typed is None:
             return
         source, ref = self.typed
+        bench = self.bench
         try:
-            outcome = await in_daemon_thread(self.bench.queue.preview, ref, source)
+            outcome = await in_daemon_thread(bench.queue.preview, ref, source)
         except Exception as exc:
             outcome = exc
-        if self.is_running:
+        if self.is_running and bench is self.bench:
             self.previewed = ref, outcome
 
     def watch_seen(self):
@@ -251,10 +291,11 @@ class Watch(App):
         message.display = bool(text)
 
     def watch_tab(self):
-        """Mark the tab, and read the queue when it shows."""
+        """Mark the tab, and read the queue or the boards when it shows."""
         with self.prevent(Tabs.TabActivated):
             self.query_one(Tabs).active = f"tab-{self.tab}"
         self.read_queue()
+        self.read_boards()
 
     def on_tabs_tab_activated(self, event):
         """Show the view of the tab chosen.
@@ -309,6 +350,24 @@ class Watch(App):
         """
         self.open_run(event.row_key.value)
 
+    @on(DataTable.RowSelected, "#boards-rows")
+    def show_board(self, event):
+        """Enter in Boards: show that board, dropping all that was read of the one shown before.
+
+        Args:
+            event (DataTable.RowSelected): The row.
+        """
+        key = event.row_key.value
+        name = None if key == view.FIRST else key
+        self.action_close()
+        self.bench = self.benches[name]
+        self.seen, self.entries = rules.NOTHING, []
+        self.query_one("#brand").update("bench" if name is None else f"bench {name}")
+        where = "" if name is None else f" on {name}"
+        self.query_one("#runhint").update(f"Enter queue it{where}  Esc cancel")
+        self.action_live()
+        self.run_worker(self.look(), exclusive=True, group="look")
+
     def action_keys(self):
         """Show or hide Textual's keys panel."""
         if self.screen.query(HelpPanel):
@@ -316,16 +375,32 @@ class Watch(App):
         else:
             self.action_show_help_panel()
 
-    def action_command(self, text, question=""):
+    def action_command(self, text, question="", answer=None):
         """Open the command line; `:remove` means the queue row selected at this moment.
 
         Args:
             text (str): What it starts with.
             question (str): What it asks, when it takes an answer, not a command.
+            answer (Callable | None): What `y` to the question does, bound to the board asked about.
         """
         self.say("")
         target = self.query_one("#queue-rows").key if self.tab == "queue" else None
-        self.query_one(CommandLine).open(text, target, question)
+        self.query_one(CommandLine).open(text, target, question, answer)
+
+    def enable_question(self):
+        """What `:enable` asks of the board shown.
+
+        Returns:
+            str: The first board's question, or which added board it turns on and the fault it
+            clears.
+        """
+        board = self.bench.board
+        if board is None:
+            return ENABLE
+        stopped = self.seen.stopped.strip()
+        reason = stopped.rpartition("\n")[2]
+        cleared = f" Clears its fault: {reason}" if stopped else ""
+        return f"Turn {board} on? [y/N]{cleared}"
 
     def action_close(self):
         """Close the command line."""
@@ -356,7 +431,7 @@ class Watch(App):
         if not line.asked:
             self.command(text, line.target)
         elif text == "y":
-            self.write(self.bench.enable)
+            self.write(line.answer)
 
     def command(self, text, target):
         """Do what a command typed says.
@@ -365,14 +440,15 @@ class Watch(App):
             text (str): The command.
             target (str | None): The queue row that was selected when the line was opened.
         """
-        if text in (":disable", ":enable") and self.bench.unit is None:
+        bench = self.bench
+        if text in (":disable", ":enable") and bench.board is None and bench.unit is None:
             self.say("no [run] unit in the bench's settings file")
         elif text == ":q":
             self.exit()
         elif text == ":disable":
             self.write(self.bench.disable)
         elif text == ":enable":
-            self.action_command("", ENABLE)
+            self.action_command("", self.enable_question(), bench.enable)
         elif text == ":remove":
             kind, _, entry = (target or "").partition(" ")
             if kind == "hand":

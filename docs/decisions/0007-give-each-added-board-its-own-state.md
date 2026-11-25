@@ -72,6 +72,6 @@ and state.**
 ## Consequences
 
 - **An added board costs a clone of the layer and a build directory.**
-- **The watch does not show an added board;** its records directory and its unit's journal do.
+- **The watch shows one board at a time;** its Boards tab lists them all and chooses one.
 - **Two labgrid files that name one board drive it under two locks,** and nothing says so.
 - **The code does not check who runs `bench on` or `bench off`.**
