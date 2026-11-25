@@ -1,825 +1,1194 @@
-"""`status.watch` and its curses shell: exit codes, the corner cell, the loop and the palette."""
+"""`status.Watch` under Textual's Pilot, over real records, a real lock, SQLite and git.
 
-import curses
+`Queue` is replaced, by an autospec, only where a test needs a call blocked, failing or counted.
+"""
+
+import asyncio
+import contextlib
 import fcntl
-import os
-import select
-import shutil
-import struct
+import json
+import stat
 import subprocess
 import sys
-import termios
+import threading
 import time
-import types
-from datetime import UTC, datetime, timedelta
+import unittest
+from functools import partial
+from unittest import mock
 
 import pytest
 from helpers import (
-    COLS,
-    ROWS,
-    FakeScreen,
     add_settings,
-    clone_root,
-    has_commit,
+    holding,
     run_unit_settings,
+    settings_file,
     source_repo,
     start_argv,
     stop_argv,
     stub_merge_queue,
-    terminal,
-    write_bench_toml,
 )
+from status_helpers import (
+    NAMES,
+    OLDER,
+    OLDEST,
+    STAMP,
+    hand,
+    merge,
+    output,
+    queued,
+    reports,
+    run_log,
+    started_log,
+)
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_delay, wait_fixed
+from textual import events
+from textual.widget import Widget
+from textual.widgets import ContentSwitcher, DataTable, HelpPanel, Input, Log, Tab, Tree
 
-from wisebench import queue, screen, status
+from wisebench import bench_io, palette, status, view
+from wisebench.queue import Queue
+from wisebench.records import Records
 
-
-def _checkout(tmp_path):
-    """The fake clone's layer checkout the `bench_clone` fixture makes under `tmp_path`."""
-    return clone_root(tmp_path) / "checkout"
-
-
-def test_watch_returns_0_on_ctrl_c(monkeypatch, tmp_path):
-    def interrupted(*args):
-        """Stand-in for curses.wrapper that raises Ctrl-C."""
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(curses, "wrapper", interrupted)
-    assert status.watch(_checkout(tmp_path), tmp_path) == 0
-
-
-def test_watch_returns_2_and_names_the_error_when_curses_cannot_start(
-    monkeypatch, tmp_path, capsys
-):
-    monkeypatch.delenv("TERM", raising=False)
-    assert status.watch(_checkout(tmp_path), tmp_path) == 2
-    assert "BENCH ERROR:" in capsys.readouterr().err
-
-
-def attribute(fake, text):
-    """The attributes of the first write holding `text`."""
-    return next(attr for _, _, written, attr in fake.writes if text in written)
-
-
-def test_a_write_into_the_bottom_right_cell_is_tolerated_and_one_on_another_row_raised(
-    monkeypatch, tmp_path
-):
-    terminal(monkeypatch, tmp_path, 0)
-    corner = FakeScreen(keys=["q"])
-    assert status._loop(corner, _checkout(tmp_path), tmp_path) == 0
-    assert corner.corner > 0
-    with pytest.raises(curses.error):
-        status._loop(FakeScreen(keys=["q"], fail_on_row=0), _checkout(tmp_path), tmp_path)
+SIZE = (120, 34)
+NEVER = 3600
+OFTEN = 0.02
+QUESTION = "Enable the bench?"
+STOPPED = "2026-11-10T03:15:00+00:00\nthe board is gone\n"
+UNRESOLVED = subprocess.CalledProcessError(128, ["git", "rev-parse"])
 
 
-def test_the_loop_redraws_after_the_one_second_timeout_and_returns_0_on_q(monkeypatch, tmp_path):
-    terminal(monkeypatch, tmp_path, 0)
-    fake = FakeScreen(keys=[curses.error("no input"), "q"])
-
-    assert status._loop(fake, _checkout(tmp_path), tmp_path) == 0
-    assert fake.events == ["frame", "key", "frame", "key"]
-
-
-def test_256_colours_draw_each_canvas_colour_as_its_fixed_xterm_pair(monkeypatch, tmp_path):
-    pairs, touched = terminal(monkeypatch, tmp_path, 256)
-    fake = FakeScreen(keys=["q"])
-    status._loop(fake, _checkout(tmp_path), tmp_path)
-
-    assert pairs[(attribute(fake, "1 Run") >> 8) & 0xFF] == (232, 252)
-    assert pairs[(attribute(fake, "IDLE") >> 8) & 0xFF] == (231, 237)
-    assert touched == []
-
-
-def test_a_terminal_that_can_redefine_colours_gets_each_canvas_colour_defined_exactly(
-    monkeypatch, tmp_path
-):
-    pairs, touched = terminal(monkeypatch, tmp_path, 256, redefinable=True)
-    fake = FakeScreen(keys=["q"])
-    status._loop(fake, _checkout(tmp_path), tmp_path)
-
-    expected = [
-        (16, 48, 48, 48),
-        (17, 800, 800, 800),
-        (18, 546, 546, 546),
-        (19, 659, 659, 659),
-        (20, 228, 228, 228),
-        (21, 1000, 1000, 1000),
-        (22, 597, 765, 475),
-        (23, 899, 753, 483),
-        (24, 879, 424, 459),
-        (25, 381, 687, 938),
-        (26, 165, 150, 79),
-        (27, 228, 114, 126),
-        (28, 122, 165, 212),
-    ]
-    assert touched == expected
-    pair = pairs[(attribute(fake, "IDLE") >> 8) & 0xFF]
-    assert pair == (21, 20)
-
-
-def test_below_256_colours_the_active_tab_and_the_badge_are_reverse_video(monkeypatch, tmp_path):
-    terminal(monkeypatch, tmp_path, 8)
-    fake = FakeScreen(keys=["q"])
-    status._loop(fake, _checkout(tmp_path), tmp_path)
-
-    assert attribute(fake, "1 Run") & curses.A_REVERSE
-    assert attribute(fake, "IDLE") & curses.A_REVERSE
-    assert not attribute(fake, "3 History") & curses.A_REVERSE
-
-
-def test_below_256_colours_a_selected_tinted_row_is_reverse_video_and_the_ground_is_not(
-    monkeypatch, tmp_path
-):
-    terminal(monkeypatch, tmp_path, 8)
-    attributes = status._attributes()
-
-    for filled in (screen.FAILED_TINT, screen.RUNNING_TINT, screen.SELECTION):
-        assert attributes(screen.TEXT, filled, False) & curses.A_REVERSE
-    assert not attributes(screen.TEXT, None, False) & curses.A_REVERSE
-
-
-def test_a_surface_write_is_clipped_at_the_right_edge_and_dropped_past_it():
-    fake = FakeScreen()
-    surface = status._Surface(fake, ROWS, COLS, lambda fg, bg, bold: 7)
-    surface.put(0, COLS - 10, "x" * 30, "#ffffff")
-    surface.put(1, COLS, "gone", "#ffffff")
-    assert fake.writes == [(0, COLS - 10, "x" * 10, 7)]
-
-
-def test_the_real_curses_shell_draws_a_frame_through_a_pty_and_quits_on_q(tmp_path, bench_clone):
-    """Real curses on a pty: the corner-cell behaviour the fake window imitates."""
-    if (
-        shutil.which("infocmp") is None
-        or subprocess.run(["infocmp", "xterm-256color"], capture_output=True).returncode
-    ):
-        pytest.skip("no xterm-256color terminfo entry")
-    import pty
-
-    code = (
-        "import sys; from wisebench import status; "
-        f"sys.exit(status.watch({str(bench_clone.checkout)!r}, {str(tmp_path)!r}))"
-    )
-    pid, fd = pty.fork()
-    if pid == 0:
-        try:
-            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-            os.environ["TERM"] = "xterm-256color"
-            os.execv(sys.executable, [sys.executable, "-c", code])
-        finally:
-            os._exit(127)
-
-    output = b""
-
-    def read_until(needles, seconds):
-        """Collect the child's output until every needle appears, it closes, or `seconds` pass."""
-        nonlocal output
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline and not all(n in output for n in needles):
-            if select.select([fd], [], [], 0.1)[0]:
-                try:
-                    chunk = os.read(fd, 65536)
-                except OSError:
-                    return
-                if not chunk:
-                    return
-                output += chunk
-
-    try:
-        read_until((b"1 Run", b"0 records"), 5)
-        os.write(fd, b"q")
-        read_until((b"\0",), 3)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            done, status_code = os.waitpid(pid, os.WNOHANG)
-            if done:
-                break
-            time.sleep(0.05)
-        else:
-            os.kill(pid, 9)
-            os.waitpid(pid, 0)
-            pytest.fail("the shell did not exit after q")
-    finally:
-        os.close(fd)
-
-    assert os.waitstatus_to_exitcode(status_code) == 0
-    assert b"1 Run" in output
-    assert b"0 records" in output
-
-
-# -- the Queue tab through the loop ------------------------------------------------------
-
-HAND = {
-    "kind": "test",
-    "id": 3,
-    "added": "2026-11-10T03:15:00+00:00",
-    "ref": "feature-a",
-    "sha": "1" * 40,
-    "set": None,
-    "skip_build": False,
-    "args": [],
-}
-SHA = "1234567" + "0" * 33
-TIMEOUT = curses.error("no input")
-IMMEDIATELY = {"run": lambda work: work()}
-
-
-class Clock:
-    """The loop's `datetime.now(UTC)`, held still until a test moves it."""
-
-    def __init__(self, monkeypatch):
-        """Replace `status.datetime` so `datetime.now(UTC)` reads this clock."""
-        self.start = self.at = datetime(2026, 11, 10, 10, 0, 0, tzinfo=UTC)
-        monkeypatch.setattr(status, "datetime", types.SimpleNamespace(now=lambda tz=None: self.at))
-
-    def elapsed(self):
-        """Seconds since the clock was made."""
-        return (self.at - self.start).total_seconds()
-
-    def wait(self, seconds):
-        """A key that moves the clock on by `seconds`."""
-        return lambda: setattr(self, "at", self.at + timedelta(seconds=seconds))
-
-
-def stub_queue(monkeypatch, clock=None, entries=None, preview=None, add=None, remove=None):
-    """Replace the four `Queue` methods the view may call with recorders.
+class Held:
+    """A call that does not return until it is released, or three seconds pass.
 
     Args:
-        monkeypatch (pytest.MonkeyPatch): Restores the methods at teardown.
-        clock (Clock | None): When given, each call is recorded with the seconds elapsed.
-        entries (callable | None): Returns `entries()`'s value, or raises; default no entries.
-        preview (callable | None): Called with the ref; default a clean checkout.
-        add (callable | None): Called with `add`'s arguments; default `(5, SHA, 1)`.
-        remove (callable | None): Called with the id; default True.
-
-    Returns:
-        list[tuple]: Every call, in order: `("entries",)`, `("preview", ref)`,
-        `("add", ref, set_name, skip_build, pytest_args)`, `("remove", id)`; with a clock, a
-        trailing elapsed-seconds item.
+        outcome (object): What it returns; an exception is raised.
     """
-    calls = []
 
-    def record(*call):
-        calls.append((*call, clock.elapsed()) if clock else call)
-
-    def read(self):
-        record("entries")
-        return entries() if entries else []
-
-    def show(self, ref, source=None):
-        record("preview", ref)
-        if preview:
-            return preview(ref)
-        return {"sha": SHA, "subject": f"subject of {ref}", "clean": True}
-
-    def queue_up(self, ref, set_name, skip_build, pytest_args, source=None):
-        arguments = (ref, set_name, skip_build, pytest_args)
-        record("add", *arguments)
-        return add(*arguments) if add else (5, SHA, 1)
-
-    def take_out(self, entry_id):
-        record("remove", entry_id)
-        return remove(entry_id) if remove else True
-
-    monkeypatch.setattr(queue.Queue, "entries", read)
-    monkeypatch.setattr(queue.Queue, "preview", show, raising=False)
-    monkeypatch.setattr(queue.Queue, "add", queue_up)
-    monkeypatch.setattr(queue.Queue, "remove", take_out)
-    return calls
-
-
-def watch_with(monkeypatch, tmp_path, keys):
-    """Run the loop over `keys` with immediate background work and no colours: the FakeScreen."""
-    terminal(monkeypatch, tmp_path, 0)
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir(exist_ok=True)
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    return fake
-
-
-def every_frame(fake):
-    """The text of every frame drawn."""
-    return "\n".join("\n".join(frame) for frame in fake.frames)
-
-
-def last_frame(fake):
-    """The text of the last frame drawn."""
-    return "\n".join(fake.frames[-1])
-
-
-def test_entering_the_queue_reads_it_once_through_a_queue_over_the_clones_checkout(
-    monkeypatch, tmp_path, bench_clone
-):
-    owners = []
-    calls = stub_queue(monkeypatch, entries=lambda: [HAND])
-    read = queue.Queue.entries
-    monkeypatch.setattr(
-        queue.Queue,
-        "entries",
-        lambda self: (owners.append((self.checkout, self.directory)), read(self))[1],
-    )
-    fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
-    assert calls == [("entries",)]
-    assert owners == [(bench_clone.checkout, tmp_path / "records")]
-    assert "feature-a" in last_frame(fake)
-
-
-def test_no_read_happens_while_another_tab_shows_however_long_it_stays(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, [TIMEOUT, clock.wait(40), TIMEOUT, clock.wait(40), "q"])
-    assert calls == []
-
-
-def test_leaving_the_queue_stops_the_reads_and_entering_it_again_reads_again(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    keys = ["2", TIMEOUT, "1", clock.wait(40), clock.wait(40), TIMEOUT, "q"]
-    watch_with(monkeypatch, tmp_path, keys)
-    assert len(calls) == 1
-    again = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, "1", "2", TIMEOUT, "q"])
-    assert len(again) == 2
-
-
-def test_shift_tab_reaches_the_view_as_its_key_and_Tab_goes_the_other_way(monkeypatch, tmp_path):
-    calls = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, [curses.KEY_BTAB, curses.KEY_BTAB, TIMEOUT, "q"])
-    assert calls == [("entries",)]
-    forward = stub_queue(monkeypatch)
-    watch_with(monkeypatch, tmp_path, ["\t", TIMEOUT, "q"])
-    assert forward == [("entries",)]
-
-
-def test_while_the_queue_shows_it_is_read_every_30_seconds(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch, clock=clock)
-    keys = ["2", TIMEOUT]
-    for _ in range(8):
-        keys += [clock.wait(10), TIMEOUT]
-    watch_with(monkeypatch, tmp_path, [*keys, "q"])
-    times = [call[-1] for call in calls]
-    assert len(times) == 3
-    assert times[0] == 0
-    assert all(
-        30 <= later - earlier <= 40 for earlier, later in zip(times, times[1:], strict=False)
-    )
-
-
-def test_a_failed_read_shows_the_bench_failure_text_and_the_view_goes_on(monkeypatch, tmp_path):
-    from wisebench.bench_test import BenchFailure
-
-    boom = BenchFailure("merge queue read failed")
-    stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(boom))
-    fake = watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "q"])
-    assert "merge queue read failed" in last_frame(fake)
-
-
-def test_a_failed_read_keeps_the_last_good_rows(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    outcomes = [[HAND], RuntimeError("queue.db is locked")]
-
-    def entries():
-        outcome = outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-    stub_queue(monkeypatch, entries=entries)
-    keys = ["2", TIMEOUT, TIMEOUT, clock.wait(31), TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    frame = last_frame(fake)
-    assert "queue.db is locked" in frame and "feature-a" in frame
-
-
-def test_run_previews_the_typed_ref_and_draws_the_result(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    keys = ["2", TIMEOUT, *":run feature-c", *[clock.wait(1)] * 5, "\x1b", "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert ("preview", "feature-c") in calls
-    frame = every_frame(fake)
-    assert "will queue" in frame and 'resolves to 1234567 "subject of feature-c"' in frame
-
-
-def test_a_preview_of_a_ref_no_longer_typed_is_never_drawn(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    stub_queue(
-        monkeypatch,
-        preview=lambda ref, source=None: {
-            "sha": SHA,
-            "subject": f"result for {ref}",
-            "clean": True,
-        },
-    )
-    settle = [clock.wait(1)] * 5
-    fake_keys = ["2", TIMEOUT, *":run alpha", *settle]
-    seen = []
-    fake_keys += [
-        lambda: seen.append(len(fake.frames)),
-        *"\x7f\x7f\x7f\x7f\x7f",
-        *"beta",
-        *settle,
-        "\x1b",
-        "q",
-    ]
-    terminal(monkeypatch, tmp_path, 0)
-    fake = FakeScreen(keys=fake_keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    before = "\n".join("\n".join(frame) for frame in fake.frames[: seen[0]])
-    after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] + 1 :])
-    assert "result for alpha" in before
-    assert "result for alpha" not in after
-    assert "result for beta" in after
-
-
-def test_enter_on_run_queues_the_ref_says_so_and_reads_the_queue_again(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch, entries=lambda: [HAND])
-    keys = ["2", TIMEOUT, *":run feature-c", *[clock.wait(1)] * 3, "\n", TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    names = [call[0] for call in calls]
-    assert ("add", "feature-c", None, False, []) in calls
-    assert names.count("add") == 1 and names.count("entries") == 2
-    assert names.index("add") < len(names) - 1 - names[::-1].index("entries")
-    assert "queued 5 1234567" in last_frame(fake)
-
-
-def test_run_of_an_unresolvable_ref_says_so_and_the_view_goes_on(monkeypatch, tmp_path):
-    def refuse(*arguments):
-        raise subprocess.CalledProcessError(128, ["git", "rev-parse"])
-
-    stub_queue(monkeypatch, add=refuse)
-    fake = watch_with(monkeypatch, tmp_path, ["2", *":run nope", "\n", TIMEOUT, "q"])
-    assert "nope does not resolve to a commit" in last_frame(fake)
-
-
-def test_run_with_no_ref_calls_nothing_and_says_nothing(monkeypatch, tmp_path):
-    calls = stub_queue(monkeypatch)
-    fake = watch_with(monkeypatch, tmp_path, [*":run ", "\n", TIMEOUT, "q"])
-    assert [call[0] for call in calls if call[0] in ("add", "preview")] == []
-    assert "queued" not in last_frame(fake)
-
-
-def test_dd_removes_the_hand_row_under_the_cursor_and_reads_the_queue_again(monkeypatch, tmp_path):
-    calls = stub_queue(monkeypatch, entries=lambda: [HAND])
-    watch_with(monkeypatch, tmp_path, ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"])
-    assert calls == [("entries",), ("remove", 3), ("entries",)]
-
-
-def test_a_successful_dd_says_which_run_was_removed(monkeypatch, tmp_path):
-    stub_queue(monkeypatch, entries=lambda: [HAND])
-    keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert "removed queued run 3" in last_frame(fake)
-
-
-def test_dd_on_a_row_already_gone_says_there_is_no_such_run(monkeypatch, tmp_path):
-    stub_queue(monkeypatch, entries=lambda: [HAND], remove=lambda entry_id: False)
-    keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert "no queued run 3" in last_frame(fake)
-
-
-def test_dd_on_a_merge_entry_refuses_and_calls_remove_for_nothing(monkeypatch, tmp_path):
-    merge = {"kind": "run", "pr": 14, "title": "Add slot check", "sha": "9" * 40}
-    calls = stub_queue(monkeypatch, entries=lambda: [merge])
-    keys = ["2", TIMEOUT, TIMEOUT, "d", "d", TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert [call for call in calls if call[0] == "remove"] == []
-    assert "only hand-queued runs can be removed" in last_frame(fake)
-
-
-@pytest.mark.parametrize("which", ["add", "remove"])
-def test_any_failure_of_add_or_remove_becomes_the_message_and_the_view_goes_on(
-    monkeypatch, tmp_path, which
-):
-    import sqlite3
-
-    def locked(*arguments):
-        raise sqlite3.OperationalError("database is locked")
-
-    stub_queue(monkeypatch, entries=lambda: [HAND], **{which: locked})
-    typed = ["2", TIMEOUT, TIMEOUT, *":run feature-c", "\n"] if which == "add" else ["2", TIMEOUT]
-    keys = [*typed, *(["d", "d"] if which == "remove" else []), TIMEOUT, TIMEOUT, "q"]
-    fake = watch_with(monkeypatch, tmp_path, keys)
-    assert "database is locked" in last_frame(fake)
-
-
-def held_work():
-    """Background work held until a key releases it.
-
-    Returns the list `run` appends to and a key that runs all of it.
-    """
-    held = []
-
-    def release():
-        while held:
-            held.pop(0)()
-
-    return held, release
-
-
-def test_at_most_one_preview_is_in_flight_and_the_newest_typed_ref_follows_its_result(
-    monkeypatch, tmp_path
-):
-    calls = stub_queue(monkeypatch)
-    held, release = held_work()
-    terminal(monkeypatch, tmp_path, 0)
-    keys = ["2", TIMEOUT, *":run m", *"ain", release, release, "\x1b", "q"]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
-    assert [call[1] for call in calls if call[0] == "preview"] == ["m", "main"]
-
-
-def test_no_second_preview_is_asked_when_the_ref_typed_is_back_to_the_one_requested(
-    monkeypatch, tmp_path
-):
-    calls = stub_queue(monkeypatch)
-    held, release = held_work()
-    terminal(monkeypatch, tmp_path, 0)
-    keys = ["2", TIMEOUT, *":run m", "x", "\x7f", release, release, "\x1b", "q"]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
-    assert [call[1] for call in calls if call[0] == "preview"] == ["m"]
-
-
-def test_one_entries_read_is_in_flight_at_a_time_however_long_it_takes(monkeypatch, tmp_path):
-    clock = Clock(monkeypatch)
-    calls = stub_queue(monkeypatch)
-    held, release = held_work()
-    terminal(monkeypatch, tmp_path, 0)
-    stall = clock.wait(31)
-    keys = ["2", stall, stall, stall, release, stall, release, "q"]
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(FakeScreen(keys=keys), _checkout(tmp_path), directory, run=held.append) == 0
-    assert [call for call in calls if call[0] == "entries"] == [("entries",)] * 2
-
-
-def test_a_failed_read_while_the_command_line_is_open_leaves_no_message_behind_after_esc(
-    monkeypatch, tmp_path
-):
-    stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(RuntimeError("remote is down")))
-    terminal(monkeypatch, tmp_path, 0)
-    seen = []
-    keys = [*":run x", TIMEOUT, lambda: seen.append(len(fake.frames)), "\x1b", TIMEOUT, "q"]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    after = "\n".join("\n".join(frame) for frame in fake.frames[seen[0] :])
-    assert "remote is down" not in after
-
-
-def test_the_loop_runs_background_work_through_the_worker_thread_by_default():
-    import inspect
-
-    assert inspect.signature(status._loop).parameters["run"].default is status._background
-
-
-def test_background_work_runs_in_order_on_one_thread_that_is_not_the_callers():
-    import threading
-
-    done, threads, order = threading.Event(), [], []
-
-    def work(name):
-        def run():
-            threads.append(threading.get_ident())
-            order.append(name)
-            if name == "last":
-                done.set()
-
-        return run
-
-    for name in ("first", "second", "last"):
-        status._background(work(name))
-    assert done.wait(5), "the worker never ran the work"
-    assert order == ["first", "second", "last"]
-    assert len(set(threads)) == 1 and threading.get_ident() not in threads
-
-
-ASK = "Enable the bench?"
-
-
-def bench_command(monkeypatch, tmp_path, keys, *, unit=True, disabled=True):
-    """Run the loop over `keys` in a directory with a bench.toml, DISABLED, or neither.
-
-    Returns the FakeScreen and the records directory.
-    """
-    directory = tmp_path / "records"
-    directory.mkdir(exist_ok=True)
-    if unit:
-        checkout = clone_root(tmp_path) / "checkout"
-        write_bench_toml(checkout)
+    def __init__(self, outcome=None):
+        self.outcome = outcome
+        self.started, self.released, self.returned = threading.Event(), threading.Event(), False
+
+    def __call__(self, *args):
+        self.started.set()
+        self.released.wait(3)
+        self.returned = True
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+class WatchCase(unittest.IsolatedAsyncioTestCase):
+    """A bench with a records directory and a queue, and the watch view opened over them."""
+
+    @pytest.fixture(autouse=True)
+    def _bench(self, bench_clone, systemctl, monkeypatch):
+        self.clone, self.systemctl, self.monkeypatch = bench_clone, systemctl, monkeypatch
+        self.records = bench_clone.records
+        self.github = stub_merge_queue(monkeypatch, bench_clone.checkout)
         add_settings(run_unit_settings())
-    if disabled:
-        (directory / "DISABLED").write_text("2026-11-13T00:00:00+00:00\nboom\n")
-    return watch_with(monkeypatch, tmp_path, keys), directory
+        self.periods(read=NEVER, queue=NEVER)
+
+    async def asyncSetUp(self):
+        """Leave asyncio's debug mode, which `IsolatedAsyncioTestCase` turns on; it is slow."""
+        asyncio.get_running_loop().set_debug(False)
+
+    def periods(self, **seconds):
+        """Set how often the disk and the queue are read."""
+        for name, each in seconds.items():
+            self.monkeypatch.setattr(status.Watch, f"{name.upper()}_EVERY", each)
+
+    def record(self, text, name=STAMP, target_suite=()):
+        """Write a run's `bench.log` and its target suite's report."""
+        suite = self.records / name / "target_suite"
+        suite.mkdir(parents=True, exist_ok=True)
+        (suite / "report.jsonl").write_text("".join(json.dumps(r) + "\n" for r in target_suite))
+        (suite.parent / "bench.log").write_text(text)
+
+    def live(self):
+        """Hold the bench's lock, so the newest unfinished run is executing."""
+        self.enterContext(holding(self.records))
+
+    def stub_queue(self, entries=()):
+        """Replace `Queue` by an autospec with nothing in it, and return that."""
+        queue = mock.create_autospec(Queue, instance=True)
+        queue.entries.return_value = list(entries)
+        queue.preview.return_value = {"sha": "5" * 40, "subject": "Fix it", "clean": True}
+        queue.add.return_value = (5, "5" * 40, 1)
+        self.monkeypatch.setattr(bench_io, "Queue", mock.create_autospec(Queue, return_value=queue))
+        return queue
+
+    @contextlib.asynccontextmanager
+    async def watch(self):
+        """Open the view and wait for its first read of the records."""
+        self.app = status.Watch(self.clone.checkout, self.records)
+        async with self.app.run_test(size=SIZE) as self.pilot:
+            count = len(list(self.records.glob("*/bench.log")))
+            await self.eventually(lambda: self.records_read == count, "the records are read")
+            await self.pilot.pause()
+            yield
+            self.app.workers.cancel_all()
+
+    async def eventually(self, holds, meaning):
+        """Wait for what a worker brings about, and assert it."""
+        async for attempt in AsyncRetrying(
+            stop=stop_after_delay(10),
+            wait=wait_fixed(0.02),
+            retry=retry_if_exception_type(AssertionError),
+            reraise=True,
+        ):
+            with attempt:
+                await self.pilot.pause()
+                assert holds(), meaning
+
+    @property
+    def records_read(self):
+        """How many runs the view has read."""
+        return len(self.app.seen.runs)
+
+    async def read(self):
+        """Read the disk, as the view does on its period."""
+        self.app.seen = self.app.bench.look()
+        await self.pilot.pause()
+
+    async def press(self, *keys):
+        """Press keys and let them take effect."""
+        await self.pilot.press(*keys)
+        await self.pilot.pause()
+
+    async def command(self, text):
+        """Type a command or a search, and Enter."""
+        await self.press(*text, "enter")
+
+    @staticmethod
+    def displayed(widget):
+        """Whether a widget and all it is in are displayed."""
+        return all(each.display for each in widget.ancestors_with_self if isinstance(each, Widget))
+
+    def shown(self, selector):
+        """The text of a displayed `Static`; blank while it is not displayed."""
+        widget = self.app.query_one(selector)
+        return str(widget.content) if self.displayed(widget) else ""
+
+    @property
+    def message(self):
+        """The message under the status bar."""
+        return self.shown("#message")
+
+    @property
+    def tab(self):
+        """The view showing."""
+        return self.app.query_one(ContentSwitcher).current
+
+    @property
+    def stage(self):
+        """The stage the list is on."""
+        return self.row_of("#stages")
+
+    @property
+    def log(self):
+        """The log of a stage without tests."""
+        return self.app.query_one(Log)
+
+    @property
+    def tests(self):
+        """Per test row: its name, whether it is open, and its output."""
+        return [
+            (
+                node.data.name,
+                node.is_expanded,
+                [leaf.data for leaf in node.children],
+            )
+            for node in self.app.query_one(Tree).root.children
+        ]
+
+    @property
+    def test_row(self):
+        """What the cursor is on among the tests: a test's name, or a line of output."""
+        data = self.app.query_one(Tree).cursor_node.data
+        return data if isinstance(data, str) else data.name
+
+    def table(self, selector):
+        """A table's rows: each one's key and the text of its cells."""
+        table = self.app.query_one(selector, DataTable)
+        return [
+            (row.key.value, [str(cell).strip() for cell in table.get_row(row.key)])
+            for row in table.ordered_rows
+        ]
+
+    def keys_of(self, selector):
+        """The keys of a table's rows."""
+        return [key for key, _ in self.table(selector)]
+
+    def row_of(self, selector):
+        """The key of the row a table's cursor is on."""
+        return self.keys_of(selector)[self.app.query_one(selector, DataTable).cursor_row]
+
+    @property
+    def typed(self):
+        """The text of the command line; None while it is closed."""
+        line = self.app.query_one(Input)
+        return line.value if self.displayed(line) else None
+
+    @property
+    def question(self):
+        """What the command line asks; blank while it is closed or holds text."""
+        return self.app.query_one(Input).placeholder if self.typed == "" else ""
+
+    def says(self, text):
+        """Whether the message holds `text`."""
+        return text in self.message
+
+    def commands(self):
+        """The `systemctl` calls that change the timer."""
+        return [call for call in self.systemctl.calls if "is-active" not in call]
 
 
-def changes(systemctl):
-    """The systemctl calls that are not the timer query."""
-    return [call for call in systemctl.calls if call[2] != "is-active"]
+# -- Run -------------------------------------------------------------------------------------------
 
 
-def test_disable_stops_the_timer_says_so_and_leaves_disabled_alone(
-    monkeypatch, tmp_path, systemctl
-):
-    fake, directory = bench_command(monkeypatch, tmp_path, [*":disable", "\n", TIMEOUT, "q"])
-    assert changes(systemctl) == [stop_argv("bench-run")]
-    assert "bench disabled" in last_frame(fake)
-    assert (directory / "DISABLED").exists()
+class TestRun(WatchCase):
+    async def test_a_live_run_shows_its_title_stages_output_and_state(self):
+        self.record(run_log("build", build=output("hello")))
+        self.live()
+
+        async with self.watch():
+            assert "PR #31" in self.shown("#title"), "the run's title"
+            assert self.keys_of("#stages") == list(NAMES), "every stage of the run"
+            assert list(self.log.lines) == ["hello"], "the open stage's output"
+            assert "RUNNING" in self.shown("#state"), "the bench's state"
+
+    async def test_the_stage_shown_follows_the_run_until_one_is_picked_and_1_goes_back(self):
+        self.record(run_log("build"))
+        self.live()
+
+        async with self.watch():
+            followed = [self.stage]
+            for name in ("bundle", "host_suite"):
+                self.record(run_log(name))
+                await self.read()
+                followed.append(self.stage)
+            await self.press("k")
+            self.record(run_log("target_suite"))
+            await self.read()
+            picked = self.stage
+            await self.press("1")
+
+            assert followed == ["build", "bundle", "host_suite"], "it follows with nothing picked"
+            assert picked == "bundle", "a picked stage stays"
+            assert self.stage == "target_suite", "1 goes back to the stage running"
+
+    async def test_output_appears_once_in_order_one_row_a_line(self):
+        self.record(run_log("build", build=output("a", "b")))
+        self.live()
+
+        async with self.watch():
+            self.record(run_log("build", build=output("a", "b", "", "x\N{LINE SEPARATOR}y", "c")))
+            await self.read()
+
+            rows = [line.strip() for line in self.log.lines]
+            assert rows == ["a", "b", "", "x<2028>y", "c"], "each line once, blank lines included"
+
+    async def test_another_stage_replaces_the_lines(self):
+        self.record(run_log("build", precondition=output("p"), build=output("a", "b")))
+        self.live()
+
+        async with self.watch():
+            await self.press("k")
+
+            assert list(self.log.lines) == ["p"], "only the stage shown"
+
+    async def test_the_log_follows_at_its_end_only(self):
+        lines = [f"line {i}" for i in range(100)]
+        self.record(run_log("build", build=output(*lines)))
+        self.live()
+
+        async with self.watch():
+            at_end = self.log.max_scroll_y
+            await self.press("enter", "home")
+            self.record(run_log("build", build=output(*lines, "more")))
+            await self.read()
+            held = self.log.scroll_y
+            await self.press("G")
+            self.record(run_log("build", build=output(*lines, "more", "and more")))
+            await self.read()
+
+            assert at_end > 0, "the log is longer than its pane"
+            assert held == 0, "scrolled up, it holds still"
+            assert self.log.scroll_y == at_end + 2, "G follows the log as it grows"
+
+    async def test_the_failure_box_shows_for_the_newest_run_of_a_disabled_bench_only(self):
+        self.record(run_log("bundle", "error"))
+        self.record(run_log("bundle", "failed"), OLDER)
+        (self.records / "DISABLED").write_text(STOPPED)
+
+        async with self.watch():
+            newest = self.shown("#failure")
+            await self.press("[")
+
+            assert "the board is gone" in newest, "the reason it stopped"
+            assert OLDER in self.shown("#title"), "a past run shows"
+            assert self.shown("#failure") == "", "a past run is not the bench's fault"
 
 
-def test_disable_with_no_disabled_file_writes_none(monkeypatch, tmp_path, systemctl):
-    _, directory = bench_command(
-        monkeypatch, tmp_path, [*":disable", "\n", TIMEOUT, "q"], disabled=False
-    )
-    assert changes(systemctl) == [stop_argv("bench-run")]
-    assert not (directory / "DISABLED").exists()
+# -- a suite's tests -------------------------------------------------------------------------------
 
 
-def test_enable_asks_first_and_changes_nothing_until_y(monkeypatch, tmp_path, systemctl):
-    fake, directory = bench_command(monkeypatch, tmp_path, [*":enable", "\n", TIMEOUT, "q", "q"])
-    assert changes(systemctl) == []
-    assert (directory / "DISABLED").exists()
-    assert any(ASK in "\n".join(frame) for frame in fake.frames)
+class TestSuite(WatchCase):
+    def suite(self, *body, results=()):
+        """Record a run in its target suite."""
+        self.record(run_log("target_suite", target_suite="".join(body)), target_suite=results)
+
+    async def test_running_and_failed_tests_are_open_and_one_that_passes_closes(self):
+        body = [queued("a", "b", "c", "d"), started_log("a", 26, "out a")]
+        body += [started_log("b", 27, "out b"), started_log("c", 28, "out c")]
+        self.suite(*body, results=[*reports("a"), *reports("b", "failed")])
+        self.live()
+
+        async with self.watch():
+            before = {name: opened for name, opened, _ in self.tests}
+            self.suite(*body, results=[*reports("a"), *reports("b", "failed"), *reports("c")])
+            await self.read()
+            after = {name: opened for name, opened, _ in self.tests}
+
+            assert before == {"a": False, "b": True, "c": True, "d": False}, "running and failed"
+            assert after == {"a": False, "b": True, "c": False, "d": False}, "c passed and closed"
+
+    async def test_the_cursor_lands_on_the_first_failed_else_the_running_else_the_first(self):
+        body = queued("a", "b", "c") + started_log("a", 26, "x")
+        self.suite(body)
+        self.live()
+
+        async with self.watch():
+            landed = [self.test_row]
+            body += started_log("b", 27, "x")
+            for text, results in (
+                (body, reports("a")),
+                (body + started_log("c", 28), [*reports("a"), *reports("b", "failed")]),
+                (body, [*reports("a"), *reports("b")]),
+            ):
+                self.suite(text, results=results)
+                await self.read()
+                landed.append(self.test_row)
+            await self.press("enter", "G")
+            self.suite(body, output("y"))
+            await self.read()
+
+            assert landed == ["a", "b", "b", "a"], "running, the next running, failed, the first"
+            assert self.test_row == "c", "with the focus in the tests, the cursor is the operator's"
+
+    async def test_a_suites_own_output_is_the_first_row_open_when_the_stage_errored(self):
+        for state, opened in (("error", True), ("failed", False)):
+            with self.subTest(state):
+                own = output("collected 1 item")
+                body = own + queued("a") + started_log("a", 26, "x")
+                text = run_log("target_suite", state, target_suite=body)
+                self.record(text, target_suite=reports("a"))
+                (self.records / "DISABLED").write_text(STOPPED)
+
+                async with self.watch():
+                    name, is_open, _ = self.tests[0]
+
+                    assert (name, is_open) == ("output", opened), "why the stage errored"
+                    assert self.tests[1][0] == "a", "the tests follow"
+
+    async def test_a_fold_is_the_operators_and_a_test_opens_on_all_its_output(self):
+        body = queued("a", "b") + started_log("a", 26, "passed") + started_log("b", 27, "one")
+        self.suite(body, results=reports("a"))
+        self.live()
+
+        async with self.watch():
+            await self.press("enter", "space", "g", "space")
+            left = [opened for _, opened, _ in self.tests]
+            self.suite(body, output("two"), results=reports("a"))
+            await self.read()
+            after_read = [opened for _, opened, _ in self.tests]
+            await self.press("G", "space")
+
+            assert left == [True, False], "the passed test opened, the running one folded"
+            assert after_read == [True, False], "both stay as they were left"
+            assert self.tests == [("a", True, ["passed"]), ("b", True, ["one", "two"])], (
+                "opened on all of its output"
+            )
+
+    async def test_output_then_failure_lines_show_once_in_order_as_either_grows(self):
+        self.suite(queued("a"), started_log("a", 26, "l1"))
+        self.live()
+
+        async with self.watch():
+            for lines in (["l1", "l2"], ["l1", "l2", "l3", "l4"]):
+                self.suite(
+                    queued("a"),
+                    started_log("a", 26, *lines),
+                    results=reports("a", "failed", "boom"),
+                )
+                await self.read()
+
+                assert self.tests[0][2] == [*lines, "t.py:3: boom"], "output, then the failure"
 
 
-def test_enable_then_y_removes_disabled_starts_the_timer_and_says_so(
-    monkeypatch, tmp_path, systemctl
-):
-    keys = [*":enable", "\n", TIMEOUT, "y", TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys)
-    assert changes(systemctl) == [start_argv("bench-run")]
-    assert not (directory / "DISABLED").exists()
-    assert "bench enabled" in last_frame(fake)
-    assert ASK not in last_frame(fake)
+# -- search ----------------------------------------------------------------------------------------
 
 
-def test_enable_then_y_with_no_disabled_file_still_starts_the_timer(
-    monkeypatch, tmp_path, systemctl
-):
-    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
-    fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
-    assert changes(systemctl) == [start_argv("bench-run")]
-    assert "bench enabled" in last_frame(fake)
+class TestSearch(WatchCase):
+    def on_screen(self, row):
+        """Whether a row of the log is on screen."""
+        return 0 <= row - self.log.scroll_y < self.log.size.height
+
+    async def test_search_goes_to_each_match_of_a_log(self):
+        lines = [f"line {i}" for i in range(200)]
+        lines[20] = lines[150] = "needle"
+        self.record(run_log("build", build=output(*lines)))
+        self.live()
+
+        async with self.watch():
+            await self.command("/needle")
+            first = self.on_screen(20), self.on_screen(150)
+            await self.press("n")
+            second = self.on_screen(20), self.on_screen(150)
+
+            assert (first, second) == ((True, False), (False, True)), "a match, then the next"
+
+    async def test_search_matches_what_is_drawn_and_says_when_nothing_does(self):
+        self.record(run_log("build", build=output("2026-11-10 03:10:00 - INFO     - NOTE: first")))
+        self.live()
+
+        async with self.watch():
+            await self.command("/NOTE")
+            found = self.message
+            await self.command("/2026")
+
+            assert found == "", "the drawn part matches"
+            assert self.message == "no match for 2026", "kas's stamp is not drawn"
+
+    async def test_search_opens_the_test_a_match_is_in_and_goes_to_its_line(self):
+        body = queued("a", "b") + started_log("a", 26, "boot one", "x", "boot two")
+        self.record(
+            run_log("target_suite", target_suite=body + started_log("b", 27, "boot three")),
+            target_suite=reports("a"),
+        )
+        self.live()
+
+        async with self.watch():
+            folded = self.tests[0][1]
+            await self.command("/boot")
+            found, opened = [self.test_row], self.tests[0][1]
+            for _ in range(2):
+                await self.press("n")
+                found.append(self.test_row)
+
+            assert (folded, opened) == (False, True), "the match's test opens"
+            assert found == ["boot one", "boot two", "boot three"], "each in turn"
 
 
-def test_a_failed_queue_read_landing_while_enable_waits_leaves_the_question_showing(
-    monkeypatch, tmp_path, systemctl
-):
-    stub_queue(monkeypatch, entries=lambda: (_ for _ in ()).throw(RuntimeError("remote is down")))
-    held, release = held_work()
-    checkout = clone_root(tmp_path) / "checkout"
-    write_bench_toml(checkout)
-    add_settings(run_unit_settings())
-    terminal(monkeypatch, tmp_path, 0)
-    seen = []
-    keys = [
-        "2",
-        TIMEOUT,
-        *":enable",
-        "\n",
-        release,
-        lambda: seen.append(last_frame(fake)),
-        "n",
-        "q",
-    ]
-    fake = FakeScreen(keys=keys)
-    directory = tmp_path / "records"
-    directory.mkdir()
-    assert status._loop(fake, _checkout(tmp_path), directory, run=held.append) == 0
-    assert ASK in seen[0]
-    assert "remote is down" not in seen[0]
-    assert changes(systemctl) == []
+# -- History ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cancel", ["n", "x", "\x1b"])
-def test_enable_then_another_key_changes_nothing_and_clears_the_question(
-    monkeypatch, tmp_path, systemctl, cancel
-):
-    keys = [*":enable", "\n", cancel, TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys)
-    assert changes(systemctl) == []
-    assert (directory / "DISABLED").exists()
-    assert any(ASK in "\n".join(frame) for frame in fake.frames)
-    assert ASK not in last_frame(fake)
+class TestHistory(WatchCase):
+    @property
+    def run_shown(self):
+        """The record the title names, and whether its tab names one."""
+        named = [name for name in (STAMP, OLDER, OLDEST) if name in self.shown("#title")]
+        return named[0], str(self.app.query_one("#tab-run", Tab).label).split()[2:]
+
+    def three_runs(self):
+        """Record three runs, the newest live."""
+        self.record(run_log("build"))
+        self.record(run_log(), OLDER)
+        self.record(run_log(), OLDEST)
+        self.live()
+
+    async def test_a_run_that_ends_while_history_is_hidden_has_its_result_there(self):
+        self.record(run_log("build"))
+
+        async with self.watch():
+            with holding(self.records):
+                await self.read()
+                await self.press("3")
+                live = self.result_shown
+                await self.press("1")
+            self.record(run_log())
+            await self.read()
+            await self.press("3")
+
+            assert live == "running", "it was running"
+            assert self.result_shown == "passed", "it ended"
+
+    @property
+    def result_shown(self):
+        """The result History shows for the newest run."""
+        return self.table("#history-rows")[0][1][3]
+
+    async def test_enter_shows_the_run_under_the_cursor_and_the_newest_is_unnamed(self):
+        self.three_runs()
+
+        async with self.watch():
+            await self.press("3", "j", "enter")
+            past = self.tab, *self.run_shown
+            await self.press("3", "g", "enter")
+
+            assert past == ("run", OLDER, [OLDER]), "the run under the cursor, named on its tab"
+            assert (self.tab, *self.run_shown) == ("run", STAMP, []), "the newest is unnamed"
 
 
-def test_disable_with_no_run_unit_says_so_and_calls_nothing(monkeypatch, tmp_path, systemctl):
-    keys = [*":disable", "\n", TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
-    assert systemctl.calls == []
-    assert "no [run] unit in the bench's settings file" in last_frame(fake)
-    assert (directory / "DISABLED").exists()
+# -- Queue -----------------------------------------------------------------------------------------
 
 
-def test_enable_with_no_run_unit_says_so_and_leaves_disabled_in_place(
-    monkeypatch, tmp_path, systemctl
-):
-    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
-    fake, directory = bench_command(monkeypatch, tmp_path, keys, unit=False)
-    assert systemctl.calls == []
-    assert "no [run] unit in the bench's settings file" in last_frame(fake)
-    assert (directory / "DISABLED").exists()
+class TestQueue(WatchCase):
+    async def test_the_queue_shows_a_hand_entry_then_the_merge_entry_github_answers(self):
+        entry, _, _ = Queue(self.clone.checkout, self.records).add("HEAD", None, False, [])
+        self.github.result = [{"pr": 14, "title": "Add slot check", "sha": "9" * 40}]
+
+        async with self.watch():
+            await self.press("2")
+            await self.eventually(lambda: self.keys_of("#queue-rows"), "the queue is read")
+
+            (first, first_cells), (second, second_cells) = self.table("#queue-rows")
+            assert (first, second) == (f"hand {entry}", "merge 14"), "in run order"
+            assert "HEAD" in first_cells, "the ref queued"
+            assert "PR #14 Add slot check" in second_cells, "the PR and its title"
+
+    async def test_the_queue_is_read_on_entering_and_each_period_while_it_shows(self):
+        queue = self.stub_queue()
+
+        async with self.watch():
+            unread = queue.entries.call_count
+            await self.press("2")
+            await self.eventually(lambda: queue.entries.call_count == 1, "read on entering")
+            self.periods(queue=OFTEN)
+            await self.press("1", "2")
+            await self.eventually(lambda: queue.entries.call_count > 4, "read each period")
+            await self.press("1")
+            left = queue.entries.call_count
+            await asyncio.sleep(20 * OFTEN)
+
+            assert unread == 0, "not read before it shows"
+            assert queue.entries.call_count == left, "not read while it does not show"
+
+    async def test_a_failed_read_says_why_keeps_the_rows_and_the_next_recovers(self):
+        queue = self.stub_queue([hand(3)])
+        self.periods(queue=OFTEN)
+
+        async with self.watch():
+            await self.press("2")
+            await self.eventually(lambda: self.keys_of("#queue-rows") == ["hand 3"], "a read")
+            queue.entries.side_effect = RuntimeError("remote is down")
+            await self.eventually(lambda: self.message == "remote is down", "why it failed")
+            kept = self.keys_of("#queue-rows")
+            queue.entries.side_effect = [[hand(4)]] * 1000
+            await self.eventually(lambda: self.keys_of("#queue-rows") == ["hand 4"], "the next")
+
+            assert kept == ["hand 3"], "the rows there were"
+
+    def shows(self, count):
+        """Whether the Queue has `count` rows."""
+        return len(self.keys_of("#queue-rows")) == count
+
+    async def test_the_cursor_stays_on_its_entry_and_is_on_the_first_row_when_it_goes(self):
+        queue = self.stub_queue([hand(3), hand(4), merge(14)])
+        self.periods(queue=OFTEN)
+
+        async with self.watch():
+            await self.press("2")
+            await self.eventually(lambda: len(self.keys_of("#queue-rows")) == 3, "a read")
+            await self.press("j")
+            at = [self.row_of("#queue-rows")]
+            for entries in ([hand(4), merge(14)], [hand(2), hand(3), hand(4)], [hand(2), hand(3)]):
+                queue.entries.return_value = entries
+                await self.eventually(partial(self.shows, len(entries)), "a read")
+                await self.pilot.pause()
+                at.append(self.row_of("#queue-rows"))
+
+            assert at == ["hand 4", "hand 4", "hand 4", "hand 2"], "its entry, else the first row"
+
+
+# -- commands --------------------------------------------------------------------------------------
+
+
+class TestRunCommand(WatchCase):
+    @property
+    def queue(self):
+        """The bench's real queue."""
+        return Queue(self.clone.checkout, self.records)
+
+    def hand_entries(self):
+        """The runs queued by hand."""
+        return [entry for entry in self.queue.entries() if entry["kind"] == "test"]
+
+    async def test_run_queues_the_commit_the_ref_names_here_or_in_a_directory(self):
+        there = source_repo(self.clone.elsewhere / "src")
+        here = self.queue.add("HEAD", None, False, [])[1]
+        self.queue.remove(1)
+
+        async with self.watch():
+            for entry, (typed, sha) in enumerate([("HEAD", here), ("-C src HEAD", there)], start=2):
+                await self.command(f":run {typed}")
+                said = f"queued {entry} {sha[:7]}"
+                await self.eventually(partial(self.says, said), "its id and commit")
+
+            assert here != there, "two commits"
+            assert [(e["ref"], e["sha"]) for e in self.hand_entries()] == [
+                ("HEAD", here),
+                ("HEAD", there),
+            ], "an entry each, at the commit the ref names"
+
+    async def test_a_ref_that_does_not_resolve_queues_nothing_and_says_so(self):
+        async with self.watch():
+            await self.command(":run nosuch")
+            await self.eventually(
+                lambda: self.message == "nosuch does not resolve to a commit", "why not"
+            )
+
+            assert self.hand_entries() == [], "nothing is queued"
+
+    async def test_typing_run_shows_the_queue_and_what_the_ref_would_queue(self):
+        async with self.watch():
+            await self.press(*":run")
+            before = self.tab
+            await self.press(*" HEAD")
+            await self.eventually(
+                lambda: '"first", clean tree' in self.shown("#preview"), "the commit's subject"
+            )
+
+            assert (before, self.tab) == ("run", "queue"), "the Queue shows once a ref is typed"
+
+    async def test_the_preview_is_of_the_newest_ref_and_goes_with_the_command_line(self):
+        queue = self.stub_queue()
+        slow, last = Held(UNRESOLVED), Held(UNRESOLVED)
+        answers = {"a": slow, "ab": lambda: {"sha": "5" * 40, "subject": "of ab", "clean": True}}
+        answers["abc"] = last
+        queue.preview.side_effect = lambda ref, source: answers[ref]()
+
+        async with self.watch():
+            await self.press(*":run a")
+            await self.eventually(slow.started.is_set, "the first preview began")
+            await self.press("b")
+            await self.eventually(lambda: "of ab" in self.shown("#preview"), "the newest ref's")
+            slow.released.set()
+            await self.eventually(lambda: slow.returned, "the older one answered last")
+            await self.pilot.pause(0.1)
+            newest = self.shown("#preview")
+            await self.press("c")
+            await self.eventually(last.started.is_set, "another began")
+            await self.press("escape")
+            last.released.set()
+            await self.eventually(lambda: last.returned, "and answered after Esc")
+            await self.pilot.pause(0.1)
+
+            assert "of ab" in newest, "an older ref's answer is not shown"
+            assert self.shown("#preview") == "", "no preview without the command line"
+
+
+class TestRemoveCommand(WatchCase):
+    def setUp(self):
+        """Queue two runs by hand, ids 1 and 2."""
+        self.queue = Queue(self.clone.checkout, self.records)
+        for _ in range(2):
+            self.queue.add("HEAD", None, False, [])
+        self.github.result = [{"pr": 14, "title": "Add slot check", "sha": "9" * 40}]
+        self.periods(queue=OFTEN)
+
+    def waiting(self):
+        """The ids of the runs queued by hand."""
+        return [entry["id"] for entry in self.queue.entries() if entry["kind"] == "test"]
+
+    async def selected(self, key):
+        """Wait for the cursor to be on a row of the Queue."""
+        await self.eventually(lambda: self.row_of("#queue-rows") == key, f"the cursor is on {key}")
+
+    async def test_remove_removes_the_selected_run(self):
+        async with self.watch():
+            await self.press("2")
+            await self.selected("hand 1")
+            await self.press("j")
+            await self.command(":remove")
+            await self.eventually(partial(self.says, "removed queued run 2"), "what went")
+
+            assert self.waiting() == [1], "only the selected run"
+
+    async def test_remove_means_the_row_selected_when_the_line_opened(self):
+        async with self.watch():
+            await self.press("2")
+            await self.selected("hand 1")
+            await self.press(*":remove")
+            self.queue.remove(1)
+            await self.selected("hand 2")
+            await self.press("enter")
+            await self.eventually(lambda: "no queued run 1" in self.message, "it had gone")
+
+            assert self.waiting() == [2], "the row in its place stays"
+
+    async def test_remove_on_the_running_run_and_on_a_merge_entry_removes_nothing(self):
+        self.record(run_log("build"))
+        self.live()
+
+        async with self.watch():
+            await self.press("2")
+            await self.eventually(lambda: len(self.keys_of("#queue-rows")) == 4, "the queue")
+            for keys, row in (("g", "running"), ("G", "merge 14")):
+                with self.subTest(row):
+                    await self.press(keys)
+                    await self.selected(row)
+                    await self.command(":remove")
+
+                    assert "only hand-queued runs" in self.message, "why not"
+                    assert self.waiting() == [1, 2], "nothing is removed"
+
+    async def test_remove_with_the_line_opened_on_another_tab_removes_nothing(self):
+        async with self.watch():
+            await self.press("2")
+            await self.selected("hand 1")
+            await self.press("1", *":run ")
+            on_queue = self.tab
+            await self.press(*["backspace"] * 4, *"remove", "enter")
+
+            assert on_queue == "queue", "the Queue shows, its cursor on a hand row"
+            assert "only hand-queued runs" in self.message, "why not"
+            assert self.waiting() == [1, 2], "nothing is removed"
+
+
+class TestBenchCommands(WatchCase):
+    def setUp(self):
+        """A disabled bench."""
+        self.disabled = self.records / "DISABLED"
+        self.disabled.write_text(STOPPED)
+
+    async def test_disable_stops_the_timer_once_and_says_so(self):
+        async with self.watch():
+            await self.command(":disable")
+            await self.eventually(lambda: self.message == "bench disabled", "what came of it")
+
+            assert self.commands() == [stop_argv("bench-run")], "the timer is stopped once"
+
+    async def test_a_failure_to_stop_or_start_the_timer_is_shown(self):
+        async with self.watch():
+            for verb, commands in (("stop", [":disable"]), ("start", [":enable", "y"])):
+                with self.subTest(verb):
+                    self.systemctl.answer(verb, returncode=1, stderr=f"no {verb}\n")
+                    for each in commands:
+                        await self.command(each)
+
+                    await self.eventually(
+                        partial(self.says, f"systemctl failed: no {verb}"), "why not"
+                    )
+
+    async def test_enable_asks_and_y_enables(self):
+        async with self.watch():
+            await self.command(":enable")
+            asked, before = self.question, (self.disabled.exists(), self.commands())
+            await self.press("y", "enter")
+            await self.eventually(lambda: self.message == "bench enabled", "what came of it")
+
+            assert QUESTION in asked, "it asks first"
+            assert before == (True, []), "nothing changes before the answer"
+            assert self.commands() == [start_argv("bench-run")], "the timer is started"
+            assert not self.disabled.exists(), "DISABLED is removed"
+
+    async def test_any_other_answer_changes_nothing(self):
+        async with self.watch():
+            for keys in (["n", "enter"], ["enter"], ["escape"], ["Y", "enter"], ["y", "escape"]):
+                with self.subTest(keys):
+                    await self.command(":enable")
+                    asked = self.question
+                    await self.press(*keys)
+                    await self.pilot.pause(0.1)
+
+                    assert QUESTION in asked, "it asked"
+                    assert self.commands() == [], "the timer is left alone"
+                    assert self.disabled.exists(), "DISABLED stays"
+
+    async def test_a_command_line_opened_after_the_question_was_left_is_a_plain_one(self):
+        async with self.watch():
+            await self.command(":enable")
+            asked = self.question
+            await self.press("tab")
+            await self.command(":disable")
+            await self.eventually(partial(self.says, "bench disabled"), "the command runs")
+
+            assert QUESTION in asked, "it asked"
+            assert self.commands() == [stop_argv("bench-run")], "only what was typed"
+
+    async def test_without_a_run_unit_both_say_so_and_change_nothing(self):
+        settings_file().write_text(settings_file().read_text().replace(run_unit_settings(), ""))
+        async with self.watch():
+            for command in (":disable", ":enable"):
+                with self.subTest(command):
+                    await self.command(command)
+
+                    assert "no [run] unit" in self.message, "why not"
+                    assert self.question == "", "it asks nothing"
+            await self.pilot.pause(0.1)
+
+            assert self.systemctl.calls == [], "systemctl is not called"
+            assert self.disabled.exists(), "DISABLED stays"
+
+    async def test_a_message_shows_beside_the_question_and_y_still_answers_it(self):
+        queue = self.stub_queue()
+        held = queue.entries.side_effect = Held(RuntimeError("remote is down"))
+
+        async with self.watch():
+            await self.press("2")
+            await self.eventually(held.started.is_set, "a read began")
+            await self.command(":enable")
+            held.released.set()
+            await self.eventually(partial(self.says, "remote is down"), "the read failed")
+            asked, queue.entries.side_effect = self.question, None
+            await self.command("y")
+            await self.eventually(partial(self.says, "bench enabled"), "the answer is taken")
+
+            assert QUESTION in asked, "the question stays"
+            assert self.commands() == [start_argv("bench-run")], "the timer is started"
+
+
+# -- reads and writes ------------------------------------------------------------------------------
+
+
+class TestReads(WatchCase):
+    async def test_a_key_takes_effect_before_a_blocked_call_returns(self):
+        self.record(run_log())
+        for name, keys, outcome in (
+            ("entries", ["2"], []),
+            ("preview", [*":run x", "escape"], RuntimeError("no")),
+            ("add", [*":run x", "enter"], (5, "5" * 40, 1)),
+            ("runs", [], []),
+        ):
+            with self.subTest(name):
+                await self.key_while_blocked(name, keys, Held(outcome))
+
+    async def key_while_blocked(self, name, keys, held):
+        """Press a key while a call is held, and assert it took effect before the call returned."""
+        queue = self.stub_queue()
+        self.periods(read=OFTEN)
+        async with self.watch():
+            if name == "runs":
+                self.monkeypatch.setattr(Records, "runs", held)
+            else:
+                getattr(queue, name).side_effect = held
+            await self.press(*keys)
+            await self.eventually(held.started.is_set, "the call began")
+            await self.press("3")
+            tab, returned = self.tab, held.returned
+            held.released.set()
+
+            assert tab == "history", "the key took effect"
+            assert not returned, "before the call returned"
+
+    async def test_looking_around_and_cancelling_every_command_writes_nothing(self):
+        queue = self.stub_queue([hand(3)])
+        self.record(
+            run_log("target_suite", target_suite=queued("a") + started_log("a", 26, "boot")),
+            target_suite=reports("a"),
+        )
+        self.record(run_log(), OLDER)
+        (self.records / "DISABLED").write_text(STOPPED)
+        (self.records / "lock").touch()
+        locks, processes = [], []
+        for name in ("flock", "lockf"):
+            self.monkeypatch.setattr(fcntl, name, lambda *args: locks.append(args))
+        self.monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: processes.append(argv))
+        before = self.snapshot()
+
+        async with self.watch():
+            await self.press("[", "]", "enter", "space", "space", *"/boot", "enter", "n")
+            await self.press("3", "j", "enter", "1", "?", "?", "2")
+            await self.eventually(lambda: self.keys_of("#queue-rows") == ["hand 3"], "the queue")
+            typed = []
+            for command in (":run main", ":remove", ":disable", ":enable"):
+                await self.press(*command)
+                typed.append(self.typed)
+                await self.press("escape")
+            await self.command(":enable")
+            asked = self.question
+            await self.press("n", "enter")
+            await self.read()
+            await self.pilot.pause(0.1)
+
+        assert typed == [":run main", ":remove", ":disable", ":enable"], "each was typed"
+        assert QUESTION in asked, "the question was asked"
+        assert self.snapshot() == before, "no byte and no mtime changes"
+        assert (locks, processes) == ([], []), "no lock is taken and no process started"
+        assert self.commands() == [], "systemctl is only asked whether the timer is active"
+        called = {name for name, _, _ in queue.method_calls}
+        assert called == {"entries", "preview"}, "the queue is only read"
+
+    def snapshot(self):
+        """Every entry of the clone and the records: kind, mtime and bytes."""
+        found = {}
+        for path in sorted([self.clone.root, *self.clone.root.rglob("*")]):
+            info = path.lstat()
+            body = path.read_bytes() if stat.S_ISREG(info.st_mode) else None
+            found[str(path)] = (stat.S_IFMT(info.st_mode), info.st_mtime_ns, body)
+        return found
+
+
+# -- keys ------------------------------------------------------------------------------------------
+
+
+class TestKeys(WatchCase):
+    async def test_vim_keys_move_a_list_as_the_named_keys_do(self):
+        for i in range(60):
+            self.record(run_log(), f"202611{i:02d}T030715Z")
+
+        async with self.watch():
+            await self.press("3")
+            for vim, key, end in (
+                ("j", "down", None),
+                ("k", "up", None),
+                ("g", "home", 0),
+                ("G", "end", 59),
+                ("ctrl+d", "pagedown", None),
+                ("ctrl+u", "pageup", None),
+            ):
+                with self.subTest(vim):
+                    by_vim, by_key = await self.from_row_30(vim), await self.from_row_30(key)
+
+                    assert by_vim == by_key != 30, f"{vim} moves as {key} does"
+                    assert end in (None, by_key), "to the first or last row"
+
+    async def test_keys_that_arrive_together_act_in_the_order_typed(self):
+        for name in (STAMP, OLDER, OLDEST):
+            self.record(run_log(), name)
+
+        async with self.watch():
+            await self.press("3")
+            for key, character in (("j", "j"), ("enter", "\r")):
+                self.app.post_message(events.Key(key, character))
+            await self.eventually(lambda: self.tab == "run", "Enter opened a run")
+
+            assert OLDER in self.shown("#title"), "the one j moved to"
+
+    async def test_keys_typed_after_a_colon_in_one_burst_are_text(self):
+        async with self.watch():
+            for key, character in (
+                ("colon", ":"),
+                ("r", "r"),
+                ("u", "u"),
+                ("n", "n"),
+                ("space", " "),
+                ("1", "1"),
+                ("n", "n"),
+            ):
+                self.app.post_message(events.Key(key, character))
+            await self.eventually(lambda: self.typed == ":run 1n", "the whole burst is text")
+
+            assert self.tab == "queue", "`:run ` showed the Queue, and the `1` did not take it back"
+
+    async def test_keys_that_arrive_in_one_burst_act_as_if_typed_one_by_one(self):
+        for name in (STAMP, OLDER, OLDEST):
+            self.record(run_log(), name)
+        queue = Queue(self.clone.checkout, self.records)
+        for _ in range(3):
+            queue.add("HEAD", None, False, [])
+        self.periods(queue=OFTEN)
+        names = {":": "colon", "/": "slash", " ": "space", "\r": "enter", "\b": "backspace"}
+        for label, before, burst, outcome in (
+            (
+                "a key after a vim key",
+                "",
+                ["3", "down", "\r"],
+                lambda: OLDER in self.shown("#title"),
+            ),
+            (
+                "an edit before Enter",
+                "",
+                [*":run ab", "\b", "c", "\r"],
+                lambda: self.says("ac does not resolve"),
+            ),
+            (
+                "a search, then n",
+                "",
+                [*"/ab", "\r", "n"],
+                lambda: self.says("no match for ab") and self.typed is None,
+            ),
+            (
+                "a vim key after Esc",
+                "2",
+                [*":x", "escape", "j"],
+                lambda: self.row_of("#queue-rows") == "hand 2",
+            ),
+            (
+                "a command after a vim key",
+                "2",
+                ["j", *":remove", "\r"],
+                lambda: [e["id"] for e in queue.entries() if e["kind"] == "test"] == [1, 3],
+            ),
+        ):
+            with self.subTest(label):
+                async with self.watch():
+                    if before:
+                        await self.press(before)
+                        await self.eventually(lambda: self.tab == "queue", "the Queue shows")
+                        await self.eventually(lambda: len(self.keys_of("#queue-rows")) == 3, "rows")
+                    for key in burst:
+                        character = key if len(key) == 1 else None
+                        self.app.post_message(events.Key(names.get(key, key), character))
+                    await self.eventually(outcome, f"{label}: the keys acted in order")
+
+    async def from_row_30(self, key):
+        """The row a key moves History's cursor to from row 30."""
+        table = self.app.query_one("#history-rows", DataTable)
+        table.move_cursor(row=30)
+        await self.press(key)
+        return table.cursor_row
+
+    async def test_colon_semicolon_and_question_mark_open_what_they_name(self):
+        async with self.watch():
+            for key in ":;":
+                with self.subTest(key):
+                    await self.press(key)
+
+                    assert self.typed == ":", "the line is open on a colon"
+                    await self.press("escape")
+            await self.press("?")
+            panels = [len(self.app.screen.query(HelpPanel))]
+            await self.press("?")
+            panels.append(len(self.app.screen.query(HelpPanel)))
+
+            assert panels == [1, 0], "the keys panel, shown then hidden"
+
+    async def test_in_the_command_line_a_key_is_text_and_esc_gives_the_list_focus(self):
+        async with self.watch():
+            await self.press(*":q1j?")
+            typed, tab = self.typed, self.tab
+            await self.press("escape")
+
+            assert (typed, tab) == (":q1j?", "run"), "no key acts"
+            assert self.typed is None, "Esc closes the line"
+            assert self.app.focused.id == "stages", "the view's list has focus"
+
+    async def test_colon_q_ends_the_view(self):
+        async with self.watch():
+            running = self.app.is_running
+            await self.pilot.press(*":q", "enter")
+            await self.eventually(lambda: not self.app.is_running, "it ends")
+
+            assert running, "it was running"
+            assert not self.app.return_code, "and that is no failure"
+
+
+# -- cost ------------------------------------------------------------------------------------------
+
+
+class TestCost(WatchCase):
+    BOUND = 0.5
+
+    async def cpu(self, act, *before):
+        """The least CPU time, in seconds, of five goes at `act`, each after the keys `before`."""
+        times = []
+        for _ in range(5):
+            if before:
+                await self.press(*before)
+            start = time.process_time()
+            await act()
+            times.append(time.process_time() - start)
+        return min(times)
+
+    async def key(self, key, *before):
+        """The CPU time of a key."""
+        return await self.cpu(partial(self.press, key), *before)
+
+    def assert_within(self, costs):
+        """Assert that each cost is within the bound."""
+        over = {name: f"{cost * 1000:.0f} ms" for name, cost in costs.items() if cost > self.BOUND}
+        assert over == {}, f"{over} over {self.BOUND * 1000:.0f} ms of {costs}"
+
+    async def test_a_keys_cpu_is_bounded_on_a_large_record(self):
+        names = [f"t{i:03d}" for i in range(200)]
+        lines = [f"line {i}" for i in range(120)]
+        suite = queued(*names) + "".join(started_log(name, 26, *lines) for name in names)
+        build = output(*(f"NOTE: line {i}" for i in range(12_000)))
+        for i in range(600):
+            self.record(run_log(), f"2025{i:06d}")
+        self.record(
+            run_log("target_suite", build=build, target_suite=suite),
+            target_suite=[report for name in names for report in reports(name)],
+        )
+        self.live()
+
+        async with self.watch():
+            costs = {
+                "j onto the suite": await self.key("j", "k"),
+                "k onto the build": await self.key("k", "1", "k", "k"),
+                "] back to it": await self.key("]", "1", "["),
+                "1 from History": await self.key("1", "3"),
+                "History j": await self.key("j", "3", "g"),
+                "History G": await self.key("G", "3", "g"),
+            }
+            rows = len(self.keys_of("#history-rows"))
+            await self.press("1", "enter")
+            for key, before in (("j", "g"), ("k", "G"), ("G", "g"), ("g", "G")):
+                costs[f"tests {key}"] = await self.key(key, before)
+            await self.press("g", "space")
+            opened = self.tests[0][1:]
+            costs["unfold"] = await self.key("space", "space")
+
+            assert rows == 601, "every record is in History"
+            assert opened == (True, lines), "the first test opened"
+            self.assert_within(costs)
+
+    async def test_a_live_reads_work_is_not_that_of_every_record_and_line(self):
+        lines = [f"NOTE: line {i}" for i in range(12_000)]
+        for i in range(2_000):
+            self.record(run_log(), f"2025{i:06d}")
+        self.record(run_log("build", build=output(*lines)))
+        self.live()
+
+        async with self.watch():
+            before = self.log.line_count
+            self.record(run_log("build", build=output(*lines, "new")))
+            with (
+                mock.patch.object(palette, "styled", side_effect=palette.styled) as cells,
+                mock.patch.object(view, "shown_line", side_effect=view.shown_line) as shown,
+            ):
+                await self.read()
+
+            assert (before, self.log.line_count) == (12_000, 12_001), "the new line shows"
+            assert shown.call_count == 1, "only the new line is handled"
+            assert 0 < cells.call_count < 500, "not a cell per record, with History hidden"
+
+    async def test_a_long_tests_work_is_the_rows_drawn_and_the_lines_added(self):
+        lines = [f"line {i}" for i in range(12_000)]
+        body = queued("a") + started_log("a", 26, *lines)
+        self.record(run_log("target_suite", target_suite=body))
+        self.live()
+
+        async with self.watch():
+            tree = self.app.query_one(Tree)
+            await self.press("enter", "space")
+            folded, cursor = self.tests[0][1], self.test_row
+            with mock.patch.object(
+                type(tree), "render_label", autospec=True, side_effect=type(tree).render_label
+            ) as drawn:
+                await self.press("space")
+            opened, rows = self.tests[0][1], [leaf.id for leaf in tree.root.children[0].children]
+            self.record(run_log("target_suite", target_suite=body + output("new")))
+            await self.read()
+            after = [leaf.id for leaf in tree.root.children[0].children]
+
+            assert (folded, cursor, opened) == (False, "a", True), "the test was opened"
+            assert len(rows) == 12_000, "with all of its lines"
+            assert 0 < drawn.call_count <= 3 * tree.size.height, "only rows drawn are styled"
+            assert len(after) == 12_001, "a new line is one row"
+            assert after[:-1] == rows, "the rows before it are the same rows"
+
+
+# -- not a terminal --------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("verb", "command", "answer", "text"),
-    [
-        (
-            "stop",
-            ":disable",
-            dict(returncode=1, stderr="not loaded\n"),
-            "systemctl failed: not loaded",
-        ),
-        ("stop", ":disable", dict(returncode=4), "systemctl failed: exit 4"),
-        ("start", ":enable", dict(returncode=1, stderr="no unit\n"), "systemctl failed: no unit"),
-    ],
+    ("stdin", "stdout", "started"), [(False, True, 0), (True, False, 0), (True, True, 1)]
 )
-def test_a_returned_failure_text_is_shown_verbatim(
-    monkeypatch, tmp_path, systemctl, verb, command, answer, text
+def test_without_a_terminal_it_says_so_returns_2_and_does_not_start(
+    monkeypatch, capsys, bench_clone, stdin, stdout, started
 ):
-    systemctl.answer(verb, **answer)
-    keys = [*command, "\n", *(["y"] if verb == "start" else []), TIMEOUT, "q"]
-    fake, _ = bench_command(monkeypatch, tmp_path, keys)
-    assert text in last_frame(fake)
-    assert "bench disabled" not in last_frame(fake)
-    assert "bench enabled" not in last_frame(fake)
+    app = mock.create_autospec(status.Watch)
+    app.return_value.return_code = None
+    monkeypatch.setattr(status, "Watch", app)
+    monkeypatch.setattr(sys, "stdin", mock.Mock(isatty=lambda: stdin))
+    monkeypatch.setattr(sys, "stdout", mock.Mock(isatty=lambda: stdout))
 
+    code = status.watch(bench_clone.checkout, bench_clone.records)
 
-def test_enable_that_cannot_remove_disabled_shows_why_and_does_not_start(
-    monkeypatch, tmp_path, systemctl
-):
-    directory = tmp_path / "records"
-    (directory / "DISABLED").mkdir(parents=True)
-    keys = [*":enable", "\n", "y", TIMEOUT, "q"]
-    fake, _ = bench_command(monkeypatch, tmp_path, keys, disabled=False)
-    assert changes(systemctl) == []
-    assert "cannot remove DISABLED:" in last_frame(fake)
-
-
-def watch_source(
-    monkeypatch, tmp_path, bench_clone, after_typing, dirty_checkout=False, typed_dir=None
-):
-    """Type `:run -C <src> HEAD` over a real `Queue`, then feed `after_typing` and a `q`.
-
-    Returns:
-        tuple: The source's tip commit, and one `(frame text, whether the checkout holds the
-        commit)` pair per snapshot key `after_typing` is given.
-    """
-    stub_merge_queue(monkeypatch, bench_clone.checkout)
-    sha = source_repo(tmp_path / "src")
-    if dirty_checkout:
-        (bench_clone.checkout / "tracked.txt").write_text("changed\n")
-    seen = []
-
-    def snap():
-        seen.append((last_frame(fake), has_commit(bench_clone.checkout, sha)))
-
-    terminal(monkeypatch, tmp_path, 0)
-    typed = [*f":run -C {typed_dir or tmp_path / 'src'} HEAD", TIMEOUT, TIMEOUT, snap]
-    fake = FakeScreen(keys=["2", TIMEOUT, *typed, *after_typing(snap), "q"])
-    directory = tmp_path / "records"
-    directory.mkdir(exist_ok=True)
-    assert status._loop(fake, _checkout(tmp_path), directory, **IMMEDIATELY) == 0
-    return sha, seen
-
-
-def test_the_preview_of_a_directory_reports_the_state_of_the_checkout_not_of_the_directory(
-    monkeypatch, tmp_path, bench_clone
-):
-    """The run builds in the checkout, so its uncommitted change is the one to warn of."""
-    _, seen = watch_source(
-        monkeypatch, tmp_path, bench_clone, lambda snap: ["\x1b"], dirty_checkout=True
-    )
-    frame, _ = seen[0]
-    assert "uncommitted changes in the checkout" in frame
-    assert "clean tree" not in frame
-
-
-def test_run_with_a_home_relative_directory_previews_and_queues_its_commit(
-    monkeypatch, tmp_path, bench_clone
-):
-    """`~/src` is typed, HOME is `tmp_path`: the preview resolves in `src` and Enter queues it."""
-    sha, seen = watch_source(
-        monkeypatch,
-        tmp_path,
-        bench_clone,
-        lambda snap: ["\n", TIMEOUT, TIMEOUT, snap],
-        typed_dir="~/src",
-    )
-    (preview, fetched_by_preview), (queued, fetched) = seen
-    assert f'resolves to {sha[:7]} "unpushed work"' in preview
-    assert not fetched_by_preview
-    assert f"queued 1 {sha[:7]}" in queued
-    assert fetched
-    held = queue.Queue(bench_clone.checkout, tmp_path / "records").entries()
-    assert [(e["ref"], e["sha"]) for e in held] == [("HEAD", sha)]
+    said = "" if started else "BENCH ERROR: bench status --watch needs a terminal\n"
+    assert code == (0 if started else 2), "the exit code"
+    assert capsys.readouterr().err == said, "the error line"
+    assert app.return_value.run.call_count == started, "the app starts only on a terminal"
