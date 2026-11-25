@@ -963,6 +963,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pexpect" },
     { name = "ruff" },
 ]
 
@@ -978,7 +979,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.17.0" }]
+dev = [
+    { name = "pexpect", specifier = ">=4.9.0" },
+    { name = "ruff", specifier = ">=0.17.0" },
+]
 
 [[package]]
 name = "xmodem"

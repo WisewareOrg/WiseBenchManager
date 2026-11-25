@@ -1,43 +1,37 @@
 /* The design canvas's layout and colours on Textual's own widgets. */
-$ground: #0c0c0c; $ink: #cccccc; $dim: #8b8b8b; $rule: #3a3a3a; $bright: #ffffff;
-$red: #e06c75; $blue: #61afef; $selection: #1f2a36; $running: #2a2614; $failed: #3a1d20;
 
 * { background-tint: transparent 0%; scrollbar-size: 0 0; }
-Screen { background: $ground; color: $ink; padding: 0 1; }
+Screen { padding: 0 1; }
 #top { height: 2; border-bottom: solid $rule; }
 #brand { width: 7; text-style: bold; }
 #clock { width: 8; color: $dim; }
 Tabs { width: 1fr; height: 1; }
 Tabs Underline { display: none; }
-Tab, Tabs:focus Tab { color: $dim; background: $ground; text-style: none; }
+Tab, Tabs:focus Tab { color: $dim; text-style: none; }
 Tab.-active { color: $ground; background: $ink; text-style: none; }
-Tabs:focus Tab.-active { color: $ground; background: $blue; text-style: none; }
+Tabs:focus Tab.-active { color: $ground; background: $hand; text-style: none; }
 #views { height: 1fr; }
 
-DataTable, Tree, Log, Input { background: $ground; color: $ink; }
-DataTable > .datatable--header, DataTable:focus > .datatable--header { color: $dim; background: $ground; text-style: none; }
-DataTable > .datatable--even-row, DataTable > .datatable--odd-row { background: $ground; }
+DataTable > .datatable--header, DataTable:focus > .datatable--header { color: $dim; text-style: none; }
 DataTable > .datatable--cursor, DataTable:focus > .datatable--cursor { background: $selection; color: $ink; text-style: none; }
 Tree > .tree--cursor { background: $ground; color: $ink; text-style: none; }
 Tree:focus > .tree--cursor { background: $selection; color: $ink; text-style: none; }
-Tree > .tree--guides, Tree:focus > .tree--guides, Tree > .tree--guides-selected, Tree:focus > .tree--guides-selected { color: $ground; background: $ground; }
-Log { color: #a8a8a8; }
+Tree > .tree--guides, Tree:focus > .tree--guides, Tree > .tree--guides-selected, Tree:focus > .tree--guides-selected { color: $ground; }
+Log { color: $log; }
 
 #title { height: 2; }
 #stages { width: 37; height: 1fr; }
 Rows { border-left: blank; }
-Rows:focus, #pane:focus-within { border-left: heavy $blue; }
+Rows:focus, #pane:focus-within { border-left: heavy $hand; }
 #stages.none > .datatable--cursor { background: $ground; }
-#stages.running > .datatable--cursor { background: $running; }
-#stages.failed > .datatable--cursor { background: $failed; }
 #pane { border-left: solid $rule; padding-left: 2; }
 #head { height: auto; }
 #head.suite, #head.none { margin-bottom: 1; }
-#failure { height: auto; padding: 0 1; border: solid $red; margin-bottom: 1; display: none; }
+#failure { height: auto; padding: 0 1; border: solid $failed; margin-bottom: 1; display: none; }
 #hint, #count, #runhint { color: $dim; }
 #log, #tests, #hint { display: none; }
 #queue-rows, #history-rows { height: 1fr; }
-#preview { height: auto; padding: 0 1; border: solid $blue; display: none; }
+#preview { height: auto; padding: 0 1; border: solid $hand; display: none; }
 
 #bottom { height: 2; border-top: solid $rule; }
 #state { width: 1fr; }
@@ -45,4 +39,4 @@ Rows:focus, #pane:focus-within { border-left: heavy $blue; }
 #message, #command-row { height: 1; display: none; }
 #command { width: 1fr; color: $bright; }
 #runhint { width: 26; }
-HelpPanel { background: $ground; color: $ink; border-left: solid $rule; }
+HelpPanel { border-left: solid $rule; }
