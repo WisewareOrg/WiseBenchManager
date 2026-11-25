@@ -79,8 +79,9 @@ The pieces kept as our own, and why no maintained tool covers each:
   are the size. The port first drew every log row on each key, 958 to 1,140 ms per key on a
   7,882-line log and about 10 ms once fixed.
 - **urwid, built fresh from the canvas.** The smallest of the fresh builds that kept keys of their
-  own, at 792 lines of code. Rejected for Textual as the toolkit new projects choose (37,732 GitHub
-  stars against 3,027), at 803 lines for the same design. A urwid build limited to urwid's own widgets
+  own, at 792 lines of code against 803 for the same design on Textual. Close in size, so rejected
+  for Textual as the toolkit new projects choose (37,732 GitHub stars against 3,027) and whose
+  maintainer states that they will continue. A urwid build limited to urwid's own widgets
   and keys was not made. On maintenance the two are alike in shape: each has one principal
   maintainer, with 364 commits to Textual and 479 to urwid in the year to 2026-11-25. urwid
   had eight releases from 2026-10-28 to that date; Textual's last was 8.2.8, of 2026-06-30.
