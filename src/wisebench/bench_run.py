@@ -66,7 +66,7 @@ class BenchRun:
             print("bench run: the board is off")
             return
         disabled_path = self._result_dir / DISABLED
-        if self._merge and disabled_path.exists():
+        if disabled_path.exists():
             print("bench run: disabled, see DISABLED")
             return
 

@@ -40,13 +40,13 @@ and state.**
    `TimeoutStartSec`.
 6. **Only the first board reads the merge queue.** An added board's queue lists runs queued by hand,
    builds no `Check` and posts nothing.
-7. **`ON` in its records directory alone decides whether an added board runs; it is absent at
-   first.** `bench on <name>` makes it, `bench off <name>` removes it, and neither touches the queue
-   or a timer. Without it `bench run --board <name>` exits 0 before the queue, git or any hook.
-   Queueing still works, and a run in progress finishes.
+7. **An added board runs while `ON` is in its records directory and `DISABLED` is not; `ON` is
+   absent at first.** `bench on <name>` makes it, `bench off <name>` removes it, and neither touches
+   the queue or a timer. Without it `bench run --board <name>` exits 0 before the queue, git or any
+   hook. Queueing still works, and a run in progress finishes.
 8. **A failure of the bench on an added board removes its `ON`, then writes its `DISABLED`, and stops
-   no timer.** `DISABLED` there is the reason and nothing more. `bench on` removes it and says what it
-   said, so no command leaves a board on and disabled; `bench off` leaves it.
+   no timer.** `bench on` removes `DISABLED` and says what it said, so no command leaves a board on
+   and disabled; `bench off` leaves it.
 
 ## Alternatives considered
 
@@ -63,8 +63,7 @@ and state.**
   file that already defines the board.
 - **`DISABLED` as the switch.** Rejected: absent would mean on, so a missed step in setting a board
   up, or a lost records directory, would turn it on.
-- **`DISABLED` stopping an added board's runs, beside `ON`.** Rejected: a board could be on and
-  disabled, so `bench on` would say it is on and nothing would run.
+- **`bench on` leaving `DISABLED`.** Rejected: it would say the board is on and nothing would run.
 - **The timer as the switch.** Rejected: a `bench run` by hand ignores it.
 
 ## Consequences

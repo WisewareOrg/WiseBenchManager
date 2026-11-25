@@ -224,12 +224,34 @@ def test_an_added_boards_fault_turns_it_off_and_touches_no_other(boards, capsys,
 def test_a_fault_that_cannot_be_written_down_still_turns_the_board_off(boards):
     cli.main(["on", "a"])
     enqueue("a")
-    (locate("a")[1] / "DISABLED").mkdir()
-    boards.bench_test.return_value.run.side_effect = bench_test.BenchFailure("precondition")
+
+    def body(*args):
+        (locate("a")[1] / "DISABLED").mkdir()
+        raise bench_test.BenchFailure("precondition")
+
+    boards.bench_test.return_value.run.side_effect = body
 
     assert run("a") == 2
 
     assert not (locate("a")[1] / "ON").exists()
+
+
+@pytest.mark.parametrize("on", [True, False])
+@pytest.mark.parametrize("disabled", [True, False])
+def test_a_board_runs_while_on_and_not_disabled(boards, on, disabled):
+    records = locate("a")[1]
+    enqueue("a")
+    if on:
+        cli.main(["on", "a"])
+    if disabled:
+        (records / "DISABLED").write_text("2026-11-25T00:00:00+00:00\nprecondition\n")
+
+    assert run("a") == 0
+
+    assert waiting("a") == ([] if on and not disabled else [1])
+    cli.main(["on", "a"])
+    assert run("a") == 0
+    assert waiting("a") == []
 
 
 def test_the_first_boards_fault_leaves_an_added_board_on(boards, systemctl):
