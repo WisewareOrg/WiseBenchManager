@@ -114,7 +114,7 @@ def main(argv=None):
 
     if args.command == "test":
         try:
-            entry_id, sha, place = Queue(checkout, directory, merge=args.board is None).add(
+            entry_id, sha, place = Queue(checkout, directory).add(
                 args.ref, args.set_name, args.skip_build, pytest_args, args.source
             )
         except subprocess.CalledProcessError:
@@ -128,7 +128,7 @@ def main(argv=None):
 
     if args.command == "unqueue":
         try:
-            removed = Queue(checkout, directory, merge=args.board is None).remove(args.entry_id)
+            removed = Queue(checkout, directory).remove(args.entry_id)
         except Exception as exc:
             print(f"BENCH ERROR: {exc}", file=sys.stderr)
             return 2
@@ -154,7 +154,7 @@ def main(argv=None):
 
     try:
         config = Config.load(checkout / "bench.toml", settings_path())
-        bench_run = BenchRun(checkout, config, directory, merge=args.board is None)
+        bench_run = BenchRun(checkout, config, directory, added=args.board is not None)
     except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2

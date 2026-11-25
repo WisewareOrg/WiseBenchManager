@@ -44,9 +44,9 @@ and state.**
    absent at first.** `bench on <name>` makes it, `bench off <name>` removes it, and neither touches
    the queue or a timer. Without it `bench run --board <name>` exits 0 before the queue, git or any
    hook. Queueing still works, and a run in progress finishes.
-8. **A failure of the bench on an added board removes its `ON`, then writes its `DISABLED`, and stops
-   no timer.** `bench on` removes `DISABLED` and says what it said, so no command leaves a board on
-   and disabled; `bench off` leaves it.
+8. **A failure of the bench on an added board leaves it off, with its reason, and stops no timer.** No
+   command leaves a board on and disabled: `bench on` removes `DISABLED` and says what it said, and
+   `bench off` leaves it.
 
 ## Alternatives considered
 
@@ -55,6 +55,9 @@ and state.**
 - **A build lock in the runner, held for a built run.** Rejected: a layer's suites start builds too,
   and so do people by hand, so a lock here covers less than every build and keeps runs apart that
   build nothing.
+- **labgrid's coordinator and places.** They arbitrate a board among several users and hosts.
+  Rejected: here one host drives each board, so there is nothing to arbitrate, and a queue, a checkout
+  and a switch per board would still be ours, beside a service to keep running.
 - **A git worktree per board.** Rejected: worktrees share refs, so two ticks' `git fetch` can collide
   on ref locks, the race ADR 0005 rev 1 names.
 - **One queue table with a board column.** Rejected: it needs a migration, and one wrong query drives

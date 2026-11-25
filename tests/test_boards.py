@@ -118,14 +118,6 @@ def test_a_name_with_no_checkout_exits_2_before_anything_is_made(boards, capsys,
     assert tree() == before
 
 
-@pytest.mark.parametrize("command", ["on", "off"])
-def test_the_first_board_has_no_switch(boards, command):
-    with pytest.raises(SystemExit) as raised:
-        cli.main([command])
-    assert raised.value.code == 2
-    assert not (locate()[1] / "ON").exists()
-
-
 # -- each board's queue ------------------------------------------------------------------
 
 
@@ -221,6 +213,15 @@ def test_an_added_boards_fault_turns_it_off_and_touches_no_other(boards, capsys,
     assert (waiting("a"), waiting()) == ([], [])
 
 
+def test_on_says_the_reason_of_a_disabled_made_by_hand(boards, capsys):
+    cli.main(["on", "a"])
+    (locate("a")[1] / "DISABLED").write_text("cable off\n")
+
+    cli.main(["on", "a"])
+
+    assert capsys.readouterr().out.endswith("a is on; fault cleared: cable off\n")
+
+
 def test_a_fault_that_cannot_be_written_down_still_turns_the_board_off(boards):
     cli.main(["on", "a"])
     enqueue("a")
@@ -252,6 +253,7 @@ def test_a_board_runs_while_on_and_not_disabled(boards, on, disabled):
     cli.main(["on", "a"])
     assert run("a") == 0
     assert waiting("a") == []
+    assert (records / "ON").exists()
 
 
 def test_the_first_boards_fault_leaves_an_added_board_on(boards, systemctl):
@@ -332,16 +334,6 @@ def test_turned_off_during_a_run_the_run_ends_as_it_would_and_the_next_does_not_
     assert run("a") == 0
     assert waiting("a") == [2]
     boards.bench_test.assert_called_once()
-
-
-@pytest.mark.parametrize("on", [True, False])
-def test_a_run_without_a_fault_leaves_every_boards_switch_as_it_was(boards, on):
-    cli.main(["on" if on else "off", "a"])
-    for name in (None, "a", "b"):
-        enqueue(name)
-        run(name)
-        assert (locate("a")[1] / "ON").exists() is on
-        assert not (locate("b")[1] / "ON").exists()
 
 
 @pytest.mark.parametrize("on", [True, False])

@@ -29,7 +29,7 @@ bench off <name>               # stop it from starting another
 one `--board <name>` names (see "More than one board").
 
 `bench` acts on the clone of this repository it is installed from, from whatever directory it is
-started in: one queue, one history, one lock. `bench test` runs nothing. It resolves the ref to a
+started in: one queue, one history, one lock for each board. `bench test` runs nothing. It resolves the ref to a
 commit in the bench's checkout (`checkout/` in the clone), queues the run in the clone's
 `records/queue.db`, and prints `queued <id> <sha> place <n>`: the id for `bench unqueue`, the commit
 the run will build, and its place among the runs queued by hand. A ref that does not resolve to a
@@ -71,7 +71,7 @@ layer's own tests recorded against them, and the exact command line.
 
 A failing hook or test is the candidate's failure and, for a merge-queue entry, is posted. An error
 in a fixture or the precondition is the bench's failure: a `DISABLED` marker is written, the timer
-is stopped, nothing is posted. pytest's own setup/call distinction is what tells the two apart: a
+is stopped (an added board is turned off instead), nothing is posted. pytest's own setup/call distinction is what tells the two apart: a
 fixture erroring during setup or teardown is never read as the candidate's test failing.
 
 ## What a layer provides
@@ -360,7 +360,7 @@ An added board is off until `bench on <name>`. While it is off its queued runs w
 progress when it is turned off finishes. It takes only runs queued with `bench test --board <name>`;
 the merge queue is the first board's. Its records, queue and lock are in `boards/<name>/records/`.
 
-A failure of the bench on an added board writes `DISABLED` beside that board's records, turns it off
+A failure of the bench on an added board turns it off, writes `DISABLED` beside that board's records
 and touches no other board or timer. `bench on <name>` clears it and says what it said; the same reason
 is the `BENCH ERROR` line of the unit's journal, and in the run's `bench.log` when a record was made.
 
@@ -369,8 +369,7 @@ address. Two labgrid files that name one board drive it under two locks, and not
 rest of `bench.env` reaches every board.
 
 Runs on two boards overlap and the runner keeps no lock across them. A layer whose builds must not
-overlap keeps them apart itself; a run that waits for another's build is why the template's
-`TimeoutStartSec` is `infinity`.
+overlap keeps them apart itself, and a run's wait there counts in its `TimeoutStartSec`.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

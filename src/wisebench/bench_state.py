@@ -166,8 +166,8 @@ def switch(board, on):
     directory.mkdir(exist_ok=True)
     marker, cleared = directory / DISABLED, ""
     if marker.exists():
-        _, _, reason = marker.read_text().partition("\n")
-        cleared = f"; fault cleared: {reason.strip()}"
+        reason = marker.read_text().strip().rpartition("\n")[2]
+        cleared = f"; fault cleared: {reason}"
         marker.unlink()
     (directory / ON).touch()
     return f"{board} is on{cleared}"

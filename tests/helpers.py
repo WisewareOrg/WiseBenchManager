@@ -392,7 +392,7 @@ class FakeBenchRun:
     instances = []
     outcome = None
 
-    def __init__(self, checkout, config, result_dir, merge=True):
+    def __init__(self, checkout, config, result_dir, added=False):
         self.checkout, self.config, self.result_dir = checkout, config, result_dir
         self.lg_envs = []
         FakeBenchRun.instances.append(self)
