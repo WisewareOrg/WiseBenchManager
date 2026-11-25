@@ -864,12 +864,11 @@ class TestReads(WatchCase):
             else:
                 getattr(queue, name).side_effect = held
             await self.press(*keys)
-            began = held.started.wait(1)
+            await self.eventually(held.started.is_set, "the call began")
             await self.press("3")
             tab, returned = self.tab, held.returned
             held.released.set()
 
-            assert began, "the call began"
             assert tab == "history", "the key took effect"
             assert not returned, "before the call returned"
 
