@@ -24,8 +24,6 @@ Log { color: $log; }
 Rows { border-left: blank; }
 Rows:focus, #pane:focus-within { border-left: heavy $hand; }
 #stages.none > .datatable--cursor { background: $ground; }
-#stages.running > .datatable--cursor { background: $running-ground; }
-#stages.failed > .datatable--cursor { background: $failed-ground; }
 #pane { border-left: solid $rule; padding-left: 2; }
 #head { height: auto; }
 #head.suite, #head.none { margin-bottom: 1; }

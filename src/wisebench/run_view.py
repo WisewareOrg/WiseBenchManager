@@ -287,7 +287,7 @@ class RunView(Vertical):
         stages.rows_shown = palette.table(rows)
         with self.prevent(DataTable.RowHighlighted):
             stages.move_cursor(row=run.stages.index(stage) if stage else 0, animate=False)
-        stages.set_classes(view.tone(stage.state, running)[1] if stage else "none")
+        stages.set_class(stage is None, "none")
         self.query_one(StagePane).show(seen, run, stage)
 
     watch_picked = watch_seen

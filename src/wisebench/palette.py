@@ -17,7 +17,6 @@ COLOURS = {
     "ink": "#cccccc",
     "selection": "#1f2a36",
     "running-ground": "#2a2614",
-    "failed-ground": "#3a1d20",
 }
 KEYS = Text.assemble((" ? ", Style(color=COLOURS["ground"], bgcolor=COLOURS["ink"])), " keys")
 THEME = Theme(
