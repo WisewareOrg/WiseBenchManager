@@ -1,11 +1,13 @@
 """The watch view over several boards: the Boards tab, choosing a board, and its commands."""
 
 from functools import partial
+from types import SimpleNamespace
 
 from helpers import repo_with_one_commit
 from status_helpers import OLDER, STAMP, merge, run_log
-from test_status_watch import STOPPED, WatchCase
+from test_status_watch import OFTEN, STOPPED, Held, WatchCase
 
+from wisebench.bench_io import BenchIO
 from wisebench.clone import locate
 from wisebench.queue import Queue
 
@@ -117,3 +119,137 @@ class TestBoardCommands(BoardsCase):
             assert not (self.prod / "ON").exists(), ":disable turned it off"
             assert not (self.prod / "DISABLED").exists(), "the fault is cleared"
             assert self.commands() == [], "no timer is touched"
+
+
+def chosen(name):
+    """The event Enter on a board's row in Boards sends."""
+    return SimpleNamespace(row_key=SimpleNamespace(value=name))
+
+
+class TestCommandsStayOnTheirBoard(BoardsCase):
+    """runner-ui.md, "What holds a command to its board"."""
+
+    async def known(self):
+        """Read Boards once, so the view knows `prod`, and go back to Run."""
+        await self.press("4")
+        await self.eventually(lambda: "prod" in self.app.benches, "prod is known")
+        await self.press("1")
+
+    def enqueue(self, name=None):
+        """Queue `HEAD` by hand on a board; return its id."""
+        return Queue(*locate(name), merge=False).add("HEAD", None, False, [])[0]
+
+    async def test_a_read_that_ends_after_a_switch_is_dropped(self):
+        self.record(run_log(None))
+        self.prod_record(run_log(None, kind="test", ref="on-prod", pr=None), OLDER)
+        self.periods(read=OFTEN)
+
+        async with self.watch():
+            await self.known()
+            first = self.app.benches[None]
+            held = Held(first.look())
+            self.monkeypatch.setattr(first, "look", held)
+            await self.eventually(held.started.is_set, "a read of the first board began")
+            self.app.show_board(chosen("prod"))
+            await self.eventually(lambda: self.app.seen.board == "prod", "prod is read")
+            held.released.set()
+            await self.eventually(lambda: held.returned, "the first board's read ended")
+            await self.pilot.pause(0.1)
+
+            assert self.app.seen.board == "prod", "the late read is not shown"
+            assert [run.record for run in self.app.seen.runs] == [OLDER], "prod's runs"
+
+    async def test_a_write_submitted_before_a_switch_stays_on_its_board(self):
+        async with self.watch():
+            await self.known()
+            first = self.app.benches[None]
+            held = Held((5, "5" * 40, 1))
+            self.monkeypatch.setattr(first.queue, "add", held)
+            await self.command(":run HEAD")
+            await self.eventually(held.started.is_set, "the write began")
+            self.app.show_board(chosen("prod"))
+            held.released.set()
+            await self.eventually(partial(self.says, "queued 5"), "what was done")
+
+            assert "on prod" not in self.message, "it was the first board's"
+            assert Queue(*locate("prod"), merge=False).entries() == [], "nothing on prod"
+
+    async def test_a_preview_that_ends_after_a_switch_is_dropped(self):
+        async with self.watch():
+            await self.known()
+            first = self.app.benches[None]
+            held = Held({"sha": "5" * 40, "subject": "Fix it", "clean": True})
+            self.monkeypatch.setattr(first.queue, "preview", held)
+            await self.press(*":run HEAD")
+            await self.eventually(held.started.is_set, "the preview began")
+            self.app.show_board(chosen("prod"))
+            held.released.set()
+            await self.eventually(lambda: held.returned, "the preview ended")
+            await self.pilot.pause(0.1)
+
+            assert self.app.previewed is None, "the first board's preview is not shown"
+            assert self.typed is None, "choosing a board closed the command line"
+
+    async def test_remove_just_after_a_switch_never_names_the_old_boards_row(self):
+        first_id, prod_id = self.enqueue(), self.enqueue("prod")
+        async with self.watch():
+            await self.known()
+            await self.press("2")
+            await self.eventually(lambda: f"hand {first_id}" in self.keys_of("#queue-rows"), "1")
+            held = Held([])
+            self.monkeypatch.setattr(self.app.benches["prod"].queue, "entries", held)
+            self.app.show_board(chosen("prod"))
+            await self.press("2")
+            await self.command(":remove")
+            held.released.set()
+            await self.pilot.pause(0.1)
+
+            assert "only hand-queued runs" in self.message, "no row is selected yet"
+            prod = Queue(*locate("prod"), merge=False).entries()
+            assert [entry["id"] for entry in prod] == [prod_id], "prod's run stays"
+
+    async def test_choosing_a_board_closes_the_command_line_and_queues_nothing(self):
+        async with self.watch():
+            await self.known()
+            await self.press(*":run HEAD")
+            typed = self.typed
+            self.app.show_board(chosen("prod"))
+            await self.pilot.pause(0.1)
+
+            assert typed == ":run HEAD", "it was typed"
+            assert self.typed is None, "the line is closed"
+            assert not (self.records / "queue.db").exists(), "nothing queued on the first board"
+            assert not (self.prod / "queue.db").exists(), "nor on prod"
+
+
+class TestBoardFailures(BoardsCase):
+    async def test_a_board_that_cannot_be_read_says_why_in_its_row_alone(self):
+        lab = self.clone.root / "boards" / "lab" / "checkout"
+        lab.mkdir(parents=True)
+        look = BenchIO.look
+
+        def failing(bench):
+            if bench.board == "lab":
+                raise OSError("cannot read lab")
+            return look(bench)
+
+        self.monkeypatch.setattr(BenchIO, "look", failing)
+        async with self.watch():
+            await self.press("4")
+            await self.eventually(lambda: len(self.table("#boards-rows")) == 3, "three boards")
+
+            rows = dict(self.table("#boards-rows"))
+            assert rows["lab"][2] == "cannot read lab", "why, in its row"
+            assert rows["prod"][1:] == ["off", "idle"], "the others are read"
+
+    async def test_a_board_removed_from_disk_leaves_the_list_and_its_commands_say_so(self):
+        async with self.watch():
+            await self.board("prod")
+            await self.eventually(lambda: self.app.seen.board == "prod", "prod is shown")
+            (self.clone.root / "boards" / "prod" / "checkout").rename(self.clone.root / "gone")
+            await self.press("4")
+            await self.eventually(lambda: self.keys_of("#boards-rows") == ["/"], "it left")
+            await self.command(":disable")
+            await self.eventually(partial(self.says, "no board 'prod'"), "the core's error")
+
+            assert self.shown("#brand") == "bench prod", "the view stays on it"
