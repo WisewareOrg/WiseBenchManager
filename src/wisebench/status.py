@@ -4,7 +4,9 @@ Writes go through `Queue` and `bench_state` only; nothing here takes a lock or r
 """
 
 import asyncio
+import contextlib
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
@@ -56,6 +58,44 @@ VIM = {
     "ctrl+d": "pagedown",
     "ctrl+u": "pageup",
 }
+
+
+async def in_daemon_thread(call, *args):
+    """Run `call` on a daemon thread, so quitting never waits for it.
+
+    asyncio's own executor threads are joined when the process exits, so `to_thread` would hold
+    the exit until a slow read finished.
+
+    Args:
+        call (Callable): What to run.
+        *args: Its arguments.
+
+    Returns:
+        What `call` returned.
+
+    Raises:
+        Exception: Whatever `call` raised.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def settle(result, exc):
+        if not future.cancelled():
+            if exc is None:
+                future.set_result(result)
+            else:
+                future.set_exception(exc)
+
+    def run():
+        try:
+            result, exc = call(*args), None
+        except Exception as caught:
+            result, exc = None, caught
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(settle, result, exc)
+
+    threading.Thread(target=run, daemon=True).start()
+    return await future
 
 
 class Seen(NamedTuple):
@@ -446,7 +486,7 @@ class Watch(App):
     async def read_disk(self):
         """Read the records and the bench every second, off the screen's thread."""
         while True:
-            self.seen = await asyncio.to_thread(self.look)
+            self.seen = await in_daemon_thread(self.look)
             await asyncio.sleep(1)
 
     def look(self):
@@ -468,7 +508,7 @@ class Watch(App):
         """Read the queue every 30 s while its tab shows."""
         while self.shown == "queue":
             try:
-                self.entries = await asyncio.to_thread(self.queue.entries)
+                self.entries = await in_daemon_thread(self.queue.entries)
             except Exception as exc:
                 self.say(exc)
             await asyncio.sleep(30)
@@ -599,7 +639,7 @@ class Watch(App):
         if ref:
             source, name = view.split_run(ref)
             try:
-                outcome = await asyncio.to_thread(self.queue.preview, name, source)
+                outcome = await in_daemon_thread(self.queue.preview, name, source)
             except Exception as exc:
                 outcome = exc
             box.update(view.preview(name, outcome, self.query_one("#queue-rows").rows_shown))
