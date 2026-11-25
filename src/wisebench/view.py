@@ -26,7 +26,7 @@ _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
 _CONTROLS = {
     **{code: "^" + chr(code ^ 64) for code in (*range(32), 127)},
-    **{code: f"<{code:x}>" for code in range(0x80, 0xA0)},
+    **{code: f"<{code:x}>" for code in (*range(0x80, 0xA0), 0x2028, 0x2029)},
 }
 _RESULTS = {
     "passed": ("passed", "passed"),
@@ -40,7 +40,7 @@ HISTORY_WIDTHS = (18, 42, 9, 13, 6, 14)
 
 
 def clean(text):
-    """`text` safe to put on a terminal: tabs expanded, C0 and C1 controls shown as text.
+    """`text` safe to put on a terminal: tabs expanded, controls and line separators shown as text.
 
     Args:
         text (str): Text read from a log, a record name, git or GitHub.
