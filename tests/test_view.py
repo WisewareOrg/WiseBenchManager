@@ -21,7 +21,7 @@ from status_helpers import (
     started_log,
 )
 
-from wisebench import bench_state, view
+from wisebench import bench_state, palette, view
 
 LIVE = bench_state.Bench(live=True, disabled=False, timer="on")
 IDLE = bench_state.Bench(live=False, disabled=False, timer="on")
@@ -51,7 +51,7 @@ def meaning(text, needle):
     """The meaning whose colour `needle` has in a `Text`; None for the text colour."""
     style = text.get_style_at_offset(Console(), text.plain.index(needle))
     found = style.color and style.color.name
-    return next((name for name, colour in view.COLOURS.items() if colour == found), found)
+    return next((name for name, colour in palette.COLOURS.items() if colour == found), found)
 
 
 # -- outside text ----------------------------------------------------------------------------------
@@ -67,14 +67,14 @@ def meaning(text, needle):
     ids=["C0", "a tab", "legal text"],
 )
 def test_a_control_is_shown_as_text_and_the_rest_is_unchanged(raw, shown):
-    assert view.clean(raw) == shown, "controls become text, legal text is kept"
-    assert view.styled(raw).plain == shown, "every text drawn is cleaned"
+    assert palette.clean(raw) == shown, "controls become text, legal text is kept"
+    assert palette.styled(raw).plain == shown, "every text drawn is cleaned"
 
 
 def test_no_character_that_a_terminal_acts_on_survives():
     every = "".join(map(chr, range(0x3000)))
 
-    left = {c for c in view.clean(every) if unicodedata.category(c) in ("Cc", "Zl", "Zp")}
+    left = {c for c in palette.clean(every) if unicodedata.category(c) in ("Cc", "Zl", "Zp")}
 
     assert left == set(), "controls and line separators are all shown as text"
 

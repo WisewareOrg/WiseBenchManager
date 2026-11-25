@@ -45,7 +45,7 @@ from textual import events
 from textual.widget import Widget
 from textual.widgets import ContentSwitcher, DataTable, HelpPanel, Input, Log, Tab, Tree
 
-from wisebench import status, view
+from wisebench import palette, status, view
 from wisebench.queue import Queue
 from wisebench.records import Records
 
@@ -1086,7 +1086,7 @@ class TestCost(WatchCase):
             before = self.log.line_count
             self.record(run_log("build", build=output(*lines, "new")))
             with (
-                mock.patch.object(view, "styled", side_effect=view.styled) as cells,
+                mock.patch.object(palette, "styled", side_effect=palette.styled) as cells,
                 mock.patch.object(view, "shown_line", side_effect=view.shown_line) as shown,
             ):
                 await self.read()

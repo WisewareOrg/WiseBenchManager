@@ -9,50 +9,18 @@ from datetime import datetime
 from rich.style import Style
 from rich.text import Text
 
+from wisebench import palette
 from wisebench.bench_state import DASH
 from wisebench.runlog import KAS_STAMP, Section
 
-COLOURS = {
-    "passed": "#98c379",
-    "failed": "#e06c75",
-    "running": "#e5c07b",
-    "hand": "#61afef",
-    "dim": "#8b8b8b",
-    "log": "#a8a8a8",
-    "bright": "#ffffff",
-    "rule": "#3a3a3a",
-    "ground": "#0c0c0c",
-    "ink": "#cccccc",
-    "selection": "#1f2a36",
-    "running-ground": "#2a2614",
-    "failed-ground": "#3a1d20",
-}
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
 _RUN_PROMPT = re.compile(r":run\s+(.*)")
-_CONTROLS = {
-    **{code: "^" + chr(code ^ 64) for code in (*range(32), 127)},
-    **{code: f"<{code:x}>" for code in (*range(0x80, 0xA0), 0x2028, 0x2029)},
-}
 _RESULTS = {
     "passed": ("passed", "passed"),
     "failed": ("failed", "failed"),
     "error": ("bench error", "failed"),
     None: ("no result", "dim"),
 }
-
-
-def clean(text):
-    """`text` safe to put on a terminal: tabs expanded, controls and line separators shown as text.
-
-    See ADR 0006 rev 1.
-
-    Args:
-        text (str): Text read from a log, a record name, git or GitHub.
-
-    Returns:
-        str: The text with no character a terminal acts on.
-    """
-    return text.expandtabs(8).translate(_CONTROLS)
 
 
 def shown_line(line):
@@ -241,32 +209,6 @@ def typed_run(text):
     return with_directory.groups() if with_directory else (None, ref)
 
 
-def styled(text, meaning=None, bold=False):
-    """Text safe to draw, in the colour of its meaning.
-
-    Args:
-        text (str): The text, from anywhere.
-        meaning (str | None): A key of `COLOURS`, or None for the text colour.
-        bold (bool): Draw it bold.
-
-    Returns:
-        Text: The cleaned text.
-    """
-    return Text(clean(text), Style(color=COLOURS.get(meaning), bold=bold))
-
-
-def line(*parts):
-    """One line of several colours.
-
-    Args:
-        *parts (tuple): Arguments of `styled`.
-
-    Returns:
-        Text: The parts joined.
-    """
-    return Text.assemble(*(styled(*part) for part in parts), no_wrap=True, overflow="ellipsis")
-
-
 def section_ends(stage):
     """When each section ended: the next started section's start, else the stage's end.
 
@@ -336,7 +278,7 @@ def run_title(run, newest, bench):
         parts += [("  ",), (*result(run, False), True), (ended, "dim")]
     elif not bench.live and not bench.disabled:
         parts.insert(0, ("last run  ", "dim"))
-    return line(*parts)
+    return palette.line(*parts)
 
 
 def stage_cells(stage, running, now):
@@ -356,7 +298,7 @@ def stage_cells(stage, running, now):
         open_ = running and stage.state == "open"
         times = clock(stage.started), took(stage.started, stage.ended, open_, now)
     cells = (f"{glyph} {display_name(stage.name)}", *times)
-    return tuple(styled(cell, meaning, meaning in ("running", "failed")) for cell in cells)
+    return tuple(palette.styled(cell, meaning, meaning in ("running", "failed")) for cell in cells)
 
 
 def section_label(section, end, running, now):
@@ -379,7 +321,7 @@ def section_label(section, end, running, now):
     if section.started:
         length = took(section.started, end, running and section.outcome == "open", now)
         parts.append((f"  {length}", "dim"))
-    return line(*parts)
+    return palette.line(*parts)
 
 
 def head(run, stage, live, now):
@@ -403,7 +345,7 @@ def head(run, stage, live, now):
     rows = []
     if stage.progress:
         rows = build_progress(stage, name, meaning, live, now)
-    return Text("\n").join([*rows, line(("this stage's output", "dim"))])
+    return Text("\n").join([*rows, palette.line(("this stage's output", "dim"))])
 
 
 def summary(run, live, now):
@@ -419,14 +361,14 @@ def summary(run, live, now):
     """
     word, meaning = result(run, live)
     ended = f"  ended {clock(run.ended)}, took {run_took(run, live, now)}" if run.ended else ""
-    rows = [line((word, meaning, True), (ended, "dim"))]
+    rows = [palette.line((word, meaning, True), (ended, "dim"))]
     for suite in run.stages:
         _, queued, passed, failed = counts(suite)
         if queued:
             tally = f"{passed} passed"
             if failed:
                 tally += f"  {failed} failed"
-            rows.append(line((f"{display_name(suite.name):<14}", "dim"), (tally,)))
+            rows.append(palette.line((f"{display_name(suite.name):<14}", "dim"), (tally,)))
     return Text("\n").join(rows)
 
 
@@ -443,7 +385,7 @@ def suite_tally(stage, name):
     started, queued, passed, failed = counts(stage)
     tally = [(f"  {started} of {queued}  ",), (f"{passed} passed", "passed")]
     tally.append((f"  {failed} failed", "failed" if failed else "dim"))
-    return line(name, *tally)
+    return palette.line(name, *tally)
 
 
 def build_progress(stage, name, meaning, live, now):
@@ -464,18 +406,18 @@ def build_progress(stage, name, meaning, live, now):
     numbers = f"  {progress.phase} {progress.done} of {progress.total}  {share:.0%}"
     filled = round(33 * share)
     rows = [
-        line(name, (numbers,)),
-        line(("█" * filled, meaning), ("█" * (33 - filled), "rule")),
+        palette.line(name, (numbers,)),
+        palette.line(("█" * filled, meaning), ("█" * (33 - filled), "rule")),
         Text(),
     ]
     if live and stage.state == "open" and progress.tasks:
         first_eight = sorted(progress.tasks, key=lambda t: (not t.started, t.started or now))[:8]
         recipe = max(len(t.recipe) for t in first_eight) + 2
         task = max(len(t.task) for t in first_eight) + 2
-        rows.append(line(("running now", "dim")))
+        rows.append(palette.line(("running now", "dim")))
         for each in first_eight:
             elapsed = took(each.started, None, True, now) if each.started else DASH
-            rows.append(line((f"{each.recipe:<{recipe}}{each.task:<{task}}{elapsed}",)))
+            rows.append(palette.line((f"{each.recipe:<{recipe}}{each.task:<{task}}{elapsed}",)))
         rows.append(Text())
     return rows
 
@@ -500,9 +442,9 @@ def failure(stopped, run):
     where = f"in setup {setups[-1]}; " if setups else ""
     return Text("\n").join(
         [
-            line(("bench failure, not the candidate's", "failed", True)),
-            line((reason.strip(),)),
-            line((f"{where}from the DISABLED file, {since(stamp)}", "dim")),
+            palette.line(("bench failure, not the candidate's", "failed", True)),
+            palette.line((reason.strip(),)),
+            palette.line((f"{where}from the DISABLED file, {since(stamp)}", "dim")),
         ]
     )
 
@@ -536,30 +478,19 @@ def state_line(bench, stopped, run):
     word, meaning = ("RUNNING", "running") if bench.live else ("IDLE", "rule")
     if bench.disabled and not bench.live:
         word, meaning = "DISABLED", "failed"
-    badge = Text(f" {word} ", Style(color=COLOURS["ground"], bgcolor=COLOURS[meaning], bold=True))
+    badge = Text(
+        f" {word} ",
+        Style(color=palette.COLOURS["ground"], bgcolor=palette.COLOURS[meaning], bold=True),
+    )
     timer = {"on": "passed", "off": "failed"}.get(bench.timer, "dim")
-    text = Text.assemble(badge, line(("  timer ", "dim"), (bench.timer, timer)))
+    text = Text.assemble(badge, palette.line(("  timer ", "dim"), (bench.timer, timer)))
     if bench.disabled and run:
         unposted = any(s.name == "posted" and s.state != "passed" for s in run.stages)
         since_when = since(stopped.partition("\n")[0])
-        text += line(("  since ", "dim"), (since_when + (", nothing posted" if unposted else ""),))
+        text += palette.line(
+            ("  since ", "dim"), (since_when + (", nothing posted" if unposted else ""),)
+        )
     return text
-
-
-def table(rows):
-    """Table rows with every cell padded to its column, so a row's ground has no gaps.
-
-    Args:
-        rows (list[tuple]): Per row, its key and its cells.
-
-    Returns:
-        list[tuple]: The rows.
-    """
-    for column in zip(*(cells for _, cells in rows), strict=True):
-        width = max(cell.cell_len for cell in column) + 2
-        for cell in column:
-            cell.pad_right(width - cell.cell_len)
-    return rows
 
 
 def history_rows(runs, bench, now):
@@ -581,15 +512,15 @@ def history_rows(runs, bench, now):
         hand = ("by hand", "hand") if run.kind == "test" else ("",)
         note = (display_name(failing), "dim") if failing else hand
         cells = (
-            styled(run.record),
-            styled(what(run)[:40]),
-            styled(sha7(run)),
-            styled(*result(run, live)),
-            styled(f"{run_took(run, live, now):>4}"),
-            styled(*note),
+            palette.styled(run.record),
+            palette.styled(what(run)[:40]),
+            palette.styled(sha7(run)),
+            palette.styled(*result(run, live)),
+            palette.styled(f"{run_took(run, live, now):>4}"),
+            palette.styled(*note),
         )
         rows.append((run.record, cells))
-    return table(rows)
+    return palette.table(rows)
 
 
 def queue_rows(runs, bench, entries):
@@ -617,9 +548,9 @@ def queue_rows(runs, bench, entries):
         source = "by hand" if run.kind == "test" else "merge queue"
         cells = [("▶", "running"), (source,), (label,), ((running_sha or "")[:7],), ("",)]
         cells.append((f"running, {opened}", "running"))
-        rows.append(("running", tuple(styled(*cell) for cell in cells)))
+        rows.append(("running", tuple(palette.styled(*cell) for cell in cells)))
         for cell in rows[0][1]:
-            cell.style += Style(bgcolor=COLOURS["running-ground"])
+            cell.style += Style(bgcolor=palette.COLOURS["running-ground"])
     for entry in entries:
         place, sha = (str(len(rows) + 1),), ((entry["sha"] or "")[:7],)
         if entry["kind"] == "test":
@@ -633,8 +564,8 @@ def queue_rows(runs, bench, entries):
             key, cells = f"merge {entry['pr']}", (("merge queue",), (title,), sha, ("",))
         else:
             continue
-        rows.append((key, tuple(styled(*cell) for cell in (place, *cells, ("",)))))
-    return table(rows)
+        rows.append((key, tuple(palette.styled(*cell) for cell in (place, *cells, ("",)))))
+    return palette.table(rows)
 
 
 def preview(ref, outcome, rows):
@@ -650,12 +581,16 @@ def preview(ref, outcome, rows):
         running run and the hand-queued runs; or that the ref does not resolve.
     """
     if isinstance(outcome, Exception):
-        return line((f"{ref} does not resolve", "failed"))
+        return palette.line((f"{ref} does not resolve", "failed"))
     state = "clean tree" if outcome["clean"] else "uncommitted changes in the checkout"
     ahead = [cells for key, cells in rows if key == "running" or key.startswith("hand")]
     place = f"joins as {len(ahead) + 1}"
     place += f", after {ahead[-1][2].plain.strip()}" if ahead else ""
     resolved = f'resolves to {outcome["sha"][:7]} "{outcome["subject"]}", {state}'
     return Text("\n").join(
-        [line(("will queue", "hand", True)), line((resolved, "dim")), line((place, "dim"))]
+        [
+            palette.line(("will queue", "hand", True)),
+            palette.line((resolved, "dim")),
+            palette.line((place, "dim")),
+        ]
     )

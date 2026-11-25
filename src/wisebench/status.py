@@ -21,7 +21,6 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.reactive import var
-from textual.theme import Theme
 from textual.widgets import (
     ContentSwitcher,
     DataTable,
@@ -34,7 +33,7 @@ from textual.widgets import (
     Tree,
 )
 
-from wisebench import view
+from wisebench import palette, view
 from wisebench.bench_state import (
     DASH,
     DISABLED,
@@ -50,22 +49,6 @@ from wisebench.records import Records
 ENABLE = (
     "Enable the bench? [y/N] Clears DISABLED and starts the timer;"
     " the next run checks the board first."
-)
-
-KEYS = Text.assemble(
-    (" ? ", Style(color=view.COLOURS["ground"], bgcolor=view.COLOURS["ink"])), " keys"
-)
-THEME = Theme(
-    name="bench",
-    primary=view.COLOURS["hand"],
-    success=view.COLOURS["passed"],
-    warning=view.COLOURS["running"],
-    error=view.COLOURS["failed"],
-    foreground=view.COLOURS["ink"],
-    background=view.COLOURS["ground"],
-    surface=view.COLOURS["ground"],
-    panel=view.COLOURS["ground"],
-    variables=view.COLOURS,
 )
 
 VIM = {
@@ -209,7 +192,7 @@ class Tests(Tree):
         """
         ground = Style(bgcolor=style.bgcolor)
         if isinstance(node.data, str):
-            label = view.styled(node.data, "log")
+            label = palette.styled(node.data, "log")
             label.stylize(ground)
             return label
         return super().render_label(node, base_style, ground)
@@ -224,7 +207,7 @@ class Tests(Tree):
             int: The width in cells.
         """
         if isinstance(node.data, str):
-            return cell_len(view.clean(node.data))
+            return cell_len(palette.clean(node.data))
         return super().get_label_width(node)
 
 
@@ -309,7 +292,7 @@ class RunView(Vertical):
         """
         stages = self.query_one("#stages")
         rows = [(s.name, view.stage_cells(s, live, now)) for s in run.stages]
-        stages.rows_shown = view.table(rows)
+        stages.rows_shown = palette.table(rows)
         with self.prevent(DataTable.RowHighlighted):
             stages.move_cursor(row=run.stages.index(stage) if stage else 0, animate=False)
         tint = view.tone(stage.state, live)[1] if stage else "none"
@@ -352,7 +335,7 @@ class RunView(Vertical):
             self.show_tests(tests, stage, live, now)
         elif stage:
             shown = [view.shown_line(text) for text in stage.lines[log.line_count :]]
-            log.write_lines([view.clean(text) or " " for text in shown])
+            log.write_lines([palette.clean(text) or " " for text in shown])
 
     def show_tests(self, tests, stage, live, now):
         """Show a suite's tests, the running and failed ones open, and land the cursor.
@@ -518,8 +501,8 @@ class Watch(App):
             directory (pathlib.Path): The records directory.
         """
         super().__init__()
-        self.register_theme(THEME)
-        self.theme = THEME.name
+        self.register_theme(palette.THEME)
+        self.theme = palette.THEME.name
         self.directory, self.records = directory, Records(directory)
         self.queue, self.unit = Queue(checkout, directory), read_run_unit()
         self.target, self.previewing = None, None
@@ -573,7 +556,7 @@ class Watch(App):
                 yield Static(id="count")
         with Horizontal(id="bottom"):
             yield Static(id="state")
-            yield Static(KEYS, id="keys")
+            yield Static(palette.KEYS, id="keys")
         yield Static(id="message")
         with Horizontal(id="command-row"):
             yield Input(id="command", compact=True, select_on_focus=False)
@@ -669,7 +652,7 @@ class Watch(App):
 
     def watch_record(self):
         """Name a past run on its tab."""
-        label = view.styled(f"1 Run  {self.record}" if self.record else "1 Run")
+        label = palette.styled(f"1 Run  {self.record}" if self.record else "1 Run")
         self.query_one("#tab-run", Tab).label = label
 
     def say(self, text):
@@ -679,7 +662,7 @@ class Watch(App):
             text (object): The message; blank clears it.
         """
         message = self.query_one("#message")
-        message.update(view.styled(str(text)))
+        message.update(palette.styled(str(text)))
         message.display = bool(text)
 
     def on_tabs_tab_activated(self, event):
