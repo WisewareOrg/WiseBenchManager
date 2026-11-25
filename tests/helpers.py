@@ -102,11 +102,6 @@ def run_unit_settings(unit="bench-run"):
     return f'\n[run]\nunit = "{unit}"\n'
 
 
-def board_settings(name, lg_env):
-    """The settings `[boards]` table of an added board."""
-    return f'\n[boards.{name}]\nlg_env = "{lg_env}"\n'
-
-
 def write_lg_env(repo):
     """Write a minimal, valid labgrid env file; no target named `main`."""
     path = repo / "env.yaml"
@@ -314,7 +309,7 @@ class FakeBenchRun:
     instances = []
     outcome = None
 
-    def __init__(self, checkout, config, result_dir, board=None):
+    def __init__(self, checkout, config, result_dir, merge=True):
         self.checkout, self.config, self.result_dir = checkout, config, result_dir
         self.lg_envs = []
         FakeBenchRun.instances.append(self)

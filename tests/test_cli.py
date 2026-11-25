@@ -306,7 +306,7 @@ def watched(monkeypatch):
 def test_main_status_watch_reaches_the_watch_loop_without_lg_env(watched, bench_clone):
     """`bench status --watch` skips `LG_ENV`, watches the clone's records and returns its code."""
     assert cli.main(["status", "--watch"]) == 7
-    assert watched == [((bench_clone.checkout, bench_clone.records, None), {})]
+    assert watched == [((bench_clone.checkout, bench_clone.records), {})]
 
 
 def test_main_status_without_watch_exits_2_asking_for_it(watched, capsys):

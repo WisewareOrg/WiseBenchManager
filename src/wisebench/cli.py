@@ -13,9 +13,8 @@ import sys
 from pathlib import Path
 
 from wisebench import status
-from wisebench.bench_run import BenchRun
+from wisebench.bench_run import ON, BenchRun
 from wisebench.bench_test import BenchFailure
-from wisebench.board import find_board
 from wisebench.clone import locate
 from wisebench.config import Config, settings_path
 from wisebench.lock import Lock
@@ -62,15 +61,15 @@ def main(argv=None):
     """Parse arguments and run one `bench` command, on the first board unless it names another.
 
     `test` and `unqueue` change the queue only, needing neither `LG_ENV` nor the `Lock`; `run`
-    holds the `Lock` for the whole of its run; `on` and `off` change an added board's switch only.
+    holds the `Lock` for the whole of its run; `on` and `off` change an added board's `ON` only.
 
     Args:
         argv (list[str] | None): Arguments to parse, defaulting to `sys.argv[1:]`.
 
     Returns:
         int: 0 queued/removed/switched (or, for `run`, finished/no job/off/disabled/lock held), 2
-        a board with no table, a ref that is not a commit, an id not queued, an unreadable queue,
-        or the bench's own failure; for `status`, the watch loop's exit code.
+        a board that is not there, a ref that is not a commit, an id not queued, an unreadable
+        queue, or the bench's own failure; for `status`, the watch loop's exit code.
 
     Raises:
         SystemExit: argparse rejected the arguments, or printed `--help`.
@@ -94,30 +93,32 @@ def main(argv=None):
     run_parser = subparsers.add_parser("run")
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--watch", action="store_true", required=True)
-    for board_parser in (test_parser, unqueue_parser, run_parser, status_parser):
-        board_parser.add_argument("--board", dest="board_name", default=None)
+    for board_parser in (test_parser, unqueue_parser, run_parser):
+        board_parser.add_argument("--board")
     for word in ("on", "off"):
-        subparsers.add_parser(word).add_argument("board_name", metavar="name")
+        subparsers.add_parser(word).add_argument("board")
+    parser.set_defaults(board=None)
     args = parser.parse_args(own_args)
 
     try:
-        board = None if args.board_name is None else find_board(args.board_name)
+        checkout, directory = locate(args.board)
         if args.command in ("on", "off"):
-            board.switch(args.command == "on")
-            print(f"{board.name} is {args.command}")
+            if args.command == "on":
+                directory.mkdir(exist_ok=True)
+                (directory / ON).touch()
+            else:
+                (directory / ON).unlink(missing_ok=True)
+            print(f"{args.board} is {args.command}")
             return 0
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2
-
-    checkout, directory = locate(args.board_name)
     if args.command == "status":
-        return status.watch(checkout, directory, board)
-    queue = Queue(checkout, directory, merge=board is None)
+        return status.watch(checkout, directory)
 
     if args.command == "test":
         try:
-            entry_id, sha, place = queue.add(
+            entry_id, sha, place = Queue(checkout, directory, merge=args.board is None).add(
                 args.ref, args.set_name, args.skip_build, pytest_args, args.source
             )
         except subprocess.CalledProcessError:
@@ -131,7 +132,7 @@ def main(argv=None):
 
     if args.command == "unqueue":
         try:
-            removed = queue.remove(args.entry_id)
+            removed = Queue(checkout, directory, merge=args.board is None).remove(args.entry_id)
         except Exception as exc:
             print(f"BENCH ERROR: {exc}", file=sys.stderr)
             return 2
@@ -141,18 +142,15 @@ def main(argv=None):
         print(f"removed {args.entry_id}")
         return 0
 
-    if board is not None and not board.is_on():
-        print(f"bench run: {board.name} is off")
-        return 0
     try:
         _load_bench_env()
     except BenchFailure as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2
-    if board is not None:
+    if args.board is not None:
         for key in [key for key in os.environ if key.startswith("LG_")]:
             del os.environ[key]
-        os.environ["LG_ENV"] = board.lg_env
+        os.environ["LG_ENV"] = str(checkout.parent / "env.yaml")
     lg_env = os.environ.get("LG_ENV")
     if not lg_env:
         print("BENCH ERROR: LG_ENV is not set", file=sys.stderr)
@@ -160,7 +158,7 @@ def main(argv=None):
 
     try:
         config = Config.load(checkout / "bench.toml", settings_path())
-        bench_run = BenchRun(checkout, config, directory, board)
+        bench_run = BenchRun(checkout, config, directory, merge=args.board is None)
     except Exception as exc:
         print(f"BENCH ERROR: {exc}", file=sys.stderr)
         return 2

@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from helpers import board_settings, git, repo_with_one_commit
+from helpers import git, repo_with_one_commit
 
 import wisebench
 
@@ -28,7 +28,7 @@ def head():
     return subprocess.check_output(["git", "-C", tree, "rev-parse", "HEAD"], text=True).strip()
 
 def step(name):
-    board = pathlib.Path(os.environ["LG_ENV"]).stem
+    board = pathlib.Path(os.environ["LG_ENV"]).parent.name
     inside = pathlib.Path(os.environ["TOY"], f"inside-{board}-{name}.json")
     before = head()
     said = None
@@ -88,13 +88,10 @@ class Toy:
         (settings / "bench.env").write_text(
             f"LG_ENV={home / 'first.yaml'}\nLG_BENCH_ADDRESS=first.invalid\n"
         )
-        toml = '[run]\nunit = "no-such-unit"\n'
         for name in ("a", "b"):
-            toml += board_settings(name, self.lg_env(name))
-            Path(self.lg_env(name)).write_text("targets: {}\n")
             checkout = self.root / "boards" / name / "checkout"
             subprocess.run(["git", "clone", "-q", self.layer, checkout], check=True)
-        (settings / "bench.toml").write_text(toml)
+            Path(self.lg_env(name)).write_text("targets: {}\n")
         self.env = {
             "HOME": str(home),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -119,7 +116,7 @@ class Toy:
 
     def lg_env(self, name):
         """The labgrid file of board `name`."""
-        return str(self.home / f"{name}.yaml")
+        return str(self.root / "boards" / name / "env.yaml")
 
     def command(self, *args):
         """The argv of one `bench` command."""

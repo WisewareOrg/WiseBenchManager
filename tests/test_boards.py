@@ -3,7 +3,6 @@
 import os
 import sqlite3
 from contextlib import closing
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +10,6 @@ import pytest
 from helpers import (
     FakeBenchRun,
     add_settings,
-    board_settings,
     holding,
     repo_with_one_commit,
     run_unit_settings,
@@ -22,10 +20,8 @@ from helpers import (
 )
 from labgrid.config import Config as LabgridConfig
 from labgrid.exceptions import InvalidConfigError
-from status_helpers import shown
 
-from wisebench import bench_run, bench_test, cli, queue, status
-from wisebench.board import find_board
+from wisebench import bench_run, bench_test, cli, queue
 from wisebench.clone import locate
 from wisebench.queue import Queue
 
@@ -43,14 +39,14 @@ def boards(monkeypatch, bench_clone, bench_test_class):
         types.SimpleNamespace: `clone`, `bench_test` (the autospec), `merge` (the fake merge queue),
         `lg_env` (the labgrid path of each board, the first under None).
     """
-    lg_env = {name: str(bench_clone.root / f"{name}.yaml") for name in (None, "a", "b")}
+    lg_env = {name: str(bench_clone.root / "boards" / name / "env.yaml") for name in ("a", "b")}
+    lg_env[None] = str(bench_clone.root / "first.yaml")
     bench_clone.bench_env.write_text(f"LG_ENV={lg_env[None]}\n")
     merge = stub_merge_queue(monkeypatch, bench_clone.checkout)
     stub_fetch(monkeypatch)
     add_settings(run_unit_settings("first-unit"))
     for name in ("a", "b"):
-        add_settings(board_settings(name, lg_env[name]))
-        checkout = locate(name)[0]
+        checkout = bench_clone.root / "boards" / name / "checkout"
         checkout.mkdir(parents=True)
         repo_with_one_commit(checkout)
         write_bench_toml(checkout)
@@ -94,8 +90,8 @@ def tree():
 # -- what a board is ---------------------------------------------------------------------
 
 
-def test_an_added_board_has_its_own_checkout_and_records(bench_clone):
-    home = bench_clone.root / "boards" / "a"
+def test_an_added_board_has_its_own_checkout_and_records(boards):
+    home = boards.clone.root / "boards" / "a"
     assert locate("a") == (home / "checkout", home / "records")
 
 
@@ -103,20 +99,20 @@ COMMANDS = [
     ["test", "HEAD", "--board"],
     ["unqueue", "1", "--board"],
     ["run", "--board"],
-    ["status", "--watch", "--board"],
     ["on"],
     ["off"],
 ]
 
 
 @pytest.mark.parametrize("command", COMMANDS, ids=lambda command: command[0])
-def test_a_name_with_no_table_exits_2_before_anything_is_read_or_written(
-    boards, monkeypatch, capsys, command
-):
-    monkeypatch.setattr(status, "watch", lambda *args: pytest.fail("the watch started"))
+@pytest.mark.parametrize("name", ["zz", "..", "a/b", ""])
+def test_a_name_with_no_checkout_exits_2_before_anything_is_made(boards, capsys, command, name):
+    """`..` would name the first board's own directories."""
+    (boards.clone.root / "boards" / "zz").mkdir()
+    (boards.clone.root / "boards" / "zz" / "env.yaml").write_text("targets: {}\n")
     before = tree()
 
-    assert cli.main([*command, "zz"]) == 2
+    assert cli.main([*command, name]) == 2
 
     assert capsys.readouterr().err.startswith("BENCH ERROR: ")
     assert tree() == before
@@ -199,23 +195,38 @@ def test_an_added_board_never_reads_the_merge_queue_nor_takes_the_first_boards_r
     assert waiting() == [1]
 
 
-@pytest.mark.parametrize(
-    ("faulted", "other", "unit"), [("a", None, "first-unit@a"), (None, "a", "first-unit")]
-)
-def test_a_fault_disables_its_own_board_alone(boards, systemctl, faulted, other, unit):
+def test_an_added_boards_fault_turns_it_off_and_touches_nothing_else(boards, capsys, systemctl):
     cli.main(["on", "a"])
-    for name in (faulted, other):
+    for name in ("a", "a", None):
         enqueue(name)
     boards.bench_test.return_value.run.side_effect = bench_test.BenchFailure("precondition")
-    assert run(faulted) == 2
+    assert run("a") == 2
     boards.bench_test.return_value.run.side_effect = None
 
-    assert (locate(faulted)[1] / "DISABLED").exists()
-    assert not (locate(other)[1] / "DISABLED").exists()
-    assert systemctl.calls == [stop_argv(unit)]
-    assert (locate("a")[1] / "ON").exists()
-    assert run(other) == 0
-    assert waiting(other) == []
+    assert "BENCH ERROR: precondition" in capsys.readouterr().err
+    assert run("a") == 0
+    assert capsys.readouterr().out == "bench run: the board is off\n"
+    assert not list(boards.clone.root.rglob("DISABLED"))
+    assert systemctl.calls == []
+    assert waiting("a") == [2]
+    assert run() == 0
+    cli.main(["on", "a"])
+    assert run("a") == 0
+    assert (waiting("a"), waiting()) == ([], [])
+
+
+def test_the_first_boards_fault_leaves_an_added_board_on(boards, systemctl):
+    cli.main(["on", "a"])
+    for name in ("a", None):
+        enqueue(name)
+    boards.bench_test.return_value.run.side_effect = bench_test.BenchFailure("precondition")
+    assert run() == 2
+    boards.bench_test.return_value.run.side_effect = None
+
+    assert (locate()[1] / "DISABLED").exists()
+    assert systemctl.calls == [stop_argv("first-unit")]
+    assert run("a") == 0
+    assert waiting("a") == []
 
 
 # -- the switch --------------------------------------------------------------------------
@@ -236,22 +247,22 @@ def test_an_added_board_is_off_until_turned_on_and_off_stops_its_runs(boards, ca
     boards.bench_test.assert_called_once()
 
 
-def test_a_board_that_is_off_does_nothing_at_all(boards, monkeypatch, capsys):
-    """Off is seen before the environment, the lock, the queue and git."""
-    monkeypatch.setattr(cli, "BenchRun", lambda *args: pytest.fail("a run was made"))
-    monkeypatch.setattr(cli, "Lock", lambda *args: pytest.fail("the lock was taken"))
-    monkeypatch.setattr(cli, "_load_bench_env", lambda: pytest.fail("the environment was read"))
+def test_a_board_that_is_off_reads_no_queue_and_runs_nothing(boards, monkeypatch, capsys):
+    enqueue("a")
+    monkeypatch.setattr(bench_run, "Queue", lambda *args, **kwargs: pytest.fail("the queue"))
 
     assert run("a") == 0
 
-    assert capsys.readouterr().out == "bench run: a is off\n"
+    assert capsys.readouterr().out.splitlines()[-1] == "bench run: the board is off"
+    boards.bench_test.assert_not_called()
+    assert waiting("a") == [1]
 
 
 @pytest.mark.parametrize("command", ["on", "off"])
 def test_the_switch_changes_its_own_file_and_nothing_else(boards, systemctl, command):
     enqueue("a")
     enqueue()
-    (locate("a")[1] / "DISABLED").write_text("fault\n")
+    (locate()[1] / "DISABLED").write_text("fault\n")
     before = tree()
 
     cli.main([command, "a"])
@@ -263,32 +274,35 @@ def test_the_switch_changes_its_own_file_and_nothing_else(boards, systemctl, com
     assert systemctl.calls == []
 
 
-def test_turned_off_during_a_run_the_run_finishes_and_the_next_does_not_start(boards, capsys):
+@pytest.mark.parametrize("fault", [None, bench_test.BenchFailure("precondition")])
+def test_turned_off_during_a_run_the_run_ends_as_it_would_and_the_next_does_not_start(
+    boards, fault
+):
     for _ in range(2):
         enqueue("a")
     cli.main(["on", "a"])
-    boards.bench_test.return_value.run.side_effect = lambda *args: cli.main(["off", "a"])
 
-    assert run("a") == 0
-    assert not (locate("a")[1] / "DISABLED").exists()
+    def body(*args):
+        cli.main(["off", "a"])
+        if fault is not None:
+            raise fault
+
+    boards.bench_test.return_value.run.side_effect = body
+
+    assert run("a") == (0 if fault is None else 2)
     assert run("a") == 0
     assert waiting("a") == [2]
     boards.bench_test.assert_called_once()
 
 
 @pytest.mark.parametrize("on", [True, False])
-def test_runs_and_the_views_enable_and_disable_leave_the_switch_as_it_was(boards, on):
+def test_a_run_without_a_fault_leaves_every_boards_switch_as_it_was(boards, on):
     cli.main(["on" if on else "off", "a"])
-    switch = locate("a")[1] / "ON"
-    for name in (None, "a"):
+    for name in (None, "a", "b"):
         enqueue(name)
         run(name)
-        assert switch.exists() is on
-    shell = status.Shell(*locate("a"), run=lambda work: work(), board=find_board("a"))
-    for key in (*":disable", "enter", *":enable", "enter", "y"):
-        shell.tick(datetime.now(UTC))
-        shell.press(key)
-        assert switch.exists() is on
+        assert (locate("a")[1] / "ON").exists() is on
+        assert not (locate("b")[1] / "ON").exists()
 
 
 @pytest.mark.parametrize("on", [True, False])
@@ -309,46 +323,6 @@ def test_a_merge_entry_runs_and_posts_the_same_with_an_added_board_on_and_off(
     assert call.args[:2] == (boards.clone.checkout, "cafef00d")
     assert boards.bench_test.return_value.run.call_args.args[0] == boards.lg_env[None]
     assert (locate("a")[1] / "ON").exists() is on
-
-
-# -- the view ----------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("name", [None, "a"])
-def test_the_watch_shows_its_boards_name_switch_and_timer(boards, systemctl, name):
-    """The first board's view has neither name nor switch."""
-    cli.main(["on", "a"])
-    checkout, directory = locate(name)
-    directory.mkdir(exist_ok=True)
-    shell = status.Shell(checkout, directory, board=name and find_board(name))
-    shell.tick(datetime.now(UTC))
-
-    text = shown(shell.frame)
-    assert ("bench a " in text) is (" ON " in text) is (name == "a")
-    assert systemctl.calls[-1][-1] == ("first-unit@a.timer" if name else "first-unit.timer")
-    if name:
-        cli.main(["off", "a"])
-        shell.tick(datetime.now(UTC))
-        assert " OFF " in shown(shell.frame)
-
-
-def test_run_and_dd_in_the_watch_act_on_its_own_boards_queue(boards):
-    boards.merge.result = [BUILT]
-    enqueue()
-    enqueue("a")
-    shell = status.Shell(*locate("a"), run=lambda work: work(), board=find_board("a"))
-    for key in (*":run HEAD", "enter", *"dd"):
-        shell.tick(datetime.now(UTC))
-        shell.press(key)
-    assert (waiting("a"), waiting()) == ([2], [1])
-    assert {row.kind for row in shell.frame.queue_rows} == {"test"}
-
-
-def test_status_watch_hands_the_watch_its_board(boards, monkeypatch):
-    seen = []
-    monkeypatch.setattr(status, "watch", lambda *args: seen.append(args) or 0)
-    assert cli.main(["status", "--watch", "--board", "b"]) == 0
-    assert seen == [(*locate("b"), find_board("b"))]
 
 
 def test_one_boards_lock_does_not_stop_anothers_tick(boards, monkeypatch):

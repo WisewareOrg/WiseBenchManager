@@ -25,8 +25,8 @@ bench on <name>                # let `bench run --board <name>` start runs on th
 bench off <name>               # stop it from starting another
 ```
 
-`on` and `off` take the board's name; every other command acts on the first board, or on the one
-`--board <name>` names (see "More than one board").
+`on` and `off` take the board's name. `run`, `test` and `unqueue` act on the first board, or on the
+one `--board <name>` names (see "More than one board").
 
 `bench` acts on the clone of this repository it is installed from, from whatever directory it is
 started in: one queue, one history, one lock. `bench test` runs nothing. It resolves the ref to a
@@ -316,18 +316,17 @@ the runs queued by hand in it are lost.
 
 ### More than one board
 
-The first board is the one above. A further board (ADR 0007 rev 1) is a table in
-`~/.config/wisebench/bench.toml`, a clone of the layer and a timer; edit
-`contrib/bench-run@.service`'s `ExecStart` as above first. Rename both templates with the first
-board's units: a board's unit is the `[run] unit` with `@<name>`.
-
-```toml
-[boards.<name>]
-lg_env = "/path/to/that/board's/env.yaml"
-```
+The first board is the one above. A further board (ADR 0007 rev 1) is a directory `boards/<name>/` in
+this clone, holding a clone of the layer and the labgrid file that names the board:
 
 ```sh
 git clone <the layer repository> WiseBenchManager/boards/<name>/checkout
+cp <that board's labgrid file> WiseBenchManager/boards/<name>/env.yaml
+```
+
+Edit `contrib/bench-run@.service`'s `ExecStart` as above, then:
+
+```sh
 systemctl --user link <this clone>/contrib/bench-run@.service <this clone>/contrib/bench-run@.timer
 systemctl --user enable --now bench-run@<name>.timer
 bench on <name>
@@ -335,16 +334,19 @@ bench on <name>
 
 An added board is off until `bench on <name>`. While it is off its queued runs wait, and a run in
 progress when it is turned off finishes. It takes only runs queued with `bench test --board <name>`;
-the merge queue is the first board's. Its records, queue, lock and `DISABLED` are in
-`boards/<name>/records/`, and `bench status --watch --board <name>` shows them.
+the merge queue is the first board's. Its records, queue and lock are in `boards/<name>/records/`.
 
-`lg_env` becomes `LG_ENV`, the only `LG_` variable of that board's run, so the file states its own
-address. Two tables that lead to one board drive it under two locks, and nothing says so. The rest
-of `bench.env` reaches every board.
+A failure of the bench on an added board turns that board off and touches no other: read why in the
+`BENCH ERROR` line of its unit's journal, and in the run's `bench.log` when it came after a record was
+made, then `bench on <name>`.
 
-Runs on two boards overlap. One build at a time comes from the layer's own build entry point, which
-waits for the host's other builds; that wait is why the template's `TimeoutStartSec` is `infinity`.
-Turning a board on before every commit it will run has that lock lets two builds overlap.
+`env.yaml` becomes `LG_ENV`, the only `LG_` variable of that board's run, so the file states its own
+address. Two labgrid files that name one board drive it under two locks, and nothing says so. The
+rest of `bench.env` reaches every board.
+
+Runs on two boards overlap and the runner keeps no lock across them. A layer whose builds must not
+overlap keeps them apart itself; a run that waits for another's build is why the template's
+`TimeoutStartSec` is `infinity`.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

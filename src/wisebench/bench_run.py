@@ -9,6 +9,8 @@ from wisebench.check import Check
 from wisebench.config import settings_path
 from wisebench.queue import Queue
 
+ON = "ON"
+
 
 class BenchRun:
     """One `bench run` cycle: the next queue entry, through `BenchTest` in-process.
@@ -20,7 +22,7 @@ class BenchRun:
     posts nothing.
     """
 
-    def __init__(self, checkout, config, result_dir, board=None):
+    def __init__(self, checkout, config, result_dir, merge=True):
         """Bind one BenchRun to a checkout, its loaded configuration and its result directory.
 
         Args:
@@ -30,20 +32,20 @@ class BenchRun:
                 names the systemd unit this run stops on the bench's own failure.
             result_dir (pathlib.Path): The records directory: `DISABLED` sits in it and every run's
                 folder goes in it; the CLI's own value.
-            board (wisebench.board.Board | None): The added board this run is on: the unit it
-                stops is the board's, and it takes runs queued by hand only. None is the first
-                board.
+            merge (bool): Whether this is the first board's run. False, for an added board, runs
+                only while `ON` is in `result_dir`, takes runs queued by hand only, and removes
+                `ON` on its own failure in place of writing `DISABLED` and stopping a timer.
 
         Raises:
-            ValueError: `config.run_unit` is None (the settings file has no `[run] unit`).
+            ValueError: `merge` and `config.run_unit` is None (the settings file has no
+                `[run] unit`).
         """
-        if config.run_unit is None:
+        if merge and config.run_unit is None:
             raise ValueError(f"{settings_path()} is missing [run] unit, required for bench run")
-        self._board = board
-        self._unit = config.run_unit if board is None else board.unit(config.run_unit)
         self.checkout = checkout
         self.config = config
         self._result_dir = result_dir
+        self._merge = merge
 
     def run(self, lg_env):
         """Execute one cycle: take the next queue entry and run it.
@@ -57,16 +59,20 @@ class BenchRun:
 
         Raises:
             Exception: A failure that is this runner's own, not the candidate's -- the
-                `DISABLED` marker is written and this board's timer stopped first, then this is
-                re-raised as-is so the CLI exits 2.
+                `DISABLED` marker is written and `config.run_unit`'s timer stopped first (an added
+                board's `ON` is removed), then this is re-raised as-is so the CLI exits 2.
         """
+        on_path = self._result_dir / ON
+        if not self._merge and not on_path.exists():
+            print("bench run: the board is off")
+            return
         disabled_path = self._result_dir / DISABLED
-        if disabled_path.exists():
+        if self._merge and disabled_path.exists():
             print("bench run: disabled, see DISABLED")
             return
 
         try:
-            entry = Queue(self.checkout, self._result_dir, merge=self._board is None).take()
+            entry = Queue(self.checkout, self._result_dir, merge=self._merge).take()
             if entry is None:
                 print("bench run: no job")
                 return
@@ -106,10 +112,13 @@ class BenchRun:
             except CandidateFailure:
                 return
         except Exception as exc:
+            if not self._merge:
+                on_path.unlink(missing_ok=True)
+                raise
             disabled_path.parent.mkdir(parents=True, exist_ok=True)
             reason = str(exc).splitlines()[0] if str(exc) else ""
             disabled_path.write_text(f"{datetime.now(UTC).isoformat()}\n{reason}\n")
-            failure = stop_timer(self._unit)
+            failure = stop_timer(self.config.run_unit)
             if failure:
                 print(f"bench run: {failure}", file=sys.stderr)
             raise

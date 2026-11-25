@@ -37,13 +37,12 @@ _QUEUE_REFRESH = timedelta(seconds=30)
 _NO_TERMINAL = "BENCH ERROR: bench status --watch needs a terminal"
 
 
-def watch(checkout, directory, board=None):
+def watch(checkout, directory):
     """Run the urwid view of the records and the queue until the user quits.
 
     Args:
         checkout (pathlib.Path): The bench's layer checkout.
         directory (pathlib.Path): The records directory.
-        board (wisebench.board.Board | None): The added board watched; None is the first board.
 
     Returns:
         int: 0 on quit or Ctrl-C, 2 when stdin or stdout is not a terminal.
@@ -51,7 +50,7 @@ def watch(checkout, directory, board=None):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print(_NO_TERMINAL, file=sys.stderr)
         return 2
-    shell = Shell(checkout, directory, board=board)
+    shell = Shell(checkout, directory)
     shell.tick(datetime.now(UTC))
     terminal = urwid.display.raw.Screen()
     terminal.set_terminal_properties(colors=2**24)
@@ -236,7 +235,6 @@ class Shell:
         directory (pathlib.Path): The records directory.
         run (Callable): Runs a function of no arguments away from the draw path; tests pass a
             function that calls it at once, or holds it.
-        board (wisebench.board.Board | None): The added board watched; None is the first board.
 
     Attributes:
         frame (view.Frame | None): The frame last shown; None before the first tick.
@@ -244,7 +242,7 @@ class Shell:
         widget (urwid.Widget): The top widget, `screen.widget`.
     """
 
-    def __init__(self, checkout, directory, run=_background, board=None):
+    def __init__(self, checkout, directory, run=_background):
         """Start a session over the records in `directory`, showing nothing until `tick`."""
         directory = Path(directory)
         self.frame = None
@@ -254,10 +252,8 @@ class Shell:
         self._records = Records(directory)
         self._directory = directory
         self._shown_directory = os.path.relpath(directory)
-        self._board = board
-        run_unit = read_run_unit()
-        self._run_unit = run_unit if board is None else board.unit(run_unit)
-        self._queue = Queue(Path(checkout), directory, merge=board is None)
+        self._run_unit = read_run_unit()
+        self._queue = Queue(Path(checkout), directory)
         self._run = run
         self._results, self._reads = SimpleQueue(), _Reads()
 
@@ -269,8 +265,9 @@ class Shell:
         """
         _collect(self._results, self._reads, self._state)
         runs = self._records.runs()
-        newest = runs[0] if runs else None
-        bench = read_bench(self._directory, newest, self._run_unit, Path("/proc"), self._board)
+        bench = read_bench(
+            self._directory, runs[0] if runs else None, self._run_unit, Path("/proc")
+        )
         _request(self._queue, self._run, self._results, self._reads, self._state, now)
         reads = self._reads
         snap = view.Snapshot(runs, bench, now, self._shown_directory, reads.entries, reads.preview)

@@ -14,26 +14,6 @@ def settings_path():
     return Path.home() / ".config" / "wisebench" / "bench.toml"
 
 
-def read_settings(path):
-    """Read the bench's own settings file.
-
-    Args:
-        path (pathlib.Path): The file; see `settings_path()`.
-
-    Returns:
-        dict: The parsed file; empty when there is none.
-
-    Raises:
-        OSError: An existing file could not be read.
-        tomllib.TOMLDecodeError: The file is not valid TOML.
-    """
-    try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
-    except FileNotFoundError:
-        return {}
-
-
 @dataclass(frozen=True)
 class Config:
     """The bench's configuration, read once: the layer's hooks and suites, the bench's own settings.
@@ -85,7 +65,11 @@ class Config:
         """
         with open(path, "rb") as f:
             raw = tomllib.load(f)
-        bench = read_settings(settings)
+        try:
+            with open(settings, "rb") as f:
+                bench = tomllib.load(f)
+        except FileNotFoundError:
+            bench = {}
         github = bench.get("github", {})
         return cls(
             hooks=raw["hooks"],
