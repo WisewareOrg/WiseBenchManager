@@ -281,8 +281,8 @@ and shows a run from History or with `[` and `]` in the same layout.
 | `1` `2` `3` | Run on the newest run, Queue, History |
 | `j` `k` `h` `l` `g` `G` `^d` `^u` | press Down, Up, Left, Right, Home, End, PgDn, PgUp; `G` in a log also follows it as it grows |
 | `Tab` `Shift-Tab` | move focus between the tab line, the list and the log; on the tab line Left and Right change tab |
-| `Enter` | on a stage, go into its log; on a test, open or close it; in History, show that run |
-| `Space` | open or close a test |
+| `Enter` | on a stage, go into its log; on a test or a suite's own output, open or close it; in History, show that run |
+| `Space` | open or close a test or a suite's own output |
 | `Esc` | back to the list; with the command line open, close it |
 | `[` `]` | in Run, the next older or newer run |
 | `/` `n` | in Run, search the log shown, and go to the next match |
