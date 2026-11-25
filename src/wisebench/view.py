@@ -10,7 +10,7 @@ from rich.style import Style
 from rich.text import Text
 
 from wisebench.bench_state import DASH
-from wisebench.runlog import KAS_STAMP
+from wisebench.runlog import KAS_STAMP, Section
 
 COLOURS = {
     "passed": "#98c379",
@@ -34,13 +34,12 @@ _RESULTS = {
     "error": ("bench error", "failed"),
     None: ("no result", "dim"),
 }
-# Widths of the History table's columns: record, what, sha, result, took, note; each is its longest
-# cell and two spaces, so a run's cells do not depend on the other runs.
-HISTORY_WIDTHS = (18, 42, 9, 13, 6, 14)
 
 
 def clean(text):
     """`text` safe to put on a terminal: tabs expanded, controls and line separators shown as text.
+
+    See ADR 0006 rev 1.
 
     Args:
         text (str): Text read from a log, a record name, git or GitHub.
@@ -218,31 +217,23 @@ def counts(stage):
     )
 
 
-def typed_ref(text):
-    """The ref typed after `:run `, stripped.
+def typed_run(text):
+    """The directory and the ref typed after `:run `.
 
     Args:
         text (str): The command line's text.
 
     Returns:
-        str | None: The ref; None when the text is not `:run <ref>`.
+        tuple[str | None, str] | None: The directory (no spaces in it) after `-C` and the ref, with
+        None as the directory when the ref is not `-C <dir> <ref>`; None when the text is not
+        `:run <ref>`.
     """
     found = _RUN_PROMPT.fullmatch(text)
-    return (found.group(1).strip() or None) if found else None
-
-
-def split_run(text):
-    """Split what `:run ` was typed with into the directory after `-C` and the ref.
-
-    Args:
-        text (str): The text after `:run `, as `typed_ref` returns it.
-
-    Returns:
-        tuple[str | None, str]: The directory (no spaces in it) and the ref after `-C <dir> `; or
-        None and `text` as it is when it does not begin with `-C <dir> <ref>`.
-    """
-    found = re.fullmatch(r"-C\s+(\S+)\s+(\S.*)", text)
-    return (found.group(1), found.group(2)) if found else (None, text)
+    ref = found.group(1).strip() if found else ""
+    if not ref:
+        return None
+    with_directory = re.fullmatch(r"-C\s+(\S+)\s+(\S.*)", ref)
+    return with_directory.groups() if with_directory else (None, ref)
 
 
 def styled(text, meaning=None, bold=False):
@@ -285,6 +276,41 @@ def section_ends(stage):
         ends.append(following)
         following = section.started or following
     return ends[::-1]
+
+
+def outline(stage):
+    """A suite's sections as its tree shows them, with when each ended.
+
+    A suite's own output, when it has any, comes first, as a section that failed when the stage
+    errored.
+
+    Args:
+        stage (Stage): The suite.
+
+    Returns:
+        list[tuple[Section, datetime | None]]: Each section and its end.
+    """
+    rows = list(zip(stage.sections, section_ends(stage), strict=True))
+    if stage.lines:
+        outcome = "failed" if stage.state == "error" else "passed"
+        output = Section(
+            (stage.name, "output", "", 0), "output", "output", outcome, None, stage.lines, ()
+        )
+        rows.insert(0, (output, None))
+    return rows
+
+
+def landing(sections):
+    """Where a suite's cursor lands: its first failed section, else its open one, else its first.
+
+    Args:
+        sections (list[Section]): The suite's sections as `outline` gives them.
+
+    Returns:
+        int: The place.
+    """
+    rank = {"failed": 0, "open": 1}
+    return min(range(len(sections)), key=lambda i: rank.get(sections[i].outcome, 2))
 
 
 def run_title(run, newest, bench):
@@ -363,43 +389,90 @@ def head(run, stage, live, now):
     Returns:
         Text: The summary, or a suite's tally, or a build's progress, bar and running tasks.
     """
-    rows = []
     if stage is None:
-        word, meaning = result(run, live)
-        ended = f"  ended {clock(run.ended)}, took {run_took(run, live, now)}" if run.ended else ""
-        rows.append(line((word, meaning, True), (ended, "dim")))
-        for suite in run.stages:
-            _, queued, passed, failed = counts(suite)
-            if queued:
-                tally = f"{passed} passed" + f"  {failed} failed" * bool(failed)
-                rows.append(line((f"{display_name(suite.name):<14}", "dim"), (tally,)))
-        return Text("\n").join(rows)
+        return summary(run, live, now)
     _, meaning = tone(stage.state, live)
     name = (display_name(stage.name), meaning, True)
     if stage.sections:
-        started, queued, passed, failed = counts(stage)
-        tally = [(f"  {started} of {queued}  ",), (f"{passed} passed", "passed")]
-        tally.append((f"  {failed} failed", "failed" if failed else "dim"))
-        return line(name, *tally)
+        return suite_tally(stage, name)
+    rows = []
     if stage.progress:
-        done, total = stage.progress.done, stage.progress.total
-        share = done / total if total else 0
-        numbers = f"  {stage.progress.phase} {done} of {total}  {share:.0%}"
-        filled = round(33 * share)
-        rows.append(line(name, (numbers,)))
-        rows.append(line(("█" * filled, meaning), ("█" * (33 - filled), "rule")))
-        rows.append(Text())
-        if live and stage.state == "open" and stage.progress.tasks:
-            rows.append(line(("running now", "dim")))
-            tasks = sorted(stage.progress.tasks, key=lambda t: (not t.started, t.started or now))[
-                :8
-            ]
-            recipe, task = (max(len(getattr(t, f)) for t in tasks) + 2 for f in ("recipe", "task"))
-            for t in tasks:
-                elapsed = took(t.started, None, True, now) if t.started else DASH
-                rows.append(line((f"{t.recipe:<{recipe}}{t.task:<{task}}{elapsed}",)))
-            rows.append(Text())
+        rows = build_progress(stage, name, meaning, live, now)
     return Text("\n").join([*rows, line(("this stage's output", "dim"))])
+
+
+def summary(run, live, now):
+    """A run's result and what each suite passed.
+
+    Args:
+        run (Run): The run.
+        live (bool): The bench is running it.
+        now (datetime): The current time.
+
+    Returns:
+        Text: The result line, then a line per suite that has tests.
+    """
+    word, meaning = result(run, live)
+    ended = f"  ended {clock(run.ended)}, took {run_took(run, live, now)}" if run.ended else ""
+    rows = [line((word, meaning, True), (ended, "dim"))]
+    for suite in run.stages:
+        _, queued, passed, failed = counts(suite)
+        if queued:
+            tally = f"{passed} passed"
+            if failed:
+                tally += f"  {failed} failed"
+            rows.append(line((f"{display_name(suite.name):<14}", "dim"), (tally,)))
+    return Text("\n").join(rows)
+
+
+def suite_tally(stage, name):
+    """A suite's name and how many of its tests started, passed and failed.
+
+    Args:
+        stage (Stage): The suite.
+        name (tuple): Its name, meaning and bold, for `line`.
+
+    Returns:
+        Text: The tally.
+    """
+    started, queued, passed, failed = counts(stage)
+    tally = [(f"  {started} of {queued}  ",), (f"{passed} passed", "passed")]
+    tally.append((f"  {failed} failed", "failed" if failed else "dim"))
+    return line(name, *tally)
+
+
+def build_progress(stage, name, meaning, live, now):
+    """A build's progress line and bar, and the tasks running while it is live.
+
+    Args:
+        stage (Stage): The build, with `progress`.
+        name (tuple): Its name, meaning and bold, for `line`.
+        meaning (str): The stage's colour.
+        live (bool): The bench is running it.
+        now (datetime): The current time.
+
+    Returns:
+        list[Text]: The lines.
+    """
+    progress = stage.progress
+    share = progress.done / progress.total if progress.total else 0
+    numbers = f"  {progress.phase} {progress.done} of {progress.total}  {share:.0%}"
+    filled = round(33 * share)
+    rows = [
+        line(name, (numbers,)),
+        line(("█" * filled, meaning), ("█" * (33 - filled), "rule")),
+        Text(),
+    ]
+    if live and stage.state == "open" and progress.tasks:
+        first_eight = sorted(progress.tasks, key=lambda t: (not t.started, t.started or now))[:8]
+        recipe = max(len(t.recipe) for t in first_eight) + 2
+        task = max(len(t.task) for t in first_eight) + 2
+        rows.append(line(("running now", "dim")))
+        for each in first_eight:
+            elapsed = took(each.started, None, True, now) if each.started else DASH
+            rows.append(line((f"{each.recipe:<{recipe}}{each.task:<{task}}{elapsed}",)))
+        rows.append(Text())
+    return rows
 
 
 def failure(stopped, run):
@@ -463,18 +536,9 @@ def state_line(bench, stopped, run):
     text = Text.assemble(badge, line(("  timer ", "dim"), (bench.timer, timer)))
     if bench.disabled and run:
         unposted = any(s.name == "posted" and s.state != "passed" for s in run.stages)
-        at = since(stopped.partition("\n")[0]) + ", nothing posted" * unposted
-        text += line(("  since ", "dim"), (at,))
+        since_when = since(stopped.partition("\n")[0])
+        text += line(("  since ", "dim"), (since_when + (", nothing posted" if unposted else ""),))
     return text
-
-
-def keys_hint():
-    """The status bar's right end.
-
-    Returns:
-        Text: `? keys`.
-    """
-    return Text.assemble((" ? ", Style(color="#0c0c0c", bgcolor="#cccccc")), " keys")
 
 
 def table(rows):
@@ -493,48 +557,34 @@ def table(rows):
     return rows
 
 
-def history_rows(runs, bench, now, made):
+def history_rows(runs, bench, now):
     """The History table's rows.
-
-    A run's cells are made again only when its `Run` is a different object, or it is or was the live
-    run; otherwise the cells made before are reused.
 
     Args:
         runs (list[Run]): Every run, newest first.
         bench (Bench): The bench's state.
         now (datetime | None): The current time while a run is live.
-        made (dict): Per record, the run, whether it was live, and the cells made for it; updated
-            here, and holding only the records in `runs` afterwards.
 
     Returns:
         list[tuple]: Per run, its record and its cells: record, what, sha, result, took, and the
-        stage that failed or `by hand`; each padded to `HISTORY_WIDTHS`.
+        stage that failed or `by hand`.
     """
-    rows, kept = [], {}
+    rows = []
     for i, run in enumerate(runs):
         live = bench.live and i == 0
-        before = made.get(run.record)
-        if before and before[0] is run and not before[1] and not live:
-            cells = before[2]
-        else:
-            failing = next((s.name for s in run.stages if s.state in ("failed", "error")), None)
-            hand = ("by hand", "hand") if run.kind == "test" else ("",)
-            note = (display_name(failing), "dim") if failing else hand
-            cells = (
-                styled(run.record),
-                styled(what(run)[:40]),
-                styled(sha7(run)),
-                styled(*result(run, live)),
-                styled(f"{run_took(run, live, now):>4}"),
-                styled(*note),
-            )
-            for cell, width in zip(cells, HISTORY_WIDTHS, strict=True):
-                cell.pad_right(width - cell.cell_len)
-        kept[run.record] = (run, live, cells)
+        failing = next((s.name for s in run.stages if s.state in ("failed", "error")), None)
+        hand = ("by hand", "hand") if run.kind == "test" else ("",)
+        note = (display_name(failing), "dim") if failing else hand
+        cells = (
+            styled(run.record),
+            styled(what(run)[:40]),
+            styled(sha7(run)),
+            styled(*result(run, live)),
+            styled(f"{run_took(run, live, now):>4}"),
+            styled(*note),
+        )
         rows.append((run.record, cells))
-    made.clear()
-    made.update(kept)
-    return rows
+    return table(rows)
 
 
 def queue_rows(runs, bench, entries):

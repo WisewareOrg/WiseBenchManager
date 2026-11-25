@@ -4,7 +4,7 @@ Writes go through `Queue` and `bench_state` only; nothing here takes a lock or r
 """
 
 import asyncio
-import contextlib
+import concurrent.futures
 import subprocess
 import sys
 import threading
@@ -15,7 +15,7 @@ from typing import NamedTuple
 from rich.cells import cell_len
 from rich.style import Style
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -51,7 +51,7 @@ ENABLE = (
     " [y/N]"
 )
 
-NO_UNIT = "no [run] unit in the bench's settings file"
+KEYS = Text.assemble((" ? ", Style(color="#0c0c0c", bgcolor="#cccccc")), " keys")
 
 VIM = {
     "j": "down",
@@ -68,8 +68,7 @@ VIM = {
 async def in_daemon_thread(call, *args):
     """Run `call` on a daemon thread, so quitting never waits for it.
 
-    asyncio's own executor threads are joined when the process exits, so `to_thread` would hold
-    the exit until a slow read finished.
+    See ADR 0006 rev 1.
 
     Args:
         call (Callable): What to run.
@@ -81,33 +80,18 @@ async def in_daemon_thread(call, *args):
     Raises:
         Exception: Whatever `call` raised.
     """
-    loop = asyncio.get_running_loop()
-    future = loop.create_future()
-
-    def settle(result, exc):
-        """Give the future what `call` came to, unless the future was cancelled.
-
-        Args:
-            result (object): What `call` returned; None when it raised.
-            exc (Exception | None): What `call` raised.
-        """
-        if not future.cancelled():
-            if exc is None:
-                future.set_result(result)
-            else:
-                future.set_exception(exc)
+    future = concurrent.futures.Future()
 
     def run():
-        """Call `call` and hand what came of it to the loop, unless the loop has closed."""
-        try:
-            result, exc = call(*args), None
-        except Exception as caught:
-            result, exc = None, caught
-        with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(settle, result, exc)
+        """Call `call` and put what came of it in the future, unless it was cancelled."""
+        if future.set_running_or_notify_cancel():
+            try:
+                future.set_result(call(*args))
+            except Exception as exc:
+                future.set_exception(exc)
 
     threading.Thread(target=run, daemon=True).start()
-    return await future
+    return await asyncio.wrap_future(future)
 
 
 class Seen(NamedTuple):
@@ -132,6 +116,8 @@ NOTHING = Seen([], Bench(False, False, DASH), "", None)
 class Rows(DataTable):
     """A table whose rows are data; the cursor stays on its row, and filling it is not a move.
 
+    See ADR 0006 rev 1.
+
     Args:
         *columns (str): The column headings.
         **kwargs: For `DataTable`.
@@ -154,11 +140,7 @@ class Rows(DataTable):
             cursor_background_priority="css",
             **kwargs,
         )
-        self.headings = columns
-
-    def on_mount(self):
-        """Name the columns."""
-        self.add_columns(*self.headings)
+        self.add_columns(*columns)
 
     @property
     def key(self):
@@ -188,7 +170,10 @@ class Rows(DataTable):
 
 
 class Tests(Tree):
-    """A suite's tests, each folding over its output, the cursor's row keeping its colours."""
+    """A suite's tests, each folding over its output, the cursor's row keeping its colours.
+
+    See ADR 0006 rev 1.
+    """
 
     ICON_NODE, ICON_NODE_EXPANDED = "▸ ", "▾ "
 
@@ -242,7 +227,9 @@ class RunView(Vertical):
             **kwargs: For `Vertical`.
         """
         super().__init__(**kwargs)
-        self.showing, self.drawn, self.lines, self.pattern, self.match = None, None, [], "", -1
+        self.showing = None
+        self.pattern = ""
+        self.match = -1
 
     def compose(self):
         """Lay out the title, the stage list and the stage's pane.
@@ -279,74 +266,110 @@ class RunView(Vertical):
 
     def watch_seen(self):
         """Show the run and its stage."""
-        (runs, bench, stopped, now), run = self.seen, self.run
+        run = self.run
         if run is None:
             return
-        newest, stage, stages = run is runs[0], self.stage, self.query_one("#stages")
-        live, head = bench.live and newest, self.query_one("#head")
+        runs, bench, stopped, now = self.seen
+        newest, stage = run is runs[0], self.stage
+        live = bench.live and newest
         self.query_one("#title").update(view.run_title(run, newest, bench))
-        rows = [(s.name, view.stage_cells(s, live, now)) for s in run.stages]
-        stages.rows_shown = view.table(rows)
-        with self.prevent(DataTable.RowHighlighted):
-            at = run.stages.index(stage) if stage else 0
-            stages.move_cursor(row=at, animate=False)
-        tone = view.tone(stage.state, live)[1] if stage else "none"
-        for each in ("none", "running", "failed"):
-            stages.set_class(each == tone, each)
+        self.show_stages(run, stage, live, now)
+        self.show_head(run, stage, live, now)
         failure = self.query_one("#failure")
         failure.display = bench.disabled and newest
         if failure.display:
             failure.update(view.failure(stopped, run))
-        suite = bool(stage and stage.sections)
-        head.set_class(suite, "suite")
-        head.set_class(stage is None, "none")
-        head.update(view.head(run, stage, live, now))
-        log, tests = self.query_one(Log), self.query_one(Tree)
-        log.display, tests.display = stage is not None and not suite, suite
-        self.query_one("#hint").display = suite
-        new = self.showing != (run.record, stage and stage.name)
-        self.showing = run.record, stage and stage.name
-        if new:
-            self.match, self.lines = -1, []
-            log.clear()
-            tests.clear()
-        if suite:
-            self.show_tests(tests, stage, new, live, now)
-        elif stage and stage is not self.drawn:
-            shown = [view.shown_line(text) for text in stage.lines[len(self.lines) :]]
-            log.write_lines([view.clean(text) or " " for text in shown])
-            self.lines += shown
-        self.drawn = stage
+        self.show_log(run, stage, live, now)
 
     watch_picked = watch_seen
 
-    def show_tests(self, tests, stage, new, live, now):
-        """Show a suite's tests, the running and failed ones open.
+    def show_stages(self, run, stage, live, now):
+        """Show the stage list, its cursor on the stage shown, tinted by that stage's state.
+
+        Args:
+            run (Run): The run shown.
+            stage (Stage | None): The stage shown.
+            live (bool): The bench is running this run.
+            now (datetime | None): The current time.
+        """
+        stages = self.query_one("#stages")
+        rows = [(s.name, view.stage_cells(s, live, now)) for s in run.stages]
+        stages.rows_shown = view.table(rows)
+        with self.prevent(DataTable.RowHighlighted):
+            stages.move_cursor(row=run.stages.index(stage) if stage else 0, animate=False)
+        tint = view.tone(stage.state, live)[1] if stage else "none"
+        stages.set_classes(tint)
+
+    def show_head(self, run, stage, live, now):
+        """Show the lines over the stage's log.
+
+        Args:
+            run (Run): The run shown.
+            stage (Stage | None): The stage shown.
+            live (bool): The bench is running this run.
+            now (datetime | None): The current time.
+        """
+        head = self.query_one("#head")
+        head.set_class(bool(stage and stage.sections), "suite")
+        head.set_class(stage is None, "none")
+        head.update(view.head(run, stage, live, now))
+
+    def show_log(self, run, stage, live, now):
+        """Show the stage's output: a suite's tests in the tree, any other stage's lines in the log.
+
+        Args:
+            run (Run): The run shown.
+            stage (Stage | None): The stage shown.
+            live (bool): The bench is running this run.
+            now (datetime | None): The current time.
+        """
+        log, tests = self.query_one(Log), self.query_one(Tests)
+        suite = bool(stage and stage.sections)
+        log.display, tests.display = stage is not None and not suite, suite
+        self.query_one("#hint").display = suite
+        showing = run.record, stage and stage.name
+        if self.showing != showing:
+            self.match = -1
+            log.clear()
+            tests.clear()
+        self.showing = showing
+        if suite:
+            self.show_tests(tests, stage, live, now)
+        elif stage:
+            shown = [view.shown_line(text) for text in stage.lines[log.line_count :]]
+            log.write_lines([view.clean(text) or " " for text in shown])
+
+    def show_tests(self, tests, stage, live, now):
+        """Show a suite's tests, the running and failed ones open, and land the cursor.
+
+        The cursor lands again on every read until the tree has the focus.
 
         Args:
             tests (Tree): The tree.
             stage (Stage): The suite.
-            new (bool): The tree showed something else.
             live (bool): The bench is running this run.
             now (datetime | None): The current time.
         """
-        for i, (each, end) in enumerate(zip(stage.sections, view.section_ends(stage), strict=True)):
-            label = view.section_label(each, end, live, now)
-            opened = each.outcome in ("open", "failed")
+        outline = view.outline(stage)
+        for i, (section, end) in enumerate(outline):
+            label = view.section_label(section, end, live, now)
+            opened = section.outcome in ("open", "failed")
             node = tests.root.children[i] if i < len(tests.root.children) else None
-            if node is None or node.data.id != each.id:
-                node = tests.root.add(label, each, before=node, expand=opened)
+            if node is None or node.data.id != section.id:
+                node = tests.root.add(label, section, before=node, expand=opened)
             elif node.label != label:
                 node.set_label(label)
-            if node.data.outcome != each.outcome:
-                (node.expand if opened else node.collapse)()
-            node.data, node.allow_expand = each, bool(each.lines or each.failure)
+            if node.data.outcome != section.outcome:
+                if opened:
+                    node.expand()
+                else:
+                    node.collapse()
+            node.data, node.allow_expand = section, bool(section.lines or section.failure)
             if node.is_expanded:
                 self.fill(node)
-        if new:
-            rank = {"failed": 0, "open": 1}
-            first = min(tests.root.children, key=lambda node: rank.get(node.data.outcome, 2))
-            self.call_after_refresh(tests.move_cursor, first)
+        if not tests.has_focus:
+            node = tests.root.children[view.landing([section for section, _ in outline])]
+            self.call_after_refresh(tests.move_cursor, node)
 
     @staticmethod
     def fill(node):
@@ -390,7 +413,8 @@ class RunView(Vertical):
             event (DataTable.RowSelected): The stage.
         """
         event.stop()
-        self.picked = event.row_key.value
+        if self.stage is None:
+            self.picked = event.row_key.value
         tests = self.query_one(Tree)
         (tests if tests.display else self.query_one(Log)).focus()
 
@@ -401,16 +425,17 @@ class RunView(Vertical):
             bool: Whether a line holds it.
         """
         stage = self.run and self.stage
-        rows = [
-            (None, i, text)
-            for i, text in enumerate(map(view.shown_line, stage.lines if stage else ()))
-        ]
-        for i, each in enumerate(stage.sections if stage else ()):
-            body = (each.name, *each.lines, *each.failure)
-            rows += [(i, j, text) for j, text in enumerate(body)]
+        if stage and stage.sections:
+            rows = [
+                (i, j, text)
+                for i, (section, _) in enumerate(view.outline(stage))
+                for j, text in enumerate((section.name, *section.lines, *section.failure))
+            ]
+        else:
+            rows = [(None, j, text) for j, text in enumerate(self.query_one(Log).lines)]
         for at in (k % len(rows) for k in range(self.match + 1, self.match + 1 + len(rows))):
             section, row, text = rows[at]
-            if self.pattern in text and (section is not None or not stage.sections):
+            if self.pattern in text:
                 self.match = at
                 self.go_to(section, row)
                 return True
@@ -478,11 +503,25 @@ class Watch(App):
             directory (pathlib.Path): The records directory.
         """
         super().__init__()
-        self.directory, self.records = Path(directory), Records(directory)
-        self.queue, self.unit = Queue(Path(checkout), Path(directory)), read_run_unit()
-        self.target, self.asking, self.animation_level = None, False, "none"
-        self.held, self.previewing = "", None
-        self.made = {}
+        self.directory, self.records = directory, Records(directory)
+        self.queue, self.unit = Queue(checkout, directory), read_run_unit()
+        self.target, self.previewing = None, None
+        self.asking = False
+        self.animation_level = "none"
+
+    async def on_event(self, event):
+        """Dispatch an event; a vim key is first made the key it stands for, so keys act in order.
+
+        Args:
+            event (events.Event): The event.
+        """
+        if (
+            isinstance(event, events.Key)
+            and event.key in VIM
+            and not isinstance(self.focused, Input)
+        ):
+            event = events.Key(VIM[event.key], None)
+        await super().on_event(event)
 
     def compose(self):
         """Lay out the tab line, the views, the status bar and the command line.
@@ -509,7 +548,7 @@ class Watch(App):
                 yield Static(id="count")
         with Horizontal(id="bottom"):
             yield Static(id="state")
-            yield Static(view.keys_hint(), id="keys")
+            yield Static(KEYS, id="keys")
         yield Static(id="message")
         with Horizontal(id="command-row"):
             yield Input(id="command", compact=True, select_on_focus=False)
@@ -518,7 +557,7 @@ class Watch(App):
     def on_mount(self):
         """Start the clock and the reads."""
         self.query_one("#stages").focus()
-        self.set_interval(1, self.tick)
+        self.query_one("#clock").set_interval(1, self.tick)
         self.tick()
         self.read_disk()
 
@@ -563,16 +602,29 @@ class Watch(App):
                     self.say(exc)
             await asyncio.sleep(self.QUEUE_EVERY)
 
+    @property
+    def count(self):
+        """str: How many records the directory holds."""
+        return f"{len(self.seen.runs)} records in {self.directory.name}/"
+
     def watch_seen(self):
         """Show the new read."""
-        runs, bench, stopped, now = self.seen
+        runs, bench, stopped, _ = self.seen
         if self.record and all(run.record != self.record for run in runs):
             self.record = None
-        self.query_one("#history-rows").rows_shown = view.history_rows(runs, bench, now, self.made)
-        self.query_one("#count").update(f"{len(runs)} records in {self.directory.name}/")
+        if not runs:
+            self.query_one("#title").update(self.count)
+        if self.shown == "history":
+            self.show_history()
         state = view.state_line(bench, stopped, runs[0] if runs else None)
         self.query_one("#state").update(state)
         self.watch_entries()
+
+    def show_history(self):
+        """Show the records in the History table."""
+        runs, bench, _, now = self.seen
+        self.query_one("#history-rows").rows_shown = view.history_rows(runs, bench, now)
+        self.query_one("#count").update(self.count)
 
     def watch_entries(self):
         """Show the queue."""
@@ -587,17 +639,12 @@ class Watch(App):
         label = view.styled(f"1 Run  {self.record}" if self.record else "1 Run")
         self.query_one("#tab-run", Tab).label = label
 
-    def say(self, text, held=""):
-        """Show a message under the status bar; while `:enable` asks, hold it until that closes.
+    def say(self, text):
+        """Show a message under the status bar.
 
         Args:
             text (object): The message; blank clears it.
-            held (str): A message held while `:enable` asked, shown ahead of `text`.
         """
-        if self.asking:
-            self.held = str(text)
-            return
-        text = f"{held} {text}" if held and text else text
         message = self.query_one("#message")
         message.update(view.styled(str(text)))
         message.display = bool(text)
@@ -611,6 +658,8 @@ class Watch(App):
         self.query_one(ContentSwitcher).current = event.tab.id.removeprefix("tab-")
         if self.shown == "queue":
             self.read_queue()
+        elif self.shown == "history":
+            self.show_history()
 
     def action_tab(self, name):
         """Show a view and focus its list.
@@ -624,7 +673,8 @@ class Watch(App):
 
     def action_live(self):
         """Show the newest run, at the stage the bench's state calls for."""
-        self.record = self.query_one(RunView).picked = None
+        self.record = None
+        self.query_one(RunView).picked = None
         self.action_tab("run")
 
     def open_run(self, index):
@@ -671,43 +721,52 @@ class Watch(App):
             text (str): What it starts with.
         """
         self.asking = False
-        self.say(self.held)
-        self.held = ""
+        self.say("")
         self.target = self.query_one("#queue-rows").key if self.shown == "queue" else None
-        line = self.query_one(Input)
+        command = self.query_one(Input)
         self.query_one("#command-row").display = True
-        line.value, line.cursor_position = text, len(text)
-        line.focus()
+        command.placeholder = ""
+        command.value, command.cursor_position = text, len(text)
+        command.focus()
 
     def action_close(self):
         """Close the command line."""
         self.asking = False
-        self.say(self.held)
-        self.held = ""
+        self.say("")
         self.query_one("#command-row").display = self.query_one("#preview").display = False
         self.action_tab(self.shown)
 
-    @work(exclusive=True, group="preview")
-    async def on_input_changed(self, event):
+    def on_input_changed(self, event):
         """Show the Queue while `:run` is typed, and what it would queue.
 
         Args:
             event (Input.Changed): The change.
         """
-        ref, box = view.typed_ref(event.value), self.query_one("#preview")
-        self.query_one("#runhint").display = event.value.startswith(":run ")
-        if event.value == ":run ":
+        typing_run = event.value.startswith(":run ")
+        self.query_one("#runhint").display = typing_run
+        if typing_run:
             self.query_one(Tabs).active = "tab-queue"
-        box.display, self.previewing = False, None
-        if ref:
-            source, name = view.split_run(ref)
-            try:
-                outcome = await in_daemon_thread(self.queue.preview, name, source)
-            except Exception as exc:
-                outcome = exc
-            self.previewing = name, outcome
-            box.update(view.preview(name, outcome, self.query_one("#queue-rows").rows_shown))
-            box.display = self.query_one("#command-row").display
+        self.query_one("#preview").display = False
+        self.previewing = None
+        if typed := view.typed_run(event.value):
+            self.preview(*typed)
+
+    @work(exclusive=True, group="preview")
+    async def preview(self, source, name):
+        """Show what queueing `name` would run; the read is off the screen's thread.
+
+        Args:
+            source (str | None): The directory typed with `-C`, if any.
+            name (str): The ref.
+        """
+        try:
+            outcome = await in_daemon_thread(self.queue.preview, name, source)
+        except Exception as exc:
+            outcome = exc
+        self.previewing = name, outcome
+        box = self.query_one("#preview")
+        box.update(view.preview(name, outcome, self.query_one("#queue-rows").rows_shown))
+        box.display = self.query_one("#command-row").display
 
     def on_input_submitted(self, event):
         """Run the command typed, or take the answer to `:enable`.
@@ -715,19 +774,28 @@ class Watch(App):
         Args:
             event (Input.Submitted): The command line.
         """
-        text, asking, held = event.value.strip(), self.asking, self.held
+        text, asking = event.value.strip(), self.asking
         self.action_close()
-        if asking:
-            if text == "y" and not self.unit_missing(held):
-                self.write(lambda: enable(self.directory, self.unit) or "bench enabled", held)
+        if not asking:
+            self.command(text)
+        elif text == "y":
+            self.write(lambda: enable(self.directory, self.unit) or "bench enabled")
+
+    def command(self, text):
+        """Do what a command typed says.
+
+        Args:
+            text (str): The command.
+        """
+        if text in (":disable", ":enable") and self.unit is None:
+            self.say("no [run] unit in the bench's settings file")
         elif text == ":q":
             self.exit()
         elif text == ":disable":
-            if not self.unit_missing():
-                self.write(lambda: stop_timer(self.unit) or "bench disabled")
+            self.write(lambda: stop_timer(self.unit) or "bench disabled")
         elif text == ":enable":
             self.action_command("")
-            self.say(ENABLE)
+            self.query_one(Input).placeholder = ENABLE
             self.asking = True
         elif text == ":remove":
             kind, _, entry = (self.target or "").partition(" ")
@@ -735,39 +803,25 @@ class Watch(App):
                 self.write(lambda: self.remove_entry(int(entry)))
             else:
                 self.say("only hand-queued runs can be removed, from the Queue tab")
-        elif ref := view.typed_ref(text):
-            source, name = view.split_run(ref)
+        elif typed := view.typed_run(text):
+            source, name = typed
             self.write(lambda: self.add_run(name, source))
         elif text.startswith("/"):
-            run = self.query_one(RunView)
-            run.pattern, run.match = text[1:], -1
+            pane = self.query_one(RunView)
+            pane.pattern, pane.match = text[1:], -1
             self.action_find()
 
-    def unit_missing(self, held=""):
-        """Say so when the settings file has no `[run] unit`, which the timer commands need.
-
-        Args:
-            held (str): A message held while `:enable` asked, shown ahead of the saying.
-
-        Returns:
-            bool: Whether there is no unit.
-        """
-        if self.unit is None:
-            self.say(NO_UNIT, held)
-        return self.unit is None
-
     @work
-    async def write(self, call, held=""):
+    async def write(self, call):
         """Make a change off the screen's thread, say what came of it, and read the queue again.
 
         Args:
             call (Callable[[], str]): Makes the change and returns what to say.
-            held (str): A message held while `:enable` asked, said ahead of what came of it.
         """
         try:
-            self.say(await asyncio.to_thread(call), held)
+            self.say(await asyncio.to_thread(call))
         except Exception as exc:
-            self.say(exc, held)
+            self.say(exc)
         self.read_queue()
 
     def add_run(self, ref, source):

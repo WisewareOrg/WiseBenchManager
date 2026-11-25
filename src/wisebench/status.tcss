@@ -33,8 +33,9 @@ Rows:focus, #pane:focus-within { border-left: heavy $blue; }
 #pane { border-left: solid $rule; padding-left: 2; }
 #head { height: auto; }
 #head.suite, #head.none { margin-bottom: 1; }
-#failure { height: auto; padding: 0 1; border: solid $red; margin-bottom: 1; }
+#failure { height: auto; padding: 0 1; border: solid $red; margin-bottom: 1; display: none; }
 #hint, #count, #runhint { color: $dim; }
+#log, #tests, #hint { display: none; }
 #queue-rows, #history-rows { height: 1fr; }
 #preview { height: auto; padding: 0 1; border: solid $blue; display: none; }
 

@@ -956,6 +956,7 @@ dependencies = [
     { name = "pygithub" },
     { name = "pytest" },
     { name = "pytest-reportlog" },
+    { name = "rich" },
     { name = "tenacity" },
     { name = "textual" },
 ]
@@ -971,6 +972,7 @@ requires-dist = [
     { name = "pygithub", specifier = ">=2.10.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-reportlog", specifier = ">=1.0" },
+    { name = "rich", specifier = ">=15.0.0" },
     { name = "tenacity", specifier = ">=9.0" },
     { name = "textual", specifier = ">=8.2.8" },
 ]

@@ -11,6 +11,7 @@ dependencies = [
     "pygithub>=2.10.0",
     "pytest>=9.1.1",
     "pytest-reportlog>=1.0",
+    "rich>=15.0.0",
     "tenacity>=9.0",
     "textual>=8.2.8",
 ]
