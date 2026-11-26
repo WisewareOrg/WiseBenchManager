@@ -1,5 +1,6 @@
 """The watch view over several boards: the Boards tab, choosing a board, and its commands."""
 
+import shutil
 from functools import partial
 from types import SimpleNamespace
 
@@ -253,3 +254,21 @@ class TestBoardFailures(BoardsCase):
             await self.eventually(partial(self.says, "no board 'prod'"), "the core's error")
 
             assert self.shown("#brand") == "bench prod", "the view stays on it"
+
+
+class TestNotSetUp(BoardsCase):
+    async def test_a_board_with_no_checkout_is_not_set_up_and_the_view_goes_on(self):
+        shutil.rmtree(self.clone.checkout)
+
+        async with self.watch():
+            await self.press("2")
+            await self.eventually(partial(self.says, "not set up"), "the queue says why")
+            await self.command(":run HEAD")
+            await self.eventually(partial(self.says, "not set up"), ":run says why")
+            await self.press("4")
+            await self.eventually(lambda: len(self.table("#boards-rows")) == 2, "both boards")
+
+            rows = dict(self.table("#boards-rows"))
+            assert rows["/"][2].startswith("not set up"), "the first board is not set up"
+            assert rows["prod"][1:] == ["off", "idle"], "prod is read"
+            assert self.app.is_running, "the view goes on"

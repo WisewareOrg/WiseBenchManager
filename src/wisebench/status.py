@@ -228,6 +228,7 @@ class Watch(App):
             try:
                 if name not in self.benches:
                     self.benches[name] = BenchIO(*clone.locate(name), board=name)
+                self.benches[name].check()
                 read.append((name, self.benches[name].look()))
             except Exception as exc:
                 read.append((name, exc))
@@ -239,7 +240,7 @@ class Watch(App):
         while self.is_running and self.tab == "queue":
             bench = self.bench
             try:
-                entries, error = await in_daemon_thread(bench.queue.entries), None
+                entries, error = await in_daemon_thread(bench.entries), None
             except Exception as exc:
                 entries, error = None, exc
             if not self.is_running or bench is not self.bench:

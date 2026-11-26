@@ -14,6 +14,10 @@ from wisebench.records import Records
 from wisebench.rules import Seen
 
 
+class NotSetUp(Exception):
+    """A board whose layer checkout is not there."""
+
+
 class BenchIO:
     """The records, the state and the queue of one board.
 
@@ -39,8 +43,27 @@ class BenchIO:
             board (str | None): An added board's name; None is the first board.
         """
         self.directory, self.records, self.board = directory, Records(directory), board
+        self.checkout = checkout
         self.queue = Queue(checkout, directory, merge=board is None)
         self.unit = bench_state.read_run_unit() if board is None else None
+
+    def check(self):
+        """Refuse a board whose layer checkout is not there.
+
+        Raises:
+            NotSetUp: The checkout is not a directory.
+        """
+        if not self.checkout.is_dir():
+            raise NotSetUp(f"not set up: no {self.checkout}")
+
+    def entries(self):
+        """The board's queue, once it is set up.
+
+        Returns:
+            list[dict]: `Queue.entries()`.
+        """
+        self.check()
+        return self.queue.entries()
 
     def look(self):
         """Read the records, the board's state and `DISABLED`; an added board's `timer` is its `ON`.
@@ -72,6 +95,7 @@ class BenchIO:
             str: What was queued, or that `ref` does not resolve.
         """
         try:
+            self.check()
             entry, sha, _ = self.queue.add(ref, None, False, [], source)
         except subprocess.CalledProcessError:
             return f"{ref} does not resolve to a commit"
@@ -86,6 +110,7 @@ class BenchIO:
         Returns:
             str: Whether it was there.
         """
+        self.check()
         gone = self.queue.remove(entry)
         return f"removed queued run {entry}" if gone else f"no queued run {entry}"
 
