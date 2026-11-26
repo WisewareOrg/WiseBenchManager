@@ -124,9 +124,26 @@ class TestBoardCommands(BoardsCase):
             await self.eventually(lambda: self.keys_of("#queue-rows") == ["hand 1"], "listed")
             await self.command(":remove")
             await self.eventually(lambda: self.prod_queue() == [], "removed")
+            await self.eventually(partial(self.says, "removed queued run 1 on prod"), "named")
 
             assert queued == [1], "queued on prod"
             assert not (self.records / "queue.db").exists(), "nothing on the first board"
+
+    async def test_enable_just_after_choosing_a_board_names_its_fault(self):
+        (self.prod / "DISABLED").write_text(STOPPED)
+
+        async with self.watch():
+            await self.press("4")
+            await self.eventually(lambda: "prod" in self.app.benches, "prod is known")
+            prod = self.app.benches["prod"]
+            held = Held(prod.look())
+            self.monkeypatch.setattr(prod, "look", held)
+            self.app.show_board(chosen("prod"))
+            await self.command(":enable")
+            asked = self.question
+            held.released.set()
+
+            assert "the board is gone" in asked, "before prod's first read"
 
     async def test_enable_on_an_added_board_asks_with_the_reason_and_y_turns_it_on(self):
         (self.prod / "DISABLED").write_text(STOPPED)
