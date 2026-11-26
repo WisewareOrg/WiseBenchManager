@@ -218,8 +218,8 @@ class TestCommandsStayOnTheirBoard(BoardsCase):
 
             assert typed == ":run HEAD", "it was typed"
             assert self.typed is None, "the line is closed"
-            assert not (self.records / "queue.db").exists(), "nothing queued on the first board"
-            assert not (self.prod / "queue.db").exists(), "nor on prod"
+            for name in (None, "prod"):
+                assert Queue(*locate(name), merge=False).entries() == [], f"nothing queued: {name}"
 
 
 class TestBoardFailures(BoardsCase):
