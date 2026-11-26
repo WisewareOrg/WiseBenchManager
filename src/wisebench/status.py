@@ -26,6 +26,7 @@ from textual.widgets import (
 
 from wisebench import clone, palette, rules, view
 from wisebench.bench_io import BenchIO
+from wisebench.bench_state import DISABLED
 from wisebench.boards_view import BoardsView
 from wisebench.command_line import CommandLine
 from wisebench.history_view import HistoryView
@@ -403,13 +404,16 @@ class Watch(App):
         """What `:enable` asks of the board shown.
 
         Returns:
-            str: The first board's question, or which added board it turns on and the fault it
-            clears.
+            str: The first board's question, or which added board it turns on and the fault in
+            its `DISABLED` that it clears, read now: the view's last read may be another board's.
         """
         board = self.bench.board
         if board is None:
             return ENABLE
-        stopped = self.seen.stopped.strip()
+        try:
+            stopped = (self.bench.directory / DISABLED).read_text(errors="replace").strip()
+        except OSError:
+            stopped = ""
         reason = stopped.rpartition("\n")[2]
         cleared = f" Clears its fault: {reason}" if stopped else ""
         return f"Turn {board} on? [y/N]{cleared}"

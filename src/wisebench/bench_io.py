@@ -87,7 +87,8 @@ class BenchIO:
             str: Whether it was there.
         """
         gone = self.queue.remove(entry)
-        return f"removed queued run {entry}" if gone else f"no queued run {entry}"
+        said = f"removed queued run {entry}" if gone else f"no queued run {entry}"
+        return said + (f" on {self.board}" if self.board else "")
 
     def disable(self):
         """Stop the run timer; turn an added board off.
