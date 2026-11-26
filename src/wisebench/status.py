@@ -129,6 +129,7 @@ class Watch(App):
         self.register_theme(palette.THEME)
         self.theme = palette.THEME.name
         self.benches = {None: BenchIO(checkout, directory)}
+        self.added = clone.boards()
         self.bench = self.benches[None]
         self.animation_level = "none"
 
@@ -161,7 +162,7 @@ class Watch(App):
             textual.widget.Widget: The widgets.
         """
         with Horizontal(id="top"):
-            yield Static("bench", id="brand")
+            yield Static(self.brand(None), id="brand")
             yield Tabs(
                 Tab("1 Run", id="tab-run"),
                 Tab("2 Queue", id="tab-queue"),
@@ -362,11 +363,24 @@ class Watch(App):
         self.action_close()
         self.bench = self.benches[name]
         self.seen, self.entries = rules.NOTHING, []
-        self.query_one("#brand").update("bench" if name is None else f"bench {name}")
+        self.query_one("#brand").update(self.brand(name))
         where = "" if name is None else f" on {name}"
         self.query_one("#runhint").update(f"Enter queue it{where}  Esc cancel")
         self.action_live()
         self.run_worker(self.look(), exclusive=True, group="look")
+
+    def brand(self, name):
+        """The top left: `bench`, and the board shown once the bench has an added board.
+
+        Args:
+            name (str | None): The board shown; None is the first.
+
+        Returns:
+            str: The text.
+        """
+        if name is None and not self.added:
+            return "bench"
+        return f"bench {name or 'first board'}"
 
     def action_keys(self):
         """Show or hide Textual's keys panel."""
