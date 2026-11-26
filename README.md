@@ -5,7 +5,7 @@ Yocto layer through build and test to a verdict, and it knows nothing about the 
 runs — installing a candidate on the board is the layer's own job, through its own fixture. Design
 decisions are in [`docs/decisions/`](docs/decisions/README.md).
 
-## Four commands
+## The commands
 
 ```sh
 bench run                      # on a timer: take one entry -- the oldest run queued by hand, else the
@@ -21,10 +21,15 @@ bench test <ref> [-C <dir>] [--set <name>] [--skip-build] [-- <pytest args>]
                                # build and no install
 bench unqueue <id>             # remove a run queued by hand that `bench run` has not taken yet
 bench status --watch           # the run in progress, what waits to run, and every run on disk
+bench on <name>                # let `bench run --board <name>` start runs on that board
+bench off <name>               # stop it from starting another
 ```
 
+`on` and `off` take the board's name. `run`, `test` and `unqueue` act on the first board, or on the
+one `--board <name>` names (see "More than one board").
+
 `bench` acts on the clone of this repository it is installed from, from whatever directory it is
-started in: one queue, one history, one lock. `bench test` runs nothing. It resolves the ref to a
+started in: one queue, one history, one lock for each board. `bench test` runs nothing. It resolves the ref to a
 commit in the bench's checkout (`checkout/` in the clone), queues the run in the clone's
 `records/queue.db`, and prints `queued <id> <sha> place <n>`: the id for `bench unqueue`, the commit
 the run will build, and its place among the runs queued by hand. A ref that does not resolve to a
@@ -66,7 +71,7 @@ layer's own tests recorded against them, and the exact command line.
 
 A failing hook or test is the candidate's failure and, for a merge-queue entry, is posted. An error
 in a fixture or the precondition is the bench's failure: a `DISABLED` marker is written, the timer
-is stopped, nothing is posted. pytest's own setup/call distinction is what tells the two apart: a
+is stopped (an added board is turned off instead), nothing is posted. pytest's own setup/call distinction is what tells the two apart: a
 fixture erroring during setup or teardown is never read as the candidate's test failing.
 
 ## What a layer provides
@@ -271,17 +276,17 @@ fault or a failed read of GitHub's API writes `DISABLED` as on any tick, before 
 runs.
 
 `bench status --watch` is the view of all of it, run from any directory. It is a Textual app
-(ADR 0006 rev 1) with three tabs: Run shows a run's stages and the selected stage's log, headed by
+(ADR 0006 rev 1) with four tabs: Run shows a run's stages and the selected stage's log, headed by
 bitbake's task progress while a build runs; Queue lists what waits (the running run, the runs queued
-by hand, then every merge-queue entry); History lists every run on disk. It follows the newest run,
+by hand, then every merge-queue entry); History lists every run on disk; Boards lists every board. It follows the newest run,
 and shows a run from History or with `[` and `]` in the same layout.
 
 | Key | Does |
 |---|---|
-| `1` `2` `3` | Run on the newest run, Queue, History |
+| `1` `2` `3` `4` | Run on the newest run, Queue, History, Boards |
 | `j` `k` `h` `l` `g` `G` `^d` `^u` | press Down, Up, Left, Right, Home, End, PgDn, PgUp; `G` in a log also follows it as it grows |
 | `Tab` `Shift-Tab` | move focus between the tab line, the list and the log; on the tab line Left and Right change tab |
-| `Enter` | on a stage, go into its log; on a test or a suite's own output, open or close it; in History, show that run |
+| `Enter` | on a stage, go into its log; on a test or a suite's own output, open or close it; in History, show that run; in Boards, show that board |
 | `Space` | open or close a test or a suite's own output |
 | `Esc` | back to the list; with the command line open, close it |
 | `[` `]` | in Run, the next older or newer run |
@@ -315,8 +320,9 @@ holders by path through `/proc/<pid>/fd`.
 ### Installing `bench run`
 
 In this clone, edit `contrib/bench-run.service`'s `ExecStart` (this clone's own `.venv/bin/bench`)
-and `TimeoutStartSec` (comfortably longer than one build-and-test cycle -- `RuntimeMaxSec` has no
-effect on a `Type=oneshot` service; `TimeoutStartSec` is what bounds one); rename both
+and `TimeoutStartSec` (longer than one build-and-test cycle and the longest build it may wait
+behind -- `RuntimeMaxSec` has no effect on a `Type=oneshot` service; `TimeoutStartSec` is what
+bounds one); rename both
 `contrib/bench-run.service` and `contrib/bench-run.timer` to `<unit>.service`/`<unit>.timer` if the
 settings file's `[run] unit` is not `bench-run`. Create `~/.config/wisebench/bench.toml` with
 `[github]` and `[run]` (see "What a layer provides"). Write `LG_ENV` and `LG_BENCH_ADDRESS` into
@@ -331,6 +337,41 @@ itself: read `DISABLED`, then `:enable` in `bench status --watch`, or by hand re
 `systemctl --user start <unit>.timer`. The run that faulted is not queued again; queue it again
 after clearing `DISABLED`. If the reason is a database error, remove `records/queue.db` as well;
 the runs queued by hand in it are lost.
+
+### More than one board
+
+The first board is the one above. A further board (ADR 0007 rev 1) is a directory `boards/<name>/` in
+this clone, holding a clone of the layer and the labgrid file that names the board:
+
+```sh
+git clone <the layer repository> WiseBenchManager/boards/<name>/checkout
+cp <that board's labgrid file> WiseBenchManager/boards/<name>/env.yaml
+```
+
+Edit `contrib/bench-run@.service`'s `ExecStart` as above, then:
+
+```sh
+systemctl --user link <this clone>/contrib/bench-run@.service <this clone>/contrib/bench-run@.timer
+systemctl --user enable --now bench-run@<name>.timer
+bench on <name>
+```
+
+An added board is off until `bench on <name>`. While it is off its queued runs wait, and a run in
+progress when it is turned off finishes. It takes only runs queued with `bench test --board <name>`;
+the merge queue is the first board's. Its records, queue and lock are in `boards/<name>/records/`.
+In `bench status --watch`, Enter on a board in Boards shows it: Run, Queue and History are then that
+board's, `:run` and `:remove` act on its queue, and `:enable` and `:disable` turn it on and off.
+
+A failure of the bench on an added board turns it off, writes `DISABLED` beside that board's records
+and touches no other board or timer. `bench on <name>` clears it and says what it said; the same reason
+is the `BENCH ERROR` line of the unit's journal, and in the run's `bench.log` when a record was made.
+
+`env.yaml` becomes `LG_ENV`, the only `LG_` variable of that board's run, so the file states its own
+address. Two labgrid files that name one board drive it under two locks, and nothing says so. The
+rest of `bench.env` reaches every board.
+
+Runs on two boards overlap and the runner keeps no lock across them. A layer whose builds must not
+overlap keeps them apart itself, and a run's wait there counts in its `TimeoutStartSec`.
 
 Replay recordings are made by hand, the only time a proxy reaches a real upstream:
 

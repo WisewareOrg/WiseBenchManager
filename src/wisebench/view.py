@@ -14,6 +14,7 @@ from wisebench.bench_state import DASH
 from wisebench.runlog import KAS_STAMP
 
 _LOG_PREFIX = re.compile(KAS_STAMP + r"[A-Z]+\s+- ")
+FIRST = "/"
 _RESULTS = {
     "passed": ("passed", "passed"),
     "failed": ("failed", "failed"),
@@ -349,7 +350,8 @@ def state_line(seen):
         seen (Seen): The read: the bench's state, the `DISABLED` text and the newest run.
 
     Returns:
-        Text: The state's badge, the timer, and since when the bench is disabled.
+        Text: The state's badge, the timer (an added board's switch), and since when the board is
+        disabled.
     """
     bench, run = seen.bench, seen.newest
     word, meaning = ("RUNNING", "running") if bench.live else ("IDLE", "rule")
@@ -360,7 +362,8 @@ def state_line(seen):
         Style(color=palette.COLOURS["ground"], bgcolor=palette.COLOURS[meaning], bold=True),
     )
     timer = {"on": "passed", "off": "failed"}.get(bench.timer, "dim")
-    text = Text.assemble(badge, palette.line(("  timer ", "dim"), (bench.timer, timer)))
+    label = "  timer " if seen.board is None else "  board "
+    text = Text.assemble(badge, palette.line((label, "dim"), (bench.timer, timer)))
     if bench.disabled and run:
         unposted = any(s.name == "posted" and s.state != "passed" for s in run.stages)
         since_when = since(seen.stopped.partition("\n")[0])
@@ -368,6 +371,40 @@ def state_line(seen):
             ("  since ", "dim"), (since_when + (", nothing posted" if unposted else ""),)
         )
     return text
+
+
+def board_rows(boards):
+    """The Boards table's rows.
+
+    Args:
+        boards (list[tuple]): Per board, its name (None for the first) and its read, or what reading
+            it raised.
+
+    Returns:
+        list[tuple]: Per board, its key (`FIRST` for the first board) and its cells: name, whether
+        it runs, and what it is doing now.
+    """
+    rows = []
+    for name, seen in boards:
+        if isinstance(seen, Exception):
+            runs, now = ("",), (str(seen), "failed")
+        else:
+            timer = seen.bench.timer
+            word = f"timer {timer}" if name is None else timer
+            runs = (word, "passed" if timer == "on" else "dim")
+            run = seen.running
+            stamp, _, rest = seen.stopped.strip().partition("\n")
+            if run:
+                stage = next((s.name for s in run.stages if s.state == "open"), "")
+                now = (f"running, {rules.what(run)}, {display_name(stage)}", "running")
+            elif seen.bench.disabled:
+                reason = (rest or stamp).rpartition("\n")[2]
+                now = (f"faulted {since(stamp)}: {reason}", "failed")
+            else:
+                now = ("idle", "dim")
+        cells = ((name or "first board",), runs, now)
+        rows.append((name or FIRST, tuple(palette.styled(*cell) for cell in cells)))
+    return palette.table(rows)
 
 
 def history_rows(seen):

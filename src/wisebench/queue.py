@@ -24,7 +24,7 @@ class Queue:
     settings file. `entries()` defines the run order and `take()` claims its first entry.
     """
 
-    def __init__(self, checkout, directory):
+    def __init__(self, checkout, directory, merge=True):
         """Bind one Queue to a checkout and the directory holding `queue.db`.
 
         Args:
@@ -32,9 +32,12 @@ class Queue:
                 and whose `bench.toml` holds the hooks and suites.
             directory (pathlib.Path): The records directory `queue.db` sits in; created on first
                 use.
+            merge (bool): Whether the merge queue's entries follow the runs queued by hand; False
+                for an added board, whose queue never builds a `Check`.
         """
         self.checkout = checkout
         self.directory = directory
+        self.merge = merge
 
     def _db(self):
         """Open a connection to `queue.db`, creating the directory, file and table if absent.
@@ -218,6 +221,8 @@ class Queue:
             {"kind": "test", "id": id_, "added": added, **json.loads(entry)}
             for id_, added, entry in rows
         ]
+        if not self.merge:
+            return entries
         config = Config.load(self.checkout / "bench.toml", settings_path())
         check = Check(
             config.github_repo,

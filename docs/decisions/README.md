@@ -45,6 +45,7 @@ on whose it was.
 | [0004](0004-the-layer-installs-the-candidate.md) | 1 | 2026-10-13 | Install the candidate from the layer's own fixture; the runner owns no device procedure |
 | [0005](0005-queue-runs-by-hand-in-sqlite.md) | 1 | 2026-11-16 | Queue runs by hand in an SQLite table beside the records; each tick takes one before the merge queue's head |
 | [0006](0006-build-the-watch-view-on-textuals-own-widgets.md) | 1 | 2026-11-25 | Build the watch view on Textual's own widgets, keys and reactive model; the code here holds the bench's rules, words, layout and colours |
+| [0007](0007-give-each-added-board-its-own-state.md) | 1 | proposed | Give each added board its own state, its switch included |
 
 ## Revisions
 

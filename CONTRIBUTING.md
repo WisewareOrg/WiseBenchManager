@@ -44,8 +44,8 @@ so explicitly, and such a run is never evidence for a review or an investigation
 build. Do not add another bypass, for any reason, including "the build takes a while".
 
 **Outcomes are two things only.** A failing hook or test is the candidate's and is posted. An error
-in a fixture or the precondition is the bench's: DISABLED, timer stopped, nothing posted. Never
-invent a third class, and never post on the bench's failure.
+in a fixture or the precondition is the bench's: DISABLED, timer stopped (an added board turned off
+instead), nothing posted. Never invent a third class, and never post on the bench's failure.
 
 ## Tickets, branches, and titles
 

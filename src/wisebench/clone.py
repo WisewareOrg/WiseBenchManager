@@ -1,4 +1,4 @@
-"""The WiseBenchManager clone that is the bench: where its records and layer checkout live."""
+"""The WiseBenchManager clone that is the bench: where each board's records and checkout live."""
 
 from pathlib import Path
 
@@ -14,12 +14,31 @@ def root():
     return Path(wisebench.__file__).resolve().parents[2]
 
 
-def locate():
-    """Name the layer checkout and the records directory in the clone `root` finds.
+def boards():
+    """Name the added boards: the directories of `<clone>/boards` that hold a `checkout`.
 
     Returns:
-        tuple[pathlib.Path, pathlib.Path]: The layer checkout (`<clone>/checkout`) and the records
-        directory (`<clone>/records`).
+        list[str]: The names, sorted; empty on a one-board bench.
     """
-    clone = root()
-    return clone / "checkout", clone / "records"
+    return sorted(path.parent.name for path in (root() / "boards").glob("*/checkout"))
+
+
+def locate(board=None):
+    """Name one board's layer checkout and records directory in the clone `root` finds.
+
+    Args:
+        board (str | None): An added board's name; None is the first board.
+
+    Returns:
+        tuple[pathlib.Path, pathlib.Path]: The layer checkout and the records directory:
+        `<clone>/checkout` and `<clone>/records`, or the two in `<clone>/boards/<board>`.
+
+    Raises:
+        ValueError: `board` is not one of `boards()`.
+    """
+    home = root()
+    if board is not None:
+        if board not in boards():
+            raise ValueError(f"no board {board!r}: {home / 'boards'} has no such checkout")
+        home = home / "boards" / board
+    return home / "checkout", home / "records"

@@ -276,13 +276,14 @@ class RunView(Vertical):
     def watch_seen(self):
         """Show the run and its stage; with no run, how many records there are."""
         seen, run = self.seen, self.run
-        title = self.query_one("#title")
+        title, stages = self.query_one("#title"), self.query_one("#stages")
+        self.query_one(StagePane).display = run is not None
         if run is None:
             title.update(view.count(seen))
+            stages.rows_shown = []
             return
         title.update(view.run_title(run, run is seen.newest, seen.bench))
         stage, running = self.stage, run is seen.running
-        stages = self.query_one("#stages")
         rows = [(s.name, view.stage_cells(s, running, seen.now)) for s in run.stages]
         stages.rows_shown = palette.table(rows)
         with self.prevent(DataTable.RowHighlighted):

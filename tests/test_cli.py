@@ -258,7 +258,7 @@ def test_main_run_on_sigterm_writes_disabled_and_stops_the_timer(
     monkeypatch.setenv("LG_ENV", "unused.yaml")
 
     class _StubQueue:
-        def __init__(self, checkout, directory):
+        def __init__(self, checkout, directory, merge=True):
             pass
 
         def take(self):
