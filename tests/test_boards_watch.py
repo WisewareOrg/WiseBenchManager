@@ -1,6 +1,8 @@
 """The watch view over several boards: the Boards tab, choosing a board, and its commands."""
 
+import asyncio
 import shutil
+import threading
 from functools import partial
 from types import SimpleNamespace
 
@@ -168,38 +170,42 @@ class TestCommandsStayOnTheirBoard(BoardsCase):
 
     async def test_a_read_that_ends_after_a_switch_is_dropped(self):
         self.record(run_log(None))
-        self.prod_record(run_log(None, kind="test", ref="on-prod", pr=None), OLDER)
         self.periods(read=OFTEN)
 
         async with self.watch():
             await self.known()
-            first = self.app.benches[None]
-            held = Held(first.look())
-            self.monkeypatch.setattr(first, "look", held)
-            await self.eventually(held.started.is_set, "a read of the first board began")
+            first, prod = self.app.benches[None], self.app.benches["prod"]
+            late, waiting = Held(first.look()), Held(prod.look())
+            self.monkeypatch.setattr(first, "look", late)
+            self.monkeypatch.setattr(prod, "look", waiting)
+            await self.eventually(late.started.is_set, "a read of the first board began")
             self.app.show_board(chosen("prod"))
-            await self.eventually(lambda: self.app.seen.board == "prod", "prod is read")
-            held.released.set()
-            await self.eventually(lambda: held.returned, "the first board's read ended")
+            late.released.set()
+            await self.eventually(lambda: late.returned, "the first board's read ended")
             await self.pilot.pause(0.1)
+            shown = self.app.seen.runs
+            waiting.released.set()
 
-            assert self.app.seen.board == "prod", "the late read is not shown"
-            assert [run.record for run in self.app.seen.runs] == [OLDER], "prod's runs"
+            assert shown == [], "the first board's runs are not shown while prod is read"
 
-    async def test_a_write_submitted_before_a_switch_stays_on_its_board(self):
+    async def test_a_write_takes_the_board_shown_when_it_is_submitted(self):
+        gate, to_thread = threading.Event(), asyncio.to_thread
+
+        async def gated(call, *args):
+            await to_thread(gate.wait, 3)
+            return await to_thread(call, *args)
+
         async with self.watch():
             await self.known()
-            first = self.app.benches[None]
-            held = Held((5, "5" * 40, 1))
-            self.monkeypatch.setattr(first.queue, "add", held)
+            self.monkeypatch.setattr(asyncio, "to_thread", gated)
             await self.command(":run HEAD")
-            await self.eventually(held.started.is_set, "the write began")
             self.app.show_board(chosen("prod"))
-            held.released.set()
-            await self.eventually(partial(self.says, "queued 5"), "what was done")
+            gate.set()
+            await self.eventually(partial(self.says, "queued"), "what was done")
 
             assert "on prod" not in self.message, "it was the first board's"
             assert Queue(*locate("prod"), merge=False).entries() == [], "nothing on prod"
+            assert len(Queue(*locate(), merge=False).entries()) == 1, "queued on the first board"
 
     async def test_a_preview_that_ends_after_a_switch_is_dropped(self):
         async with self.watch():

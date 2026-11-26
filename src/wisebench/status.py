@@ -238,12 +238,11 @@ class Watch(App):
     async def read_queue(self):
         """Read the queue every `QUEUE_EVERY` seconds while its tab shows."""
         while self.is_running and self.tab == "queue":
-            bench = self.bench
             try:
-                entries, error = await in_daemon_thread(bench.queue.entries), None
+                entries, error = await in_daemon_thread(self.bench.queue.entries), None
             except Exception as exc:
                 entries, error = None, exc
-            if not self.is_running or bench is not self.bench:
+            if not self.is_running:
                 return
             if error is None:
                 self.entries = entries
@@ -257,12 +256,11 @@ class Watch(App):
         if self.typed is None:
             return
         source, ref = self.typed
-        bench = self.bench
         try:
-            outcome = await in_daemon_thread(bench.queue.preview, ref, source)
+            outcome = await in_daemon_thread(self.bench.queue.preview, ref, source)
         except Exception as exc:
             outcome = exc
-        if self.is_running and bench is self.bench:
+        if self.is_running:
             self.previewed = ref, outcome
 
     def watch_seen(self):
