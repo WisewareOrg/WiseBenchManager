@@ -1,5 +1,6 @@
 """The watch view over several boards: the Boards tab, choosing a board, and its commands."""
 
+import shutil
 from functools import partial
 from types import SimpleNamespace
 
@@ -77,6 +78,32 @@ class TestBoards(BoardsCase):
 
             assert self.shown("#brand") == "bench prod", "its name at the top left"
             assert self.keys_of("#queue-rows") == [], "no merge-queue entry on an added board"
+
+
+class TestTheBoardShown(BoardsCase):
+    async def test_the_first_board_is_named_at_the_top_left_once_there_are_two(self):
+        async with self.watch():
+            first = self.shown("#brand")
+            await self.board("prod")
+            await self.board("/")
+
+            assert first == "bench first board", "named from the start"
+            assert self.shown("#brand") == "bench first board", "and when chosen again"
+
+    async def test_a_board_with_no_runs_shows_none_not_the_board_shown_before(self):
+        self.record(run_log(None))
+        shutil.rmtree(self.prod)
+
+        async with self.watch():
+            stages = self.keys_of("#stages")
+            await self.board("prod")
+            await self.eventually(lambda: self.app.seen.board == "prod", "prod is read")
+            await self.pilot.pause(0.1)
+
+            assert stages, "the first board's run had stages"
+            assert self.keys_of("#stages") == [], "prod has no run, so no stages"
+            assert not self.displayed(self.app.query_one("#pane")), "and no stage pane"
+            assert "0 records" in self.shown("#title"), "it says so"
 
 
 class TestBoardCommands(BoardsCase):
